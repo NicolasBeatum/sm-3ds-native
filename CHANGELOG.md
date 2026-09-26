@@ -43,6 +43,16 @@
   pixel typography and three-tab layout.
 - Added live energy/ammo status, touch ammo selection, explored-area map,
   equipment state, game time and an idle METROID screen.
+- Ported MetroidArch's ROM-accurate pause-map decoder, including real tile
+  graphics, palettes, flips, Map Station reveals and area tinting.
+- Added ROOM/WORLD map switching, zoom controls, all-area world composition,
+  area labels/connectors and long-press map markers.
+- Ported the real ROM HUD ammo icons and the full-color Redux Samus suit asset,
+  including Power/Varia/Gravity palette and pose selection.
+- Added the vanilla item-percentage formula and functional status-bar, main-HUD
+  and marker-clear setup controls.
+- Reduced lower-texture rebuilds to 7.5 Hz and decoded map data per tile to
+  preserve the native Old 3DS performance budget.
 - Added the GPU texture path for the lower screen and a direct framebuffer
   fallback.
 

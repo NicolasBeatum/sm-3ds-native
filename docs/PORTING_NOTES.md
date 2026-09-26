@@ -75,25 +75,29 @@ device still fails, the marker is removed. No DSP firmware is bundled.
 
 ## Lower-screen companion UI
 
-The lower screen is updated at 15 Hz and presented every display frame. Its
+The lower screen is rebuilt at 7.5 Hz and presented every display frame. Its
 data comes directly from the live native variables, so no memory bridge or
 patched libretro core is required. It currently provides:
 
 - live energy tanks, residual energy and ammo counts;
 - direct touch selection/cancellation for missiles, supers and power bombs;
-- explored-map cells centered on Samus;
-- collected/equipped suits, movement upgrades and beams;
-- play time, persistent MAP/ITEMS/SETUP tabs and an idle METROID screen.
+- real ROM-decoded pause-map tiles, palettes, doors and Map Station reveals;
+- ROOM/WORLD switching, zoom, colored all-area composition and map markers;
+- collected/equipped suits, movement upgrades, beams and vanilla item percent;
+- the full-color Redux suit pose with live Power/Varia/Gravity coloring;
+- play time, functional MAP/ITEMS/SETUP tabs, per-tab status settings, optional
+  main-HUD hiding and an idle METROID screen.
 
 The visual reference is the MetroidArch dual-screen project:
 
 - <https://github.com/Raekwon1603/RetroArch/tree/metroidarch-dual-screen>
 
 MetroidArch's screenshots, palette, pixel-font treatment, layout and ROM asset
-decoding are the compatibility target. The current native screen is the first
-stage; the remaining fidelity work is to port its ROM-decoded ammo icons,
-actual pause-map tiles/doors, world map, full-color Samus equipment wireframe,
-map controls/markers and functional setup toggles at 320x240.
+decoding are the compatibility target. The 3DS implementation ports those
+features to 320x240 and reads static tile/palette data directly from the ROM
+already loaded by the native engine. The Redux suit bytes are carried as an
+explicit source asset because, as in MetroidArch, they originate from a
+separate pre-built Redux ROM rather than the player's vanilla ROM.
 
 ## Room collision bug and fix
 
@@ -139,8 +143,10 @@ Do not enable diagnostic defines in deliverable builds.
   `da957f0d63d14cb441d215462904c4fa8519c613`.
 - Native audio, dual-screen presentation, Crateria rain/fog, touch ammo
   selection and the Landing Site door sequence were exercised in Azahar.
-- Heavy exterior scenes measured approximately 59-63 FPS in the Old 3DS
-  emulator profile used during development.
+- Heavy exterior scenes measured approximately 56-63 FPS in the Old 3DS
+  emulator profile used during development; the final MetroidArch UI build was
+  verified at 100% emulation speed after rebuilding with `FULL_NATIVE=1` and
+  `SM3DS_OLD3DS`.
 - A full-campaign regression run and verification on physical Old 3DS hardware
   are still recommended before declaring every rare PPU effect covered.
 
@@ -151,6 +157,8 @@ Do not enable diagnostic defines in deliverable builds.
 - SDL: libsdl-org/SDL, under its own license in the submodule.
 - Dual-screen design reference: Raekwon1603/RetroArch,
   `metroidarch-dual-screen`.
+- Exact lower-screen derivation and Redux asset provenance are recorded in
+  `THIRD_PARTY_NOTICES.md`.
 
 This custom integration was developed with extensive OpenAI Codex assistance,
 including source analysis, implementation, profiling, debugging, automated

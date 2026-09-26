@@ -24,7 +24,9 @@ Highlights:
 - Native game logic with stereo 32 kHz audio.
 - PICA200 rendering for supported Mode 1 frames; automatic exact fallback for
   unsupported PPU state or mid-frame changes.
-- Live lower-screen map, equipment and setup tabs with touch-selectable ammo.
+- MetroidArch-compatible lower screen with ROM-decoded room/world maps and
+  ammo icons, Redux suit art, equipment percentage, touch ammo/zoom controls,
+  map markers and functional per-tab setup options.
 - Correct HDMA rain, fog, windows and colour math without scanline filtering.
 - Save files at `saves/sm.srm`, with a backup created before replacement.
 - Fixed room BTS loading on ARM, including the Landing Site terrain and blue
@@ -46,6 +48,11 @@ not presented as wholly original work:
 | [snesrev/sm](https://github.com/snesrev/sm) | Original Super Metroid decompilation/PC port ancestry. |
 | [libsdl-org/SDL](https://github.com/libsdl-org/SDL) | Platform, input and audio layer. |
 | [Raekwon1603/RetroArch `metroidarch-dual-screen`](https://github.com/Raekwon1603/RetroArch/tree/metroidarch-dual-screen) | Dual-screen visual and interaction reference. |
+
+The lower-screen implementation and bundled Redux suit data are derived from
+the GPL-3.0 MetroidArch branch. See `THIRD_PARTY_NOTICES.md` for exact file and
+asset provenance; the original MIT license continues to identify the license
+of the CharlesAverill base rather than relicensing third-party-derived code.
 
 The buildable custom submodules are kept in the private repositories
 [`NicolasBeatum/sm-3ds-lib-native`](https://github.com/NicolasBeatum/sm-3ds-lib-native)

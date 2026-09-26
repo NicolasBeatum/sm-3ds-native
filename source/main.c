@@ -475,6 +475,9 @@ int main(int argc, char** argv) {
       case SDL_FINGERDOWN:
         BottomScreen_HandleTouch(event.tfinger.x, event.tfinger.y);
         break;
+      case SDL_FINGERUP:
+        BottomScreen_HandleTouchUp(event.tfinger.x, event.tfinger.y);
+        break;
       case SDL_QUIT:
         running = false;
         break;

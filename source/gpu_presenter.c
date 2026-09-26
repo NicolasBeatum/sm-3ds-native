@@ -1,5 +1,6 @@
 #include "gpu_presenter.h"
 #include "ppu_gpu.h"
+#include "bottom_screen.h"
 
 #include <3ds.h>
 #include <citro2d.h>
@@ -237,6 +238,11 @@ bool GpuPresenter_DrawTop(const uint8_t *pixels) {
   if (!gpu_ppu)
     ConfigureArgbTextureEnv();
   C2D_Flush();
+  if (BottomScreen_HideMainHud()) {
+    C2D_DrawRectSolid((400.0f - kDrawWidth) * 0.5f, 0.0f, 0.1f,
+                      kDrawWidth, 18.0f, C2D_Color32(0, 0, 0, 255));
+    C2D_Flush();
+  }
   return true;
 }
 
