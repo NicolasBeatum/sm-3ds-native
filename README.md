@@ -5,13 +5,26 @@
 
 This is a 3DS port of Super Metroid, based on [the PC port by snesrev](https://github.com/snesrev/sm).
 
-This runs at about 50fps on hardware per my testing.
-If you switch to the backup SNES emulation mode this gets back to 60, but audio will not work.
-And where's the fun in that anyways?
-With some careful optimization, this could surely hit 60fps.
+This fork targets full-speed native gameplay on original 3DS hardware without
+reducing the SNES image or audio quality. It keeps the decompiled game logic,
+stereo audio and scanline effects, adds a conservative PICA200 renderer with an
+exact CPU fallback, and presents a live MetroidArch-inspired companion UI on
+the lower screen.
 
-Saves are dubious right now, I have them working in emulation but not on hardware.
-They should be stored in the SD card's `saves` directory.
+Highlights:
+
+- Native game logic with stereo 32 kHz audio.
+- PICA200 rendering for supported Mode 1 frames; automatic exact fallback for
+  unsupported PPU state or mid-frame changes.
+- Live lower-screen map, equipment and setup tabs with touch-selectable ammo.
+- Correct HDMA rain, fog, windows and colour math without scanline filtering.
+- Save files at `saves/sm.srm`, with a backup created before replacement.
+- Fixed room BTS loading on ARM, including the Landing Site terrain and blue
+  door collision in Crateria.
+
+The current architecture, build flags, diagnostics and verification history
+are documented in [docs/PORTING_NOTES.md](docs/PORTING_NOTES.md). Changes made
+in this fork are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ![title screen on Azahar](screenshots/titlescreen.png)
 
@@ -44,9 +57,21 @@ cp ~/Games/sm.smc romfs
 # Build SDL2
 make sdl
 
-# Build sm-3ds
-make -j FULL_NATIVE=1
+# Build the native Old 3DS release
+make -j FULL_NATIVE=1 BUILD_FLAGS="-DSM3DS_OLD3DS" 3dsx
+make FULL_NATIVE=1 BUILD_FLAGS="-DSM3DS_OLD3DS" cia
 ```
+
+Optional build switches:
+
+| Variable / define | Purpose |
+| ----------------- | ------- |
+| `FULL_NATIVE=1` | Run the decompiled native game logic. |
+| `BUILD_FLAGS="-DSM3DS_OLD3DS"` | Enable the optimized Old 3DS timing and rendering path. |
+| `LTO=1` | Enable link-time optimization for compilation and linking. |
+| `-DSM3DS_PROFILE` | Write performance counters to `sdmc:/sm3ds-profile.log`. |
+| `-DSM3DS_DOOR_TRACE` | Write targeted Crateria door/BTS diagnostics. |
+| `-DSM3DS_EMULATED_CPU` | Diagnostic fallback to the original emulated CPU path. |
 
 | Make Commands    | Action                                                                                    |
 | -----------------| ----------------------------------------------------------------------------------------- |

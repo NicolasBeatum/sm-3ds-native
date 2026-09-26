@@ -2,8 +2,12 @@
 .vscode
 
 build/
+build-*/
 output/
+output-*/
 release/
+SDL/build/
+buildtools/extracted/
 badsectors/build
 *.elf
 *.smdh

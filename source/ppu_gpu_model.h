@@ -1,0 +1,77 @@
+#pragma once
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#include "src/snes/ppu.h"
+
+enum {
+  PICA_ATLAS_W = 1024,
+  PICA_ATLAS_H = 512,
+  PICA_SLOTS = 8192,
+  PICA_HASH = 16384,
+  PICA_MAX_LINES = 240,
+  PICA_MAX_VERTICES = 262140,
+  PICA_GROUPS = 20,
+};
+
+/* Only state that can affect a Mode 1 scanline is copied here.  VRAM,
+ * CGRAM and OAM are retained once in PicaFrame::memory. */
+typedef struct PicaLine {
+  BgLayer bg[3];
+  uint16_t objTileAdr1, objTileAdr2;
+  uint8_t objSize;
+  uint8_t screenEnabled[2], screenWindowed[2];
+  uint8_t mosaicEnabled, mosaicSize;
+  uint8_t window1left, window1right, window2left, window2right;
+  uint32_t windowsel;
+  uint8_t windowLogic[6];
+  uint8_t clipMode, preventMathMode;
+  bool addSubscreen, subtractColor, halfColor;
+  uint8_t mathEnabled;
+  uint8_t fixedColorR, fixedColorG, fixedColorB;
+  bool forcedBlank;
+  uint8_t brightness, mode;
+  bool bg3priority;
+} PicaLine;
+
+typedef struct PicaTile {
+  uint32_t key, checked, used;
+  uint16_t source[16], palette[16];
+  bool valid, opaque;
+} PicaTile;
+
+typedef struct PicaAtlas {
+  PicaTile tile[PICA_SLOTS];
+  uint16_t hash[PICA_HASH];
+  uint32_t frame, cursor, hits, decodes, live;
+  uint32_t dirty[PICA_SLOTS / 32];
+  uint8_t objectColumns[128][PICA_MAX_LINES];
+} PicaAtlas;
+
+typedef struct PicaQuad {
+  int16_t x0, y0, x1, y1;
+  int16_t u0, v0, u1, v1;
+  uint16_t depth;
+  uint8_t r, g, b, a;
+} PicaQuad;
+
+typedef bool PicaEmit(void *context, unsigned group, const PicaQuad *quad);
+
+typedef struct PicaFrame {
+  const Ppu *memory;
+  const PicaLine *lines;
+  PicaAtlas *atlas;
+  uint32_t *pixels;
+  unsigned width, height;
+  PicaEmit *emit;
+  void *context;
+  const char *failure;
+  uint32_t quads[PICA_GROUPS];
+  uint16_t bandEnd[PICA_MAX_LINES];
+} PicaFrame;
+
+void PicaAtlasInit(PicaAtlas *atlas, uint32_t *pixels);
+void PicaAtlasBegin(PicaAtlas *atlas);
+void PicaCaptureLine(PicaLine *out, const Ppu *ppu);
+bool PicaBuildFrame(PicaFrame *frame);

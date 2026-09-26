@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <sys/stat.h>
 #include "SDL2/SDL.h"
 #include <3ds.h>
 
@@ -16,6 +17,9 @@
 #include "src/config.h"
 #include "src/util.h"
 #include "src/spc_player.h"
+#include "bottom_screen.h"
+#include "gpu_presenter.h"
+#include "ppu_gpu.h"
 
 enum Button {
   BTN_A = 0,
@@ -45,15 +49,14 @@ bool g_new_ppu = true;
 bool g_other_image;
 struct SpcPlayer *g_spc_player;
 
-static uint8_t g_pixels[256 * 4 * 240];
+static uint8_t *g_pixels;
 static uint8_t g_my_pixels[256 * 4 * 240];
 
 int g_got_mismatch_count;
 
 static const char kWindowTitle[] = "Super Metroid 3DS";
 static SDL_Window *g_window;
-static SDL_Renderer *g_renderer;
-static SDL_Texture *g_texture;
+static bool g_gpu_presenter;
 
 static uint8 g_paused, g_turbo, g_replay_turbo = true;
 static uint8 g_gamepad_buttons;
@@ -91,82 +94,38 @@ static void DrawPpuFrame(void) {
     const int fb_w  = 400;
     const int fb_h  = 240;
 
-    // Aspect-correct uniform scale
-    const float scale = (float)fb_h / (float)src_h;  // 240 / 224
-
-    const int dst_w = (int)(src_w * scale);           // ~274
+    const int dst_w = 274;
     const int dst_h = fb_h;                            // 240
 
     const int x_off = (fb_w - dst_w) / 2;
     const int y_off = 0;
 
-    for (int dy = 0; dy < dst_h; dy++) {
-        int sy = (int)(dy / scale);
-        if (sy >= src_h) continue;
-
-        for (int dx = 0; dx < dst_w; dx++) {
-            int sx = (int)(dx / scale);
-            if (sx >= src_w) continue;
-
-            uint8_t *s = &src[(sy * src_w + sx) * 4];
-
-            uint8_t b = s[0];
-            uint8_t g = s[1];
-            uint8_t r = s[2];
-
-            int fb_x = dx + x_off;
-            int fb_y = fb_h - 1 - (dy + y_off);
-
-            u32 idx = (fb_x * fb_h + fb_y) * 4;
-
-            fb[idx + 1] = b;
-            fb[idx + 2] = g;
-            fb[idx + 3] = r;
-        }
+    static uint8_t xmap[274];
+    static uint8_t ymap[240];
+    static bool maps_ready;
+    if (!maps_ready) {
+        for (int x = 0; x < dst_w; x++)
+            xmap[x] = (x * src_w) / dst_w;
+        for (int y = 0; y < dst_h; y++)
+            ymap[y] = (y * src_h) / dst_h;
+        maps_ready = true;
     }
-}
-
-static void DrawBottomScreen(void) {
-    u8 *fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL);
-    uint8_t *src = g_pixels;
-
-    const int src_w = 256;
-    const int src_h = 224;
-
-    const int fb_w  = 320;
-    const int fb_h  = 240;
-
-    // Aspect-correct uniform scale
-    const float scale = (float)fb_h / (float)src_h;  // 320 / 224
-
-    const int dst_w = (int)(src_w * scale);           // ~274
-    const int dst_h = fb_h;                            // 240
-
-    const int x_off = (fb_w - dst_w) / 2;
-    const int y_off = 0;
 
     for (int dy = 0; dy < dst_h; dy++) {
-        int sy = (int)(dy / scale);
-        if (sy >= src_h) continue;
+        const uint8_t *src_row = &src[ymap[dy] * src_w * 4];
+        uint8_t *dst_col = &fb[((x_off * fb_h) + (fb_h - 1 - (dy + y_off))) * 4];
 
         for (int dx = 0; dx < dst_w; dx++) {
-            int sx = (int)(dx / scale);
-            if (sx >= src_w) continue;
-
-            uint8_t *s = &src[(sy * src_w + sx) * 4];
+            const uint8_t *s = &src_row[xmap[dx] * 4];
 
             uint8_t b = s[0];
             uint8_t g = s[1];
             uint8_t r = s[2];
 
-            int fb_x = dx + x_off;
-            int fb_y = fb_h - 1 - (dy + y_off);
-
-            u32 idx = (fb_x * fb_h + fb_y) * 4;
-
-            fb[idx + 1] = b;
-            fb[idx + 2] = g;
-            fb[idx + 3] = r;
+            dst_col[1] = b;
+            dst_col[2] = g;
+            dst_col[3] = r;
+            dst_col += fb_h * 4;
         }
     }
 }
@@ -176,6 +135,62 @@ static uint8 *g_audiobuffer, *g_audiobuffer_cur, *g_audiobuffer_end;
 static int g_frames_per_block;
 static uint8 g_audio_channels;
 static SDL_AudioDeviceID g_audio_device;
+#ifdef SM3DS_PROFILE
+static volatile uint32_t g_profile_audio_callbacks;
+static volatile uint32_t g_profile_audio_nonzero;
+static volatile uint64_t g_profile_audio_ticks;
+extern uint64_t g_profile_game_ticks;
+extern uint64_t g_profile_ppu_ticks;
+extern uint64_t g_profile_ppu_sprite_ticks;
+extern uint64_t g_profile_ppu_main_ticks;
+extern uint64_t g_profile_ppu_sub_ticks;
+extern uint64_t g_profile_ppu_compose_ticks;
+extern uint32_t g_profile_ppu_phase_frames;
+extern uint32_t g_profile_color_map_rebuilds;
+extern uint32_t g_profile_fixed_map_rebuilds;
+extern uint32_t g_profile_backdrop_map_rebuilds;
+extern uint32_t g_profile_halfadd_spans;
+extern uint32_t g_profile_generic_sub_spans;
+extern uint32_t g_profile_generic_key;
+extern uint64_t g_profile_audio_lock_ticks;
+extern uint64_t g_profile_audio_generate_ticks;
+extern uint64_t g_profile_audio_copy_ticks;
+extern uint64_t g_profile_hdma_ticks;
+extern uint32_t g_profile_hdma_calls;
+extern uint32_t g_profile_hdma_active_channels;
+extern uint32_t g_profile_hdma_bytes;
+extern uint32_t g_profile_hdma_bbus[256];
+extern uint64_t g_profile_pica_prepare_ticks;
+extern uint32_t g_profile_pica_gpu_frames;
+extern uint32_t g_profile_pica_cpu_frames;
+extern uint32_t g_profile_pica_vertices;
+extern uint32_t g_profile_pica_decodes;
+#endif
+
+static bool CreateEmulatorDspMarker(void) {
+  struct stat st;
+  if (stat("sdmc:/3ds/dspfirm.cdc", &st) == 0)
+    return false;
+
+  mkdir("sdmc:/3ds", 0755);
+  FILE *fp = fopen("sdmc:/3ds/dspfirm.cdc", "wb");
+  if (!fp)
+    return false;
+  fclose(fp);
+  return true;
+}
+
+static bool EnableSystemCoreTime(void) {
+  static const u32 candidates[] = { 80, 70, 50, 30 };
+  for (unsigned i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+    if (R_SUCCEEDED(APT_SetAppCpuTimeLimit(candidates[i]))) {
+      u32 actual = 0;
+      if (R_SUCCEEDED(APT_GetAppCpuTimeLimit(&actual)) && actual > 0)
+        return true;
+    }
+  }
+  return false;
+}
 
 void RtlApuLock(void) {
   SDL_LockMutex(g_audio_mutex);
@@ -186,10 +201,18 @@ void RtlApuUnlock(void) {
 }
 
 static void SDLCALL AudioCallback(void *userdata, Uint8 *stream, int len) {
-  if (SDL_LockMutex(g_audio_mutex)) Die("Mutex lock failed!");
+#ifdef SM3DS_PROFILE
+  g_profile_audio_callbacks++;
+#endif
   while (len != 0) {
     if (g_audiobuffer_end - g_audiobuffer_cur == 0) {
+#ifdef SM3DS_PROFILE
+      uint64_t profile_audio_before = SDL_GetPerformanceCounter();
+#endif
       RtlRenderAudio((int16 *)g_audiobuffer, g_frames_per_block, g_audio_channels);
+#ifdef SM3DS_PROFILE
+      g_profile_audio_ticks += SDL_GetPerformanceCounter() - profile_audio_before;
+#endif
       g_audiobuffer_cur = g_audiobuffer;
       g_audiobuffer_end = g_audiobuffer + g_frames_per_block * g_audio_channels * sizeof(int16);
     }
@@ -200,11 +223,19 @@ static void SDLCALL AudioCallback(void *userdata, Uint8 *stream, int len) {
       SDL_memset(stream, 0, n);
       SDL_MixAudioFormat(stream, g_audiobuffer_cur, AUDIO_S16, n, g_sdl_audio_mixer_volume);
     }
+#ifdef SM3DS_PROFILE
+    const int16_t *profile_samples = (const int16_t *)g_audiobuffer_cur;
+    for (int i = 0; i < n / (int)sizeof(int16_t); i++) {
+      if (profile_samples[i] != 0) {
+        g_profile_audio_nonzero++;
+        break;
+      }
+    }
+#endif
     g_audiobuffer_cur += n;
     stream += n;
     len -= n;
   }
-  SDL_UnlockMutex(g_audio_mutex);
 }
 
 int idx_of_btn(enum Button b) {
@@ -233,11 +264,16 @@ int idx_of_btn(enum Button b) {
       return 10;
     case BTN_R:
       return 11;
+    default:
+      return -1;
   }
 }
 
 static void HandleCommand(uint32 j, bool pressed) {
-  j = 1 + idx_of_btn(j);
+  int button_index = idx_of_btn(j);
+  if (button_index < 0)
+    return;
+  j = 1 + button_index;
   if (j <= kKeys_Controls_Last) {
     static const uint8 kKbdRemap[] = { 0, 4, 5, 6, 7, 2, 3, 8, 0, 9, 1, 10, 11 };
     if (pressed)
@@ -274,7 +310,7 @@ static void HandleCommand(uint32 j, bool pressed) {
 enum {
   kDefaultFullscreen = 0,
   kMaxWindowScale = 10,
-  kDefaultFreq = 44100,
+  kDefaultFreq = 32000,
   kDefaultChannels = 2,
   kDefaultSamples = 2048,
 };
@@ -296,6 +332,11 @@ int main(int argc, char** argv) {
     printf("Failed to init SDL: %s\n", SDL_GetError());
     return 1;
   }
+
+  // Use the faster New 3DS CPU clock when available. This is harmless on
+  // original 3DS models and mirrors the setup used by the reference port.
+  osSetSpeedupEnable(true);
+  EnableSystemCoreTime();
 
   SDL_JoystickEventState(SDL_ENABLE);
   SDL_GameControllerEventState(SDL_ENABLE);
@@ -333,21 +374,13 @@ int main(int argc, char** argv) {
   }
   g_window = window;
 
-  // Create renderer - SOFTWARE for 3DS
-  g_renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
-  if (g_renderer == NULL) {
-    printf("Failed to create renderer: %s\n", SDL_GetError());
-    return 1;
-  }
-
-  // Create texture
-  g_texture = SDL_CreateTexture(g_renderer, SDL_PIXELFORMAT_ARGB8888,
-                                SDL_TEXTUREACCESS_STREAMING,
-                                g_snes_width, g_snes_height);
-  if (g_texture == NULL) {
-    printf("Failed to create texture: %s\n", SDL_GetError());
-    return 1;
-  }
+  g_pixels = linearMemAlign(256 * 256 * 4, 0x80);
+  if (!g_pixels)
+    Die("Unable to allocate PPU framebuffer");
+  memset(g_pixels, 0, 256 * 256 * 4);
+  if (!BottomScreen_Init())
+    Die("Unable to allocate bottom-screen framebuffer");
+  g_gpu_presenter = GpuPresenter_Init();
 
   // Setup audio
   g_audio_mutex = SDL_CreateMutex();
@@ -356,15 +389,23 @@ int main(int argc, char** argv) {
   g_spc_player = SpcPlayer_Create();
   SpcPlayer_Initialize(g_spc_player);
 
-  SDL_AudioSpec want = { 0 }, have;
-  want.freq = 44100;
+  SDL_AudioSpec want = { 0 }, have = { 0 };
+  want.freq = kDefaultFreq;
   want.format = AUDIO_S16;
   want.channels = 2;
   want.samples = 2048;
   want.callback = &AudioCallback;
   g_audio_device = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
+  bool created_dsp_marker = false;
+  if (g_audio_device == 0 && strstr(SDL_GetError(), "dspfirm.cdc missing")) {
+    created_dsp_marker = CreateEmulatorDspMarker();
+    if (created_dsp_marker)
+      g_audio_device = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
+  }
   if (g_audio_device == 0) {
     printf("Failed to open audio device: %s\n", SDL_GetError());
+    if (created_dsp_marker)
+      remove("sdmc:/3ds/dspfirm.cdc");
   } else {
     g_audio_channels = 2;
     g_frames_per_block = (534 * have.freq) / 32000;
@@ -383,8 +424,42 @@ int main(int argc, char** argv) {
   uint32 lastTick = SDL_GetTicks();
   uint32 frameCtr = 0;
   uint8 audiopaused = true;
+#ifdef SM3DS_PROFILE
+  uint32 profileTick = lastTick;
+  uint32 profileFrames = 0;
+  uint64_t profileGameTicks = 0;
+  uint64_t profilePpuTicks = 0;
+  uint64_t profileAudioTicks = 0;
+  uint64_t profileAudioLockTicks = 0;
+  uint64_t profileAudioGenerateTicks = 0;
+  uint64_t profileAudioCopyTicks = 0;
+  uint64_t profileHdmaTicks = 0;
+  uint32_t profileHdmaCalls = 0;
+  uint32_t profileHdmaActiveChannels = 0;
+  uint32_t profileHdmaBytes = 0;
+  uint32_t profileHdmaBbus[256] = {0};
+  uint64_t profilePicaPrepareTicks = 0;
+  uint32_t profilePicaGpuFrames = 0;
+  uint32_t profilePicaCpuFrames = 0;
+  uint64_t profilePpuSpriteTicks = 0;
+  uint64_t profilePpuMainTicks = 0;
+  uint64_t profilePpuSubTicks = 0;
+  uint64_t profilePpuComposeTicks = 0;
+  uint32_t profilePpuPhaseFrames = 0;
+  const uint64_t profileFreq = SDL_GetPerformanceFrequency();
+  FILE *profile = fopen("sdmc:/sm3ds-profile.log", "w");
+#endif
 
   printf("Super Metroid starting...\n");
+#ifdef SM3DS_DOOR_TRACE
+  {
+    FILE *door_trace = fopen("sdmc:/sm3ds-door.log", "w");
+    if (door_trace) {
+      fputs("sm3ds door trace\n", door_trace);
+      fclose(door_trace);
+    }
+  }
+#endif
 
   while (running) {
     SDL_Event event;
@@ -397,8 +472,9 @@ int main(int argc, char** argv) {
       case SDL_JOYBUTTONUP:
         HandleCommand(event.jbutton.button, false);
         break;
-      // case SDL_FINGERUP: // swap between emulated and native
-      //   SwapEmulatedNative();
+      case SDL_FINGERDOWN:
+        BottomScreen_HandleTouch(event.tfinger.x, event.tfinger.y);
+        break;
       case SDL_QUIT:
         running = false;
         break;
@@ -420,14 +496,132 @@ int main(int argc, char** argv) {
     uint8 is_replay = RtlRunFrame(inputs);
 
     frameCtr++;
+#ifdef SM3DS_PROFILE
+    profileFrames++;
+#endif
     g_snes->disableRender = (g_turbo ^ (is_replay & g_replay_turbo)) && (frameCtr & 0xf) != 0;
 
-    if (!g_snes->disableRender)
+    bool gpu_frame = false;
+    if (g_gpu_presenter)
+      gpu_frame = GpuPresenter_DrawTop(g_pixels);
+    else if (!g_snes->disableRender)
       DrawPpuFrame();
-    // DrawBottomScreen();
 
-    gfxFlushBuffers();
-    gfxSwapBuffers();
+    bool bottom_updated = BottomScreen_Draw();
+
+    if (gpu_frame) {
+      GpuPresenter_DrawBottom(BottomScreen_Pixels(), bottom_updated);
+      GpuPresenter_EndFrame();
+    } else {
+      BottomScreen_CopyToFramebuffer();
+      gfxFlushBuffers();
+      gfxSwapBuffers();
+    }
+
+#ifdef SM3DS_PROFILE
+    uint32 profileNow = SDL_GetTicks();
+    if (profile && profileNow - profileTick >= 1000) {
+      uint64_t gameTicks = g_profile_game_ticks;
+      uint64_t ppuTicks = g_profile_ppu_ticks;
+      uint64_t audioTicks = g_profile_audio_ticks;
+      uint64_t audioLockTicks = g_profile_audio_lock_ticks;
+      uint64_t audioGenerateTicks = g_profile_audio_generate_ticks;
+      uint64_t audioCopyTicks = g_profile_audio_copy_ticks;
+      uint64_t hdmaTicks = g_profile_hdma_ticks;
+      uint32_t hdmaCalls = g_profile_hdma_calls;
+      uint32_t hdmaActiveChannels = g_profile_hdma_active_channels;
+      uint32_t hdmaBytes = g_profile_hdma_bytes;
+      uint64_t picaPrepareTicks = g_profile_pica_prepare_ticks;
+      uint32_t picaGpuFrames = g_profile_pica_gpu_frames;
+      uint32_t picaCpuFrames = g_profile_pica_cpu_frames;
+      uint32_t picaSamples = picaGpuFrames - profilePicaGpuFrames;
+      if (!picaSamples) picaSamples = 1;
+      uint32_t hdmaTopCount = 0;
+      unsigned hdmaTopReg = 0;
+      for (unsigned reg = 0; reg < 256; reg++) {
+        uint32_t count = g_profile_hdma_bbus[reg] - profileHdmaBbus[reg];
+        if (count > hdmaTopCount) {
+          hdmaTopCount = count;
+          hdmaTopReg = reg;
+        }
+      }
+      uint64_t ppuSpriteTicks = g_profile_ppu_sprite_ticks;
+      uint64_t ppuMainTicks = g_profile_ppu_main_ticks;
+      uint64_t ppuSubTicks = g_profile_ppu_sub_ticks;
+      uint64_t ppuComposeTicks = g_profile_ppu_compose_ticks;
+      uint32_t ppuPhaseFrames = g_profile_ppu_phase_frames;
+      uint32_t ppuPhaseSamples = ppuPhaseFrames - profilePpuPhaseFrames;
+      if (ppuPhaseSamples == 0) ppuPhaseSamples = 1;
+      fprintf(profile, "ms=%lu fps=%lu game_us=%llu ppu_us=%llu pica_prepare_us=%llu pica_gpu=%lu pica_cpu=%lu pica_vertices=%lu pica_decodes=%lu pica_reason=%s hdma_us=%llu hdma_calls=%lu hdma_channels=%lu hdma_bytes=%lu hdma_top_reg=%02x hdma_top_count=%lu hdma_scroll=%lu hdma_cgram=%lu hdma_color=%lu audio_us=%llu audio_lock_us=%llu audio_generate_us=%llu audio_copy_us=%llu sprite_us=%llu main_us=%llu sub_us=%llu compose_us=%llu color_maps=%lu fixed_maps=%lu backdrop_maps=%lu halfadd=%lu generic_sub=%lu generic_key=%lu audio_callbacks=%lu audio_nonzero=%lu\n",
+              (unsigned long)profileNow,
+              (unsigned long)(profileFrames * 1000 / (profileNow - profileTick)),
+              (unsigned long long)((gameTicks - profileGameTicks) * 1000000 / profileFreq / profileFrames),
+              (unsigned long long)((ppuTicks - profilePpuTicks) * 1000000 / profileFreq / profileFrames),
+              (unsigned long long)((picaPrepareTicks - profilePicaPrepareTicks) * 1000000 / profileFreq / picaSamples),
+              (unsigned long)(picaGpuFrames - profilePicaGpuFrames),
+              (unsigned long)(picaCpuFrames - profilePicaCpuFrames),
+              (unsigned long)g_profile_pica_vertices,
+              (unsigned long)g_profile_pica_decodes,
+              PpuGpuReason(),
+              (unsigned long long)((hdmaTicks - profileHdmaTicks) * 1000000 / profileFreq / profileFrames),
+              (unsigned long)(hdmaCalls - profileHdmaCalls),
+              (unsigned long)(hdmaActiveChannels - profileHdmaActiveChannels),
+              (unsigned long)(hdmaBytes - profileHdmaBytes),
+              hdmaTopReg,
+              (unsigned long)hdmaTopCount,
+              (unsigned long)((g_profile_hdma_bbus[0x0d] - profileHdmaBbus[0x0d]) +
+                              (g_profile_hdma_bbus[0x0e] - profileHdmaBbus[0x0e]) +
+                              (g_profile_hdma_bbus[0x0f] - profileHdmaBbus[0x0f]) +
+                              (g_profile_hdma_bbus[0x10] - profileHdmaBbus[0x10])),
+              (unsigned long)((g_profile_hdma_bbus[0x21] - profileHdmaBbus[0x21]) +
+                              (g_profile_hdma_bbus[0x22] - profileHdmaBbus[0x22])),
+              (unsigned long)((g_profile_hdma_bbus[0x2c] - profileHdmaBbus[0x2c]) +
+                              (g_profile_hdma_bbus[0x2d] - profileHdmaBbus[0x2d]) +
+                              (g_profile_hdma_bbus[0x2e] - profileHdmaBbus[0x2e]) +
+                              (g_profile_hdma_bbus[0x2f] - profileHdmaBbus[0x2f]) +
+                              (g_profile_hdma_bbus[0x30] - profileHdmaBbus[0x30]) +
+                              (g_profile_hdma_bbus[0x31] - profileHdmaBbus[0x31]) +
+                              (g_profile_hdma_bbus[0x32] - profileHdmaBbus[0x32])),
+              (unsigned long long)((audioTicks - profileAudioTicks) * 1000000 / profileFreq / profileFrames),
+              (unsigned long long)((audioLockTicks - profileAudioLockTicks) * 1000000 / profileFreq / profileFrames),
+              (unsigned long long)((audioGenerateTicks - profileAudioGenerateTicks) * 1000000 / profileFreq / profileFrames),
+              (unsigned long long)((audioCopyTicks - profileAudioCopyTicks) * 1000000 / profileFreq / profileFrames),
+              (unsigned long long)((ppuSpriteTicks - profilePpuSpriteTicks) * 1000000 / profileFreq / ppuPhaseSamples),
+              (unsigned long long)((ppuMainTicks - profilePpuMainTicks) * 1000000 / profileFreq / ppuPhaseSamples),
+              (unsigned long long)((ppuSubTicks - profilePpuSubTicks) * 1000000 / profileFreq / ppuPhaseSamples),
+              (unsigned long long)((ppuComposeTicks - profilePpuComposeTicks) * 1000000 / profileFreq / ppuPhaseSamples),
+              (unsigned long)g_profile_color_map_rebuilds,
+              (unsigned long)g_profile_fixed_map_rebuilds,
+              (unsigned long)g_profile_backdrop_map_rebuilds,
+              (unsigned long)g_profile_halfadd_spans,
+              (unsigned long)g_profile_generic_sub_spans,
+              (unsigned long)g_profile_generic_key,
+              (unsigned long)g_profile_audio_callbacks,
+              (unsigned long)g_profile_audio_nonzero);
+      fflush(profile);
+      profileTick = profileNow;
+      profileFrames = 0;
+      profileGameTicks = gameTicks;
+      profilePpuTicks = ppuTicks;
+      profileAudioTicks = audioTicks;
+      profileAudioLockTicks = audioLockTicks;
+      profileAudioGenerateTicks = audioGenerateTicks;
+      profileAudioCopyTicks = audioCopyTicks;
+      profileHdmaTicks = hdmaTicks;
+      profileHdmaCalls = hdmaCalls;
+      profileHdmaActiveChannels = hdmaActiveChannels;
+      profileHdmaBytes = hdmaBytes;
+      memcpy(profileHdmaBbus, g_profile_hdma_bbus, sizeof(profileHdmaBbus));
+      profilePicaPrepareTicks = picaPrepareTicks;
+      profilePicaGpuFrames = picaGpuFrames;
+      profilePicaCpuFrames = picaCpuFrames;
+      profilePpuSpriteTicks = ppuSpriteTicks;
+      profilePpuMainTicks = ppuMainTicks;
+      profilePpuSubTicks = ppuSubTicks;
+      profilePpuComposeTicks = ppuComposeTicks;
+      profilePpuPhaseFrames = ppuPhaseFrames;
+    }
+#endif
 
     // Frame delay for 60 fps
     static const uint8 delays[3] = { 17, 17, 16 };
@@ -451,10 +645,15 @@ int main(int argc, char** argv) {
   SDL_CloseAudioDevice(g_audio_device);
   SDL_DestroyMutex(g_audio_mutex);
   free(g_audiobuffer);
-  SDL_DestroyTexture(g_texture);
-  SDL_DestroyRenderer(g_renderer);
+  GpuPresenter_Fini();
+  BottomScreen_Fini();
+  linearFree(g_pixels);
   SDL_DestroyWindow(window);
   SDL_Quit();
+#ifdef SM3DS_PROFILE
+  if (profile)
+    fclose(profile);
+#endif
 
   return 0;
 }

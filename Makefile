@@ -73,6 +73,10 @@ COMMON_FLAGS := -Wall -Wno-strict-aliasing -Wno-unused-value -Wno-unused-const-v
 # 	-falign-functions=32 \
 # 	-falign-loops=32
 
+ifeq ($(LTO),1)
+	COMMON_FLAGS += -flto
+endif
+
 ifeq ($(FULL_NATIVE),1)
 	EXTRA_CFLAGS := -DFULL_NATIVE
 else
@@ -86,6 +90,10 @@ CXXFLAGS := $(COMMON_FLAGS) -std=gnu++17
 ASFLAGS := $(ARCH)
 LDFLAGS = -specs=3dsx.specs $(ARCH) -Wl,-Map,$(notdir $*.map) \
 		  -Wl,--gc-sections -Wl,--as-needed
+
+ifeq ($(LTO),1)
+	LDFLAGS += -flto
+endif
 
 LIBS := $(TOPDIR)/$(SDL)/build/libSDL2main.a $(TOPDIR)/$(SDL)/build/libSDL2.a -lcitro2d -lcitro3d -lctru -lm
 LIBDIRS := $(PORTLIBS) $(CTRULIB) ./lib
