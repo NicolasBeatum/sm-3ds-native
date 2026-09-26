@@ -64,6 +64,7 @@ typedef struct PicaFrame {
   PicaAtlas *atlas;
   uint32_t *pixels;
   unsigned width, height;
+  unsigned originX, hudEndY;
   PicaEmit *emit;
   void *context;
   const char *failure;
@@ -74,4 +75,5 @@ typedef struct PicaFrame {
 void PicaAtlasInit(PicaAtlas *atlas, uint32_t *pixels);
 void PicaAtlasBegin(PicaAtlas *atlas);
 void PicaCaptureLine(PicaLine *out, const Ppu *ppu);
+unsigned PicaHudLineCount(const PicaFrame *frame);
 bool PicaBuildFrame(PicaFrame *frame);

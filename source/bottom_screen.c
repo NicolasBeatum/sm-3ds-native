@@ -53,6 +53,7 @@ static bool g_world_view;
 static int g_room_zoom = 1;
 static int g_world_zoom;
 static bool g_hide_main_hud;
+static bool g_widescreen = true;
 static bool g_clear_markers_armed;
 typedef struct MapMarker { uint8_t area, x, y; } MapMarker;
 static MapMarker g_markers[16];
@@ -746,12 +747,14 @@ static void DrawSetupRow(uint8_t *fb, int y, const char *label, const char *valu
 static void DrawSetupTab(uint8_t *fb, int top) {
   Panel(fb, 5, top, 310, 204);
   DrawTextCentered(fb, 160, top + 28, "STATUS BAR: MAP ONLY", 1, kDim);
-  int y = top + 57;
-  DrawSetupRow(fb, y, "HIDE MAIN HUD", g_hide_main_hud ? "ON" : "OFF", g_hide_main_hud);
-  DrawSetupRow(fb, y + 41, "CLEAR MAP MARKERS",
+  int y = top + 51;
+  DrawSetupRow(fb, y, "WIDESCREEN", g_widescreen ? "ON" : "OFF", g_widescreen);
+  DrawSetupRow(fb, y + 34, "HIDE MAIN HUD",
+               g_hide_main_hud ? "ON" : "OFF", g_hide_main_hud);
+  DrawSetupRow(fb, y + 68, "CLEAR MAP MARKERS",
                g_clear_markers_armed ? "TAP AGAIN" : NULL,
                g_clear_markers_armed);
-  DrawTextCentered(fb, 160, top + 151, "HOLD MAP TO SET A MARKER", 1, kDim);
+  DrawTextCentered(fb, 160, top + 176, "HOLD MAP TO SET A MARKER", 1, kDim);
 }
 
 static void DrawTabs(uint8_t *fb) {
@@ -870,9 +873,11 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
   }
 
   if (g_bottom_tab == kBottomTab_Setup) {
-    if (y >= 60 && y < 84) {
+    if (y >= 54 && y < 78) {
+      g_widescreen = !g_widescreen;
+    } else if (y >= 88 && y < 112) {
       g_hide_main_hud = !g_hide_main_hud;
-    } else if (y >= 101 && y < 125) {
+    } else if (y >= 122 && y < 146) {
       if (g_clear_markers_armed) {
         g_marker_count = 0;
         g_clear_markers_armed = false;
@@ -928,4 +933,8 @@ void BottomScreen_HandleTouchUp(float normalized_x, float normalized_y) {
 
 bool BottomScreen_HideMainHud(void) {
   return g_hide_main_hud;
+}
+
+bool BottomScreen_WidescreenEnabled(void) {
+  return g_widescreen;
 }

@@ -1,5 +1,7 @@
 #include "ppu_gpu_model.h"
+#include "wide_config.h"
 
+#include <stddef.h>
 #include <string.h>
 
 static const uint8_t kMorton[64] = {
@@ -147,7 +149,8 @@ void PicaCaptureLine(PicaLine *out, const Ppu *p) {
   out->addSubscreen = p->addSubscreen;
   out->subtractColor = p->subtractColor;
   out->halfColor = p->halfColor;
-  for (unsigned i = 0; i < 6; i++) out->mathEnabled |= p->mathEnabled[i] << i;
+  for (unsigned i = 0; i < 6; i++)
+    if (p->mathEnabled[i]) out->mathEnabled |= 1u << i;
   out->fixedColorR = p->fixedColorR;
   out->fixedColorG = p->fixedColorG;
   out->fixedColorB = p->fixedColorB;
@@ -157,10 +160,11 @@ void PicaCaptureLine(PicaLine *out, const Ppu *p) {
   out->bg3priority = p->bg3priority;
 }
 
-static void Windows(const PicaLine *p, unsigned layer, bool enabled,
+static void Windows(const PicaFrame *f, const PicaLine *p, unsigned layer,
+                    bool enabled, int spanLeft, int spanRight,
                     WindowSpans *out) {
-  out->edges[0] = 0;
-  out->edges[1] = 256;
+  out->edges[0] = spanLeft;
+  out->edges[1] = spanRight;
   out->nr = 1;
   out->bits = 0;
   if (!enabled) return;
@@ -169,10 +173,13 @@ static void Windows(const PicaLine *p, unsigned layer, bool enabled,
   bool w1 = (flags & 2) && p->window1left <= p->window1right;
   bool w2 = (flags & 8) && p->window2left <= p->window2right;
   int points[4], count = 0;
-  if (w1) { points[count++] = p->window1left; points[count++] = p->window1right + 1; }
-  if (w2) { points[count++] = p->window2left; points[count++] = p->window2right + 1; }
+  if (w1) { points[count++] = p->window1left + f->originX;
+            points[count++] = p->window1right + 1 + f->originX; }
+  if (w2) { points[count++] = p->window2left + f->originX;
+            points[count++] = p->window2right + 1 + f->originX; }
   for (int n = 0; n < count; n++) {
     int value = points[n];
+    if (value <= spanLeft || value >= spanRight) continue;
     unsigned i = 0;
     while (i <= nr && out->edges[i] < value) i++;
     if (i <= nr && out->edges[i] == value) continue;
@@ -182,7 +189,7 @@ static void Windows(const PicaLine *p, unsigned layer, bool enabled,
   }
   out->nr = nr;
   for (unsigned i = 0; i < nr; i++) {
-    int x = out->edges[i];
+    int x = out->edges[i] - (int)f->originX;
     bool a = w1 && x >= p->window1left && x <= p->window1right;
     bool b = w2 && x >= p->window2left && x <= p->window2right;
     if (w1 && (flags & 1)) a = !a;
@@ -200,6 +207,18 @@ static void Windows(const PicaLine *p, unsigned layer, bool enabled,
     }
     if (masked) out->bits |= 1u << i;
   }
+}
+
+static bool IsHudLine(const PicaFrame *f, unsigned y) {
+  const PicaLine *p = &f->lines[y];
+  return y < f->hudEndY && p->screenEnabled[0] == 4 &&
+         p->bg[2].tilemapAdr == 0x5800 && p->mathEnabled == 0;
+}
+
+unsigned PicaHudLineCount(const PicaFrame *f) {
+  unsigned y = 0;
+  while (y < f->height && IsHudLine(f, y)) y++;
+  return y;
 }
 
 static bool Emit(PicaFrame *f, unsigned group, PicaQuad quad) {
@@ -280,12 +299,19 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
       if (p->forcedBlank || !(p->screenEnabled[sub] & (1u << layer)) ||
           (sub && !p->addSubscreen)) { y += h; continue; }
       WindowSpans win;
-      Windows(p, layer, (p->screenWindowed[sub] & (1u << layer)) != 0, &win);
+      int spanLeft = 0, spanRight = f->width;
+      if (layer == 2 && IsHudLine(f, y)) {
+        spanLeft = f->originX;
+        spanRight = spanLeft + kSnesWidth;
+      }
+      Windows(f, p, layer, (p->screenWindowed[sub] & (1u << layer)) != 0,
+              spanLeft, spanRight, &win);
       for (unsigned i = 0; i < win.nr; i++) {
         if (win.bits & (1u << i)) continue;
         int x = win.edges[i], end = win.edges[i + 1];
         while (x < end) {
-          unsigned wx = (x + bg->hScroll) & (bg->tilemapWider ? 511 : 255);
+          unsigned wx = (x - (int)f->originX + bg->hScroll) &
+                        (bg->tilemapWider ? 511 : 255);
           unsigned map = (bg->tilemapAdr + ((wy >> 3) & 31) * 32 +
                           ((wx >> 3) & 31) + (wx >= 256 ? 0x400 : 0) +
                           (wy >= 256 ? (bg->tilemapWider ? 0x800 : 0x400) : 0)) & 0x7fff;
@@ -315,6 +341,17 @@ static unsigned HighOam(const Ppu *p, unsigned index) {
   return p->highOam[index >> 3] >> (index & 7);
 }
 
+static int ObjectX(const PicaFrame *f, unsigned index, unsigned high,
+                   unsigned size) {
+  int x = (f->memory->oam[index] & 255) + (high & 1) * 256;
+  if (x >= 256) x -= 512;
+  /* X=256..327 wraps to negative OAM coordinates. It cannot be a visible
+   * left-side sprite at this width, so recover its right-side position. */
+  if (f->width > kSnesWidth && x + (int)size <= -(int)f->originX)
+    x += 512;
+  return x;
+}
+
 static bool Objects(PicaFrame *f, unsigned sub) {
   if (!HasLayer(f, sub, 16)) return true;
   uint16_t active[128], first[128], last[128];
@@ -340,13 +377,13 @@ static bool Objects(PicaFrame *f, unsigned sub) {
       unsigned high = HighOam(f->memory, index);
       unsigned size = kSpriteSizes[p->objSize][(high >> 1) & 1];
       if (row >= size) continue;
-      int x = (f->memory->oam[index] & 255) + (high & 1) * 256;
-      if (x >= 256) x -= 512;
-      if (x <= -(int)size) continue;
+      int x = ObjectX(f, index, high, size);
+      if (x + (int)size <= -(int)f->originX ||
+          x >= (int)f->width - (int)f->originX) continue;
       if (--sprites == 0) break;
       for (unsigned col = 0; col < size; col += 8) {
-        int left = x + col;
-        if (left <= -8 || left >= 256) continue;
+        int left = x + col + f->originX;
+        if (left <= -8 || left >= (int)f->width) continue;
         if (--tiles == 0) { stop = true; break; }
         columns[index / 2][y] |= 1u << (col / 8);
         if (first[index / 2] > y) first[index / 2] = y;
@@ -372,18 +409,18 @@ static bool Objects(PicaFrame *f, unsigned sub) {
       h = Min(h, last[index / 2] - y);
       for (unsigned dy = 1; dy < h; dy++)
         if (columns[index / 2][y + dy] != mask) { h = dy; break; }
-      int x = (f->memory->oam[index] & 255) + (high & 1) * 256;
-      if (x >= 256) x -= 512;
+      int x = ObjectX(f, index, high, size);
       unsigned base = (attr & 0x100) ? p->objTileAdr2 : p->objTileAdr1;
       unsigned palette = 128 + ((attr >> 9) & 7) * 16;
       unsigned z = ((((attr >> 12) & 3) * 4 + 2) * 16 + 4 +
                     ((attr & 0x800) ? 0 : 2)) << 8;
       WindowSpans win;
-      Windows(p, 4, (p->screenWindowed[sub] & 16) != 0, &win);
+      Windows(f, p, 4, (p->screenWindowed[sub] & 16) != 0,
+              0, f->width, &win);
       while (mask) {
         unsigned col = __builtin_ctz(mask) * 8;
         mask &= mask - 1;
-        int left = x + col;
+        int left = x + col + f->originX;
         unsigned usedcol = (attr & 0x4000) ? size - 1 - col : col;
         unsigned usedtile = ((((attr & 255) >> 4) + (row >> 3)) << 4) |
                             (((attr & 15) + (usedcol >> 3)) & 15);
@@ -423,7 +460,7 @@ static bool Compose(PicaFrame *f) {
         h++;
       }
       WindowSpans win;
-      Windows(p, 5, true, &win);
+      Windows(f, p, 5, true, 0, f->width, &win);
       for (unsigned i = 0; i < win.nr; i++) {
         bool inside = (win.bits & (1u << i)) != 0;
         bool clip = p->clipMode == 3 || (p->clipMode == 2 && inside) ||
@@ -449,7 +486,10 @@ static bool Compose(PicaFrame *f) {
 bool PicaBuildFrame(PicaFrame *f) {
   memset(f->quads, 0, sizeof(f->quads));
   f->failure = NULL;
-  if (f->width != 256 || !f->height || f->height > PICA_MAX_LINES) {
+  if (!((f->width == kSnesWidth && f->originX == 0) ||
+        (f->width == kWideWidth && f->originX == kWideExtraX)) ||
+      !f->height || f->height > PICA_MAX_LINES ||
+      f->hudEndY > f->height) {
     f->failure = "dimensions";
     return false;
   }

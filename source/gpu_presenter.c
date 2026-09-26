@@ -1,6 +1,9 @@
 #include "gpu_presenter.h"
 #include "ppu_gpu.h"
 #include "bottom_screen.h"
+#include "wide_config.h"
+#include "src/ida_types.h"
+#include "src/variables.h"
 
 #include <3ds.h>
 #include <citro2d.h>
@@ -9,8 +12,8 @@
 enum {
   kTextureWidth = 256,
   kTextureHeight = 256,
-  kSourceWidth = 256,
-  kSourceHeight = 224,
+  kSourceWidth = kSnesWidth,
+  kSourceHeight = kSnesHeight,
   kDrawWidth = 274,
   kDrawHeight = 240,
 };
@@ -198,6 +201,7 @@ bool GpuPresenter_DrawTop(const uint8_t *pixels) {
   bool gpu_ppu = PpuGpuOutputActive();
   if (gpu_ppu && PpuGpuPrepared())
     gpu_ppu = PpuGpuDraw();
+  bool wide = gpu_ppu && PpuGpuOutputWidth() == kWideWidth;
 
   if (!gpu_ppu) {
     CleanDataCache(pixels, kTextureWidth * kTextureHeight * sizeof(uint32_t));
@@ -216,11 +220,16 @@ bool GpuPresenter_DrawTop(const uint8_t *pixels) {
       .tex = gpu_ppu ? PpuGpuOutput() : &g_top_texture,
       .subtex = gpu_ppu ? &g_top_gpu_subtexture : &g_top_subtexture,
   };
+  if (gpu_ppu) {
+    g_top_gpu_subtexture.width = wide ? kWideWidth : kSnesWidth;
+    g_top_gpu_subtexture.right =
+        (float)g_top_gpu_subtexture.width / 512.0f;
+  }
   C2D_DrawParams params = {
       .pos = {
-          .x = (400.0f - kDrawWidth) * 0.5f,
+          .x = wide ? 0.0f : (400.0f - kDrawWidth) * 0.5f,
           .y = 0.0f,
-          .w = kDrawWidth,
+          .w = wide ? 400.0f : kDrawWidth,
           .h = kDrawHeight,
       },
       .center = {0.0f, 0.0f},
@@ -238,10 +247,34 @@ bool GpuPresenter_DrawTop(const uint8_t *pixels) {
   if (!gpu_ppu)
     ConfigureArgbTextureEnv();
   C2D_Flush();
-  if (BottomScreen_HideMainHud()) {
-    C2D_DrawRectSolid((400.0f - kDrawWidth) * 0.5f, 0.0f, 0.1f,
-                      kDrawWidth, 18.0f, C2D_Color32(0, 0, 0, 255));
+  unsigned hudLines = gpu_ppu ? PpuGpuHudLines() :
+      (game_state == kGameState_8_MainGameplay ? kHudEndLine : 0);
+  const float hudHeight =
+      (float)((hudLines * kDrawHeight + kSnesHeight - 1) / kSnesHeight);
+  const u32 black = C2D_Color32(0, 0, 0, 255);
+  if (BottomScreen_HideMainHud() && hudLines) {
+    C2D_DrawRectSolid(wide ? 0.0f : (400.0f - kDrawWidth) * 0.5f,
+                      0.0f, 0.1f, wide ? 400.0f : kDrawWidth,
+                      hudHeight, black);
     C2D_Flush();
+  } else if (wide && hudLines) {
+    C2D_DrawRectSolid(0.0f, 0.0f, 0.1f, kWideExtraX, hudHeight, black);
+    C2D_DrawRectSolid(kWideExtraX + kSnesWidth, 0.0f, 0.1f,
+                      kWideExtraX, hudHeight, black);
+    C2D_Flush();
+  }
+  if (wide) {
+    int worldLeft, worldRight;
+    if (PpuGpuVisibleWorldSpan(&worldLeft, &worldRight)) {
+      if (worldLeft > 0)
+        C2D_DrawRectSolid(0.0f, hudHeight, 0.1f, worldLeft,
+                          kDrawHeight - hudHeight, black);
+      if (worldRight < kWideWidth)
+        C2D_DrawRectSolid(worldRight, hudHeight, 0.1f,
+                          kWideWidth - worldRight,
+                          kDrawHeight - hudHeight, black);
+      C2D_Flush();
+    }
   }
   return true;
 }
