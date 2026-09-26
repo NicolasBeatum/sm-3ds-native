@@ -52,7 +52,6 @@ static bool g_bottom_dirty = true;
 static bool g_world_view;
 static int g_room_zoom = 1;
 static int g_world_zoom;
-static bool g_show_status[3] = {true, true, false};
 static bool g_hide_main_hud;
 static bool g_clear_markers_armed;
 typedef struct MapMarker { uint8_t area, x, y; } MapMarker;
@@ -460,23 +459,95 @@ static const WorldConnector kWorldConnectors[] = {
   {4,28,32,1,34,30},
 };
 
+static const int kWorldLabelPos[6][2] = {
+  {25, 10}, {22, 24}, {45, 47}, {50, 8}, {42, 25}, {13, 21},
+};
+
+static bool WorldAreaVisible(int area) {
+  const uint8_t *explored = ExploredBitsForArea(area);
+  const uint8_t *station = MapStationBits(area);
+  for (int i = 0; i < 256; i++)
+    if (explored[i] || station[i])
+      return true;
+  return false;
+}
+
+static void IncludeWorldBounds(int x0, int y0, int x1, int y1,
+                               int *min_x, int *min_y,
+                               int *max_x, int *max_y) {
+  if (x0 < *min_x) *min_x = x0;
+  if (y0 < *min_y) *min_y = y0;
+  if (x1 > *max_x) *max_x = x1;
+  if (y1 > *max_y) *max_y = y1;
+}
+
+static void CenterWorldMap(int tile_scale, int top, int bottom,
+                           int *origin_x, int *origin_y) {
+  int min_x = 0x7fffffff, min_y = 0x7fffffff;
+  int max_x = -0x7fffffff, max_y = -0x7fffffff;
+  bool visible_area[6] = {false};
+
+  /* Center the pixels which are actually visible, not the complete logical
+   * 70x57 world canvas. Early in a game that canvas is mostly undiscovered,
+   * which otherwise leaves Crateria/Brinstar stuck in its upper-left corner. */
+  for (int area = 0; area < 6; area++) {
+    const WorldLayout *layout = &kWorldLayout[area];
+    const uint8_t *explored = ExploredBitsForArea(area);
+    const uint8_t *station = MapStationBits(area);
+    for (int ty = layout->min_y; ty < layout->max_y; ty++) {
+      for (int tx = layout->min_x; tx < layout->max_x; tx++) {
+        if (!TileBit(explored, tx, ty) && !TileBit(station, tx, ty))
+          continue;
+        int wx = layout->dest_x + tx - layout->min_x;
+        int wy = layout->dest_y + ty - layout->min_y;
+        IncludeWorldBounds(wx * tile_scale, wy * tile_scale,
+                           (wx + 1) * tile_scale, (wy + 1) * tile_scale,
+                           &min_x, &min_y, &max_x, &max_y);
+        visible_area[area] = true;
+      }
+    }
+    if (visible_area[area]) {
+      const char *label = AreaName(area);
+      int cx = kWorldLabelPos[area][0] * tile_scale;
+      int cy = kWorldLabelPos[area][1] * tile_scale;
+      int width = TextWidth(label, 1) + 8;
+      IncludeWorldBounds(cx - width / 2, cy - 5,
+                         cx + (width + 1) / 2, cy + 6,
+                         &min_x, &min_y, &max_x, &max_y);
+    }
+  }
+
+  for (unsigned i = 0;
+       i < sizeof(kWorldConnectors) / sizeof(kWorldConnectors[0]); i++) {
+    const WorldConnector *c = &kWorldConnectors[i];
+    if (!visible_area[c->a] || !visible_area[c->b])
+      continue;
+    IncludeWorldBounds(c->ax * tile_scale, c->ay * tile_scale,
+                       c->ax * tile_scale + 1, c->ay * tile_scale + 1,
+                       &min_x, &min_y, &max_x, &max_y);
+    IncludeWorldBounds(c->bx * tile_scale, c->by * tile_scale,
+                       c->bx * tile_scale + 1, c->by * tile_scale + 1,
+                       &min_x, &min_y, &max_x, &max_y);
+  }
+
+  if (max_x < min_x || max_y < min_y) {
+    min_x = min_y = 0;
+    max_x = 70 * tile_scale;
+    max_y = 57 * tile_scale;
+  }
+  *origin_x = 160 - (min_x + max_x) / 2;
+  *origin_y = top + (bottom - top) / 2 - (min_y + max_y) / 2;
+}
+
 static void DrawWorldMap(uint8_t *fb, int top, int bottom) {
   Panel(fb, 5, top, 310, bottom - top);
   int tile_scale = 2 + g_world_zoom;
-  int canvas_w = 70 * tile_scale, canvas_h = 57 * tile_scale;
-  int ox = 160 - canvas_w / 2;
-  int oy = top + (bottom - top - canvas_h) / 2;
+  int ox, oy;
+  CenterWorldMap(tile_scale, top, bottom, &ox, &oy);
 
   for (unsigned i = 0; i < sizeof(kWorldConnectors) / sizeof(kWorldConnectors[0]); i++) {
     const WorldConnector *c = &kWorldConnectors[i];
-    const uint8_t *abits = ExploredBitsForArea(c->a);
-    const uint8_t *bbits = ExploredBitsForArea(c->b);
-    bool have_a = false, have_b = false;
-    for (int j = 0; j < 256; j++) {
-      have_a |= abits[j] != 0;
-      have_b |= bbits[j] != 0;
-    }
-    if (!have_a || !have_b) continue;
+    if (!WorldAreaVisible(c->a) || !WorldAreaVisible(c->b)) continue;
     UiColor color = {
       (uint8_t)((kAreaColors[c->a].r + kAreaColors[c->b].r) / 5),
       (uint8_t)((kAreaColors[c->a].g + kAreaColors[c->b].g) / 5),
@@ -524,16 +595,10 @@ static void DrawWorldMap(uint8_t *fb, int top, int bottom) {
     StrokeRect(fb, mx - 2, my - 2, 5, 5, 1, kAccent);
   }
 
-  static const int label_pos[6][2] = {
-    {25, 10}, {22, 24}, {45, 47}, {50, 8}, {42, 25}, {13, 21},
-  };
   for (int area = 0; area < 6; area++) {
-    const uint8_t *bits = ExploredBitsForArea(area);
-    bool any = false;
-    for (int i = 0; i < 256 && !any; i++) any = bits[i] != 0;
-    if (!any) continue;
-    int x = ox + label_pos[area][0] * tile_scale;
-    int y = oy + label_pos[area][1] * tile_scale;
+    if (!WorldAreaVisible(area)) continue;
+    int x = ox + kWorldLabelPos[area][0] * tile_scale;
+    int y = oy + kWorldLabelPos[area][1] * tile_scale;
     const char *label = AreaName(area);
     int w = TextWidth(label, 1) + 8;
     FillRect(fb, x - w / 2, y - 5, w, 11, kBg);
@@ -620,9 +685,9 @@ static void DrawReduxSuit(uint8_t *fb, int x, int y, int w, int h) {
 }
 
 static void DrawItemsTab(uint8_t *fb, int top) {
-  Panel(fb, 5, top, 310, 163);
+  Panel(fb, 5, top, 310, 204);
   char text[32];
-  int stat_y = top + 5;
+  int stat_y = top + 25;
   FillRect(fb, 11, stat_y, 107, 24, kSlot);
   StrokeRect(fb, 11, stat_y, 107, 24, 2, kBorder);
   DrawText(fb, 17, stat_y + 3, "ITEMS", 1, kDim);
@@ -661,11 +726,11 @@ static void DrawItemsTab(uint8_t *fb, int top) {
   FillRect(fb, 197, body_y + 65, 112, 63, kSlot);
   StrokeRect(fb, 197, body_y + 65, 112, 63, 2, kBorder);
   DrawText(fb, 203, body_y + 69, "BEAM", 1, kAccent);
-  DrawItemLine(fb, 203, body_y + 81, "CHARGE", collected_beams & 0x1000, equipped_beams & 0x1000);
-  DrawItemLine(fb, 203, body_y + 91, "ICE", collected_beams & 0x0002, equipped_beams & 0x0002);
-  DrawItemLine(fb, 203, body_y + 101, "WAVE", collected_beams & 0x0001, equipped_beams & 0x0001);
-  DrawItemLine(fb, 203, body_y + 111, "SPAZER", collected_beams & 0x0004, equipped_beams & 0x0004);
-  DrawItemLine(fb, 203, body_y + 121, "PLASMA", collected_beams & 0x0008, equipped_beams & 0x0008);
+  DrawItemLine(fb, 203, body_y + 80, "CHARGE", collected_beams & 0x1000, equipped_beams & 0x1000);
+  DrawItemLine(fb, 203, body_y + 89, "ICE", collected_beams & 0x0002, equipped_beams & 0x0002);
+  DrawItemLine(fb, 203, body_y + 98, "WAVE", collected_beams & 0x0001, equipped_beams & 0x0001);
+  DrawItemLine(fb, 203, body_y + 107, "SPAZER", collected_beams & 0x0004, equipped_beams & 0x0004);
+  DrawItemLine(fb, 203, body_y + 116, "PLASMA", collected_beams & 0x0008, equipped_beams & 0x0008);
 }
 
 static void DrawSetupRow(uint8_t *fb, int y, const char *label, const char *value,
@@ -679,15 +744,14 @@ static void DrawSetupRow(uint8_t *fb, int y, const char *label, const char *valu
 }
 
 static void DrawSetupTab(uint8_t *fb, int top) {
-  Panel(fb, 5, top, 310, 163);
-  int y = top + 7;
-  DrawSetupRow(fb, y, "STATUS BAR  MAP", g_show_status[0] ? "ON" : "OFF", g_show_status[0]);
-  DrawSetupRow(fb, y + 29, "STATUS BAR  ITEMS", g_show_status[1] ? "ON" : "OFF", g_show_status[1]);
-  DrawSetupRow(fb, y + 58, "STATUS BAR  SETUP", g_show_status[2] ? "ON" : "OFF", g_show_status[2]);
-  DrawSetupRow(fb, y + 87, "HIDE MAIN HUD", g_hide_main_hud ? "ON" : "OFF", g_hide_main_hud);
-  DrawSetupRow(fb, y + 116, "CLEAR MAP MARKERS",
+  Panel(fb, 5, top, 310, 204);
+  DrawTextCentered(fb, 160, top + 28, "STATUS BAR: MAP ONLY", 1, kDim);
+  int y = top + 57;
+  DrawSetupRow(fb, y, "HIDE MAIN HUD", g_hide_main_hud ? "ON" : "OFF", g_hide_main_hud);
+  DrawSetupRow(fb, y + 41, "CLEAR MAP MARKERS",
                g_clear_markers_armed ? "TAP AGAIN" : NULL,
                g_clear_markers_armed);
+  DrawTextCentered(fb, 160, top + 151, "HOLD MAP TO SET A MARKER", 1, kDim);
 }
 
 static void DrawTabs(uint8_t *fb) {
@@ -722,7 +786,7 @@ bool BottomScreen_Draw(void) {
   if (!g_bottom_cache)
     return false;
 
-  /* The UI data changes slowly, so rebuild its texture at 15 Hz. The GPU
+  /* The UI data changes slowly, so rebuild its texture at 7.5 Hz. The GPU
    * still presents the cached texture every frame to keep both LCD buffers
    * synchronized. */
   bool redraw = g_bottom_dirty || ((g_bottom_frame++ & 7) == 0);
@@ -734,14 +798,14 @@ bool BottomScreen_Draw(void) {
     DrawIdle(g_bottom_cache);
   } else {
     FillRect(g_bottom_cache, 0, 0, 320, 240, kBg);
-    if (g_show_status[g_bottom_tab])
+    if (g_bottom_tab == kBottomTab_Map) {
       DrawStatus(g_bottom_cache);
-    if (g_bottom_tab == kBottomTab_Map)
       DrawMapTab(g_bottom_cache, 44);
-    else if (g_bottom_tab == kBottomTab_Items)
-      DrawItemsTab(g_bottom_cache, 44);
-    else
-      DrawSetupTab(g_bottom_cache, 44);
+    } else if (g_bottom_tab == kBottomTab_Items) {
+      DrawItemsTab(g_bottom_cache, 3);
+    } else {
+      DrawSetupTab(g_bottom_cache, 3);
+    }
     DrawTabs(g_bottom_cache);
   }
   return true;
@@ -805,11 +869,10 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
     return;
   }
 
-  if (g_bottom_tab == kBottomTab_Setup && y >= 51 && y < 196) {
-    int row = (y - 51) / 29;
-    if (row >= 0 && row < 3) g_show_status[row] = !g_show_status[row];
-    else if (row == 3) g_hide_main_hud = !g_hide_main_hud;
-    else if (row == 4) {
+  if (g_bottom_tab == kBottomTab_Setup) {
+    if (y >= 60 && y < 84) {
+      g_hide_main_hud = !g_hide_main_hud;
+    } else if (y >= 101 && y < 125) {
       if (g_clear_markers_armed) {
         g_marker_count = 0;
         g_clear_markers_armed = false;
@@ -821,7 +884,7 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
     return;
   }
 
-  if (!g_show_status[g_bottom_tab] || y >= 42)
+  if (g_bottom_tab != kBottomTab_Map || y >= 42)
     return;
 
   int slot = 0;

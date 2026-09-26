@@ -83,9 +83,10 @@ patched libretro core is required. It currently provides:
 - direct touch selection/cancellation for missiles, supers and power bombs;
 - real ROM-decoded pause-map tiles, palettes, doors and Map Station reveals;
 - ROOM/WORLD switching, zoom, colored all-area composition and map markers;
+- dynamic WORLD centering around visible tiles, labels and connectors;
 - collected/equipped suits, movement upgrades, beams and vanilla item percent;
 - the full-color Redux suit pose with live Power/Varia/Gravity coloring;
-- play time, functional MAP/ITEMS/SETUP tabs, per-tab status settings, optional
+- play time, MAP-only lower status, functional MAP/ITEMS/SETUP tabs, optional
   main-HUD hiding and an idle METROID screen.
 
 The visual reference is the MetroidArch dual-screen project:

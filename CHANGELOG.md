@@ -53,6 +53,9 @@
   and marker-clear setup controls.
 - Reduced lower-texture rebuilds to 7.5 Hz and decoded map data per tile to
   preserve the native Old 3DS performance budget.
+- Centered the WORLD view on its currently visible map content at every zoom
+  level and restricted the lower status bar to the MAP tab.
+- Tightened the BEAM equipment list so every entry clears its panel border.
 - Added the GPU texture path for the lower screen and a direct framebuffer
   fallback.
 
