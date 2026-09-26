@@ -300,10 +300,14 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
           (sub && !p->addSubscreen)) { y += h; continue; }
       WindowSpans win;
       int spanLeft = 0, spanRight = f->width;
-      if (layer == 2 && IsHudLine(f, y)) {
+      if (layer == 0 && f->width == kWideWidth && !IsHudLine(f, y)) {
+        spanLeft = f->worldLeft;
+        spanRight = f->worldRight;
+      } else if (layer == 2 && IsHudLine(f, y)) {
         spanLeft = f->originX;
         spanRight = spanLeft + kSnesWidth;
       }
+      if (spanLeft >= spanRight) { y += h; continue; }
       Windows(f, p, layer, (p->screenWindowed[sub] & (1u << layer)) != 0,
               spanLeft, spanRight, &win);
       for (unsigned i = 0; i < win.nr; i++) {
@@ -489,7 +493,8 @@ bool PicaBuildFrame(PicaFrame *f) {
   if (!((f->width == kSnesWidth && f->originX == 0) ||
         (f->width == kWideWidth && f->originX == kWideExtraX)) ||
       !f->height || f->height > PICA_MAX_LINES ||
-      f->hudEndY > f->height) {
+      f->hudEndY > f->height || f->worldLeft < 0 ||
+      f->worldRight > (int)f->width || f->worldLeft > f->worldRight) {
     f->failure = "dimensions";
     return false;
   }

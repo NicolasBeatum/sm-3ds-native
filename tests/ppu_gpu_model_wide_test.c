@@ -45,8 +45,10 @@ static unsigned Sample(const Capture *capture, const PicaAtlas *atlas,
   return 1 + (atlas->tile[slot].key << 6) + (v % 8) * 8 + u % 8;
 }
 
-static void Build(PicaFrame *frame, PicaAtlas *atlas, uint32_t *pixels,
-                  Capture *capture, unsigned width, unsigned origin) {
+static void BuildWithBounds(PicaFrame *frame, PicaAtlas *atlas,
+                            uint32_t *pixels, Capture *capture,
+                            unsigned width, unsigned origin,
+                            int worldLeft, int worldRight) {
   memset(capture, 0, sizeof(*capture));
   PicaAtlasInit(atlas, pixels);
   PicaAtlasBegin(atlas);
@@ -55,9 +57,16 @@ static void Build(PicaFrame *frame, PicaAtlas *atlas, uint32_t *pixels,
   frame->width = width;
   frame->originX = origin;
   frame->hudEndY = kHudEndLine;
+  frame->worldLeft = worldLeft;
+  frame->worldRight = worldRight;
   frame->emit = CaptureQuad;
   frame->context = capture;
   assert(PicaBuildFrame(frame));
+}
+
+static void Build(PicaFrame *frame, PicaAtlas *atlas, uint32_t *pixels,
+                  Capture *capture, unsigned width, unsigned origin) {
+  BuildWithBounds(frame, atlas, pixels, capture, width, origin, 0, width);
 }
 
 static void AssertCenter(const Capture *normal, const PicaAtlas *normalAtlas,
@@ -88,7 +97,7 @@ int main(void) {
 
   for (unsigned i = 0; i < 2048; i++)
     ppu->vram[0x1000 + i] = 1 + (i & 3);
-  for (unsigned i = 16; i < 80; i++)
+  for (unsigned i = 16; i < 96; i++)
     ppu->vram[i] = 0xffff;
   for (unsigned y = 0; y < kHudEndLine; y++) {
     lines[y].mode = 1;
@@ -108,6 +117,31 @@ int main(void) {
   AssertCenter(normal, normalAtlas, wide, wideAtlas);
   assert(Sample(wide, wideAtlas, 0, 0) != 0);
   assert(Sample(wide, wideAtlas, kWideWidth - 1, 0) != 0);
+
+  /* Room limits apply to BG1. BG2 remains visible behind the side walls. */
+  for (unsigned i = 0; i < 2048; i++) ppu->vram[0x1800 + i] = 5;
+  for (unsigned y = 0; y < kHudEndLine; y++) {
+    lines[y].screenEnabled[0] = 3;
+    lines[y].screenWindowed[0] = 0;
+    lines[y].bg[1] = lines[y].bg[0];
+    lines[y].bg[1].tilemapAdr = 0x1800;
+  }
+  BuildWithBounds(&frame, wideAtlas, widePixels, wide, kWideWidth,
+                  kWideExtraX, kWideExtraX,
+                  kWideExtraX + kSnesWidth);
+  unsigned bg2Edge = Sample(wide, wideAtlas, 0, 0);
+  unsigned bg1Center = Sample(wide, wideAtlas, kWideExtraX + 20, 0);
+  assert(bg2Edge != 0);
+  for (unsigned y = 0; y < kHudEndLine; y++)
+    lines[y].screenEnabled[0] = 2;
+  Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
+  assert(Sample(wide, wideAtlas, 0, 0) == bg2Edge);
+  assert(Sample(wide, wideAtlas, kWideExtraX + 20, 0) != bg1Center);
+
+  for (unsigned y = 0; y < kHudEndLine; y++) {
+    lines[y].screenEnabled[0] = 1;
+    lines[y].screenWindowed[0] = 1;
+  }
 
   for (unsigned y = 0; y < kHudEndLine; y++)
     lines[y].windowsel = 3;

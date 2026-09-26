@@ -20,5 +20,4 @@ bool PpuGpuDraw(void);
 C3D_Tex *PpuGpuOutput(void);
 unsigned PpuGpuOutputWidth(void);
 unsigned PpuGpuHudLines(void);
-bool PpuGpuVisibleWorldSpan(int *left, int *right);
 const char *PpuGpuReason(void);

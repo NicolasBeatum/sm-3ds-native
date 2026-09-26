@@ -45,7 +45,6 @@ static struct {
   int scaleLocation;
   Range ranges[PICA_GROUPS];
   unsigned slot, lastSubmittedSlot, count, width, height, captured, hudLines;
-  int worldLeft, worldRight;
   float invWidth, invHeight;
   const char *reason;
 } g;
@@ -366,6 +365,7 @@ bool PpuGpuFinish(Ppu *p) {
                      .pixels=g.atlas.data,.width=g.width,.height=g.height,
                      .originX=g_wide_config.origin_x,
                      .hudEndY=g_wide_config.hud_end_y,
+                     .worldLeft=0,.worldRight=g.width,
                      .emit=Emit};
   bool ok = !p->gpuInvalidWrite && g.captured == g.height;
   if (ok) g.hudLines = PicaHudLineCount(&frame);
@@ -374,8 +374,8 @@ bool PpuGpuFinish(Ppu *p) {
         (int16_t)layer1_x_pos, (int16_t)layer1_y_pos,
         room_width_in_blocks, room_width_in_scrolls,
         room_height_in_scrolls, scrolls);
-    g.worldLeft = span.left;
-    g.worldRight = span.right;
+    frame.worldLeft = span.left;
+    frame.worldRight = span.right;
   }
   if (ok) ok = PicaBuildFrame(&frame);
   if (!ok) {
@@ -426,12 +426,6 @@ bool PpuGpuOutputActive(void) { return g.output; }
 C3D_Tex *PpuGpuOutput(void) { return g.output ? &g.result : NULL; }
 unsigned PpuGpuOutputWidth(void) { return g.output ? g.width : kSnesWidth; }
 unsigned PpuGpuHudLines(void) { return g.output ? g.hudLines : 0; }
-bool PpuGpuVisibleWorldSpan(int *left, int *right) {
-  if (!g.output || g.width != kWideWidth) return false;
-  *left = g.worldLeft;
-  *right = g.worldRight;
-  return true;
-}
 const char *PpuGpuReason(void) { return g.reason ? g.reason : "uninitialized"; }
 
 bool PpuGpuDraw(void) {

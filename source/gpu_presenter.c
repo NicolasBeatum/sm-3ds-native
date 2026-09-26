@@ -263,19 +263,6 @@ bool GpuPresenter_DrawTop(const uint8_t *pixels) {
                       kWideExtraX, hudHeight, black);
     C2D_Flush();
   }
-  if (wide) {
-    int worldLeft, worldRight;
-    if (PpuGpuVisibleWorldSpan(&worldLeft, &worldRight)) {
-      if (worldLeft > 0)
-        C2D_DrawRectSolid(0.0f, hudHeight, 0.1f, worldLeft,
-                          kDrawHeight - hudHeight, black);
-      if (worldRight < kWideWidth)
-        C2D_DrawRectSolid(worldRight, hudHeight, 0.1f,
-                          kWideWidth - worldRight,
-                          kDrawHeight - hudHeight, black);
-      C2D_Flush();
-    }
-  }
   return true;
 }
 

@@ -16,9 +16,8 @@ WideWorldSpan WideBounds_Compute(int camera_x, int camera_y,
   int world_left = 0, world_right = room_right;
 
   /* A zero scroll entry prevents the camera from entering that screen.
-   * Keep the original viewport intact, but do not reveal adjacent locked
-   * screens in the new margins. Check both rows if the viewport straddles
-   * a horizontal screen boundary. */
+   * Clip the room's BG1 to those limits while allowing BG2 to provide the
+   * side background. Check both rows when the viewport straddles a screen. */
   if (scrolls && room_width_scrolls && room_height_scrolls &&
       room_width_scrolls * room_height_scrolls <= 512 &&
       room_width_blocks == room_width_scrolls * 16) {
