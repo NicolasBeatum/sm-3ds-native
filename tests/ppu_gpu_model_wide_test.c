@@ -176,6 +176,16 @@ int main(void) {
   assert(Sample(wide, wideAtlas, 0, 0) == 0);
   assert(Sample(wide, wideAtlas, kWideWidth - 1, 0) == 0);
 
+  for (unsigned i = 0; i < 2048; i++) ppu->vram[0x5000 + i] = 2;
+  for (unsigned y = 0; y < kHudEndLine; y++)
+    lines[y].bg[2].tilemapAdr = 0x5000;
+  assert(PicaHudLineCount(&frame) == 0);
+  Build(&frame, normalAtlas, normalPixels, normal, kSnesWidth, 0);
+  Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
+  AssertCenter(normal, normalAtlas, wide, wideAtlas);
+  assert(Sample(wide, wideAtlas, 0, 0) != 0);
+  assert(Sample(wide, wideAtlas, kWideWidth - 1, 0) != 0);
+
   for (unsigned i = 0; i < 256; i += 2)
     ppu->oam[i] = 0xf000;
   ppu->oam[0] = 4;
