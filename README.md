@@ -1,5 +1,13 @@
 # sm-3ds
 
+> [!IMPORTANT]
+> **Private custom multi-project fork developed with AI assistance.** This is
+> not an official Nintendo, RetroArch, SDL, snesrev or CharlesAverill release.
+> Nicolás Andrés Hernández Vargas directed and tested the work; OpenAI Codex
+> was used extensively for code analysis, implementation, debugging,
+> optimization and documentation. See [Provenance and AI
+> disclosure](#provenance-and-ai-disclosure).
+
 <!-- ![banner](resources/ghpreview.png) -->
 ![ceres station on Azahar](screenshots/sm-3ds.gif)
 
@@ -25,6 +33,32 @@ Highlights:
 The current architecture, build flags, diagnostics and verification history
 are documented in [docs/PORTING_NOTES.md](docs/PORTING_NOTES.md). Changes made
 in this fork are listed in [CHANGELOG.md](CHANGELOG.md).
+
+## Provenance and AI disclosure
+
+This repository is a custom integration of several independent projects; it is
+not presented as wholly original work:
+
+| Project | Role in this repository |
+| ------- | ----------------------- |
+| [CharlesAverill/sm-3ds](https://github.com/CharlesAverill/sm-3ds) | Nintendo 3DS port base. |
+| [CharlesAverill/sm-3ds-lib](https://github.com/CharlesAverill/sm-3ds-lib) | Native game/decompilation submodule used by the port. |
+| [snesrev/sm](https://github.com/snesrev/sm) | Original Super Metroid decompilation/PC port ancestry. |
+| [libsdl-org/SDL](https://github.com/libsdl-org/SDL) | Platform, input and audio layer. |
+| [Raekwon1603/RetroArch `metroidarch-dual-screen`](https://github.com/Raekwon1603/RetroArch/tree/metroidarch-dual-screen) | Dual-screen visual and interaction reference. |
+
+The buildable custom submodules are kept in the private repositories
+[`NicolasBeatum/sm-3ds-lib-native`](https://github.com/NicolasBeatum/sm-3ds-lib-native)
+and [`NicolasBeatum/SDL-3DS-native`](https://github.com/NicolasBeatum/SDL-3DS-native).
+Their `origin` remotes still identify the public upstream repositories, and
+their custom branches contain only this port's additions.
+
+OpenAI Codex has been used extensively throughout this custom fork. AI-assisted
+work includes implementation drafts, source comparison, performance analysis,
+the PICA200 and lower-screen integration, bug diagnosis, test automation and
+documentation. Human direction, acceptance testing and the decision to publish
+remain with the repository owner. AI assistance does not change the licenses,
+copyright or required attribution of any upstream project.
 
 ![title screen on Azahar](screenshots/titlescreen.png)
 
