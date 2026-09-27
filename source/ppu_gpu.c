@@ -382,6 +382,10 @@ bool PpuGpuFinish(Ppu *p) {
     frame.wideRoom[0].blocks = NULL;
   if (roomBlocks > (sizeof(g_ram) - 0x19602) / sizeof(uint16_t))
     frame.wideRoom[1].blocks = NULL;
+  /* A frozen/parallax BG2 is a static VRAM tilemap, not room block data.
+   * Repeat its existing pattern into the side bands. */
+  if ((layer2_scroll_x | layer2_scroll_y) & 1)
+    frame.wideRoom[1].blocks = NULL;
   if (ok) g.hudLines = PicaHudLineCount(&frame);
   if (ok && g.width == kWideWidth) {
     WideWorldSpan span = WideBounds_Compute(
