@@ -985,11 +985,11 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
     }
     if (g_setup_build_info)
       return;
-    if (y >= 54 && y < 78) {
+    if (y >= 60 && y < 84) {
       g_widescreen = !g_widescreen;
-    } else if (y >= 88 && y < 112) {
+    } else if (y >= 94 && y < 118) {
       g_hide_main_hud = !g_hide_main_hud;
-    } else if (y >= 122 && y < 146) {
+    } else if (y >= 128 && y < 152) {
       if (g_clear_markers_armed) {
         g_marker_count = 0;
         g_clear_markers_armed = false;
