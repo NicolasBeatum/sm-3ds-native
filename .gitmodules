@@ -1,8 +1,8 @@
 [submodule "SDL"]
 	path = SDL
-	url = https://github.com/NicolasBeatum/SDL-3DS-native.git
+	url = https://github.com/NicolasBeatum/SDL-3DS-native-fork.git
 	branch = native-3ds-audio-thread
 [submodule "sm"]
 	path = sm
-	url = https://github.com/NicolasBeatum/sm-3ds-lib-native.git
+	url = https://github.com/NicolasBeatum/sm-3ds-lib-native-fork.git
 	branch = native-3ds-optimizations

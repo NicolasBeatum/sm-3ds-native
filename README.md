@@ -1,7 +1,7 @@
-# sm-3ds
+# sm-3ds-native
 
 > [!IMPORTANT]
-> **Private custom multi-project fork developed with AI assistance.** This is
+> **Unofficial multi-project fork developed with AI assistance.** This is
 > not an official Nintendo, RetroArch, SDL, snesrev or CharlesAverill release.
 > Nicolás Andrés Hernández Vargas directed and tested the work; OpenAI Codex
 > was used extensively for code analysis, implementation, debugging,
@@ -24,11 +24,11 @@ Highlights:
 - Native game logic with stereo 32 kHz audio.
 - PICA200 rendering for supported Mode 1 frames; automatic exact fallback for
   unsupported PPU state or mid-frame changes.
-- MetroidArch-compatible lower screen with ROM-decoded room/world maps and
-  ammo icons, Redux suit art, equipment percentage, touch ammo/zoom controls,
-  map markers and functional per-tab setup options. SETUP opens on BUILD INFO,
-  showing the compiled `BUILD_FLAGS`, port-specific defines, `FULL_NATIVE` and
-  `LTO`; its PORT UI page contains the companion-screen controls.
+- Lower screen with ROM-decoded room/world maps and ammo icons, Redux suit art,
+  equipment percentage, touch ammo/zoom controls and map markers. SETUP opens
+  on the port options, including separate status-bar switches for MAP, ITEMS
+  and SETUP, widescreen and main-HUD controls. Its small `i` tab shows build
+  information (`BUILD_FLAGS`, port-specific defines, `FULL_NATIVE` and `LTO`).
 - Correct HDMA rain, fog, windows and colour math without scanline filtering.
 - Save files at `saves/sm.srm`, with a backup created before replacement.
 - Fixed room BTS loading on ARM, including the Landing Site terrain and blue
@@ -49,18 +49,21 @@ not presented as wholly original work:
 | [CharlesAverill/sm-3ds-lib](https://github.com/CharlesAverill/sm-3ds-lib) | Native game/decompilation submodule used by the port. |
 | [snesrev/sm](https://github.com/snesrev/sm) | Original Super Metroid decompilation/PC port ancestry. |
 | [libsdl-org/SDL](https://github.com/libsdl-org/SDL) | Platform, input and audio layer. |
-| [Raekwon1603/RetroArch `metroidarch-dual-screen`](https://github.com/Raekwon1603/RetroArch/tree/metroidarch-dual-screen) | Dual-screen visual and interaction reference. |
+| [Raekwon1603/RetroArch `metroidarch-dual-screen`](https://github.com/Raekwon1603/RetroArch/tree/metroidarch-dual-screen) | Lower-screen design reference and source of derived UI code, ROM decoding behavior and Redux suit data. |
 
 The lower-screen implementation and bundled Redux suit data are derived from
-the GPL-3.0 MetroidArch branch. See `THIRD_PARTY_NOTICES.md` for exact file and
-asset provenance; the original MIT license continues to identify the license
-of the CharlesAverill base rather than relicensing third-party-derived code.
+the GPL-3.0 MetroidArch branch. The combined port is distributed under GPL-3.0;
+the CharlesAverill MIT notice remains in `LICENSE.MIT`, and the original
+licenses of the submodules remain in their own repositories. See
+`THIRD_PARTY_NOTICES.md` for file and asset provenance. The Redux suit bytes
+were extracted from a modified game ROM; the GPL notice on the MetroidArch
+code does not establish ownership of those graphics.
 
-The buildable custom submodules are kept in the private repositories
-[`NicolasBeatum/sm-3ds-lib-native`](https://github.com/NicolasBeatum/sm-3ds-lib-native)
-and [`NicolasBeatum/SDL-3DS-native`](https://github.com/NicolasBeatum/SDL-3DS-native).
-Their `origin` remotes still identify the public upstream repositories, and
-their custom branches contain only this port's additions.
+The port uses public submodule forks
+[`NicolasBeatum/sm-3ds-lib-native-fork`](https://github.com/NicolasBeatum/sm-3ds-lib-native-fork)
+and [`NicolasBeatum/SDL-3DS-native-fork`](https://github.com/NicolasBeatum/SDL-3DS-native-fork).
+Their fork relationships identify the original projects; the branches pinned
+in `.gitmodules` contain the 3DS-specific changes.
 
 OpenAI Codex has been used extensively throughout this custom fork. AI-assisted
 work includes implementation drafts, source comparison, performance analysis,
@@ -79,7 +82,7 @@ copyright or required attribution of any upstream project.
 # Install devkitARM - https://devkitpro.org/wiki/Getting_Started
 
 # Clone
-git clone --recurse-submodules https://github.com/CharlesAverill/sm-3ds.git
+git clone --recurse-submodules https://github.com/NicolasBeatum/sm-3ds-native.git
 
 # Install bannertool
 git clone https://github.com/carstene1ns/3ds-bannertool.git --depth=1 && cd 3ds-bannertool
@@ -92,7 +95,7 @@ make -C Project_CTR/makerom deps -j
 make -C Project_CTR/makerom program -j
 sudo cp Project_CTR/makerom/bin/makerom /usr/bin
 
-cd sm-3ds
+cd sm-3ds-native
 
 # Place your copy of Super Metroid in romfs
 cp ~/Games/sm.smc romfs

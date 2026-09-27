@@ -1,8 +1,9 @@
 # Third-party notices
 
-This private custom fork combines work from several upstream projects. The
-repository-level MIT `LICENSE` is inherited from CharlesAverill/sm-3ds and does
-not override the licenses or rights attached to imported or derived material.
+This fork combines work from several upstream projects. `LICENSE` contains the
+GNU GPL version 3 terms for the combined port because it includes code derived
+from MetroidArch. `LICENSE.MIT` preserves the CharlesAverill/sm-3ds license;
+the submodules keep their own licenses and notices.
 
 ## MetroidArch dual-screen UI
 
@@ -30,10 +31,11 @@ respective owners. This project is unofficial and non-commercial.
 
 ## Other upstreams
 
-- CharlesAverill/sm-3ds: MIT; see `LICENSE`.
+- CharlesAverill/sm-3ds: MIT; see `LICENSE.MIT`.
 - CharlesAverill/sm-3ds-lib and snesrev/sm: preserved through the `sm`
   submodule history and its notices.
-- libsdl-org/SDL: zlib license; see `SDL/LICENSE.txt`.
+- libsdl-org/SDL: zlib license; see `SDL/LICENSE.txt` in the initialized
+  submodule.
 
 The custom integration and documentation were produced with extensive OpenAI
 Codex assistance under human direction and testing. This disclosure does not
