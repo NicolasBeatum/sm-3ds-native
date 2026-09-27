@@ -383,6 +383,16 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
                        f->wideRoom[layer].blocks;
       WideTileRow roomRow = {0};
       if (roomSides) roomRow = WideRoomRow(f, layer, y + 1);
+      unsigned mapRow = bg->tilemapAdr + ((wy >> 3) & 31) * 32 +
+                        (wy >= 256 ? (bg->tilemapWider ? 0x800 : 0x400) : 0);
+      unsigned bpp = layer == 2 ? 2 : 4;
+      unsigned tileWords = bpp == 4 ? 16 : 8;
+      unsigned paletteShift = bpp == 4 ? 6 : 8;
+      unsigned zLow = layer == 0 ? 0x8000 : layer == 1 ? 0x7100 : 0x1200;
+      unsigned zHigh = layer == 0 ? 0xc000 : layer == 1 ? 0xb100 :
+                       (p->bg3priority ? 0xf200 : 0x5200);
+      unsigned tileAlpha = sub ? 255 :
+                           ((p->mathEnabled & (1u << layer)) ? 255 : 127);
       for (unsigned i = 0; i < win.nr; i++) {
         if (win.bits & (1u << i)) continue;
         int x = win.edges[i], end = win.edges[i + 1];
@@ -405,22 +415,17 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
               continue;
             }
           } else {
-            unsigned map = (bg->tilemapAdr + ((wy >> 3) & 31) * 32 +
-                            ((wx >> 3) & 31) + (wx >= 256 ? 0x400 : 0) +
-                            (wy >= 256 ? (bg->tilemapWider ? 0x800 : 0x400) : 0)) & 0x7fff;
+            unsigned map = (mapRow + ((wx >> 3) & 31) +
+                            (wx >= 256 ? 0x400 : 0)) & 0x7fff;
             tile = f->memory->vram[map];
           }
-          unsigned bpp = layer == 2 ? 2 : 4;
-          int slot = Tile(f, (bg->tileAdr + (tile & 1023) * (bpp == 4 ? 16 : 8)) & 0x7fff,
-                          (tile & 0x1c00) >> (bpp == 4 ? 6 : 8), bpp);
+          int slot = Tile(f, (bg->tileAdr + (tile & 1023) * tileWords) & 0x7fff,
+                          (tile & 0x1c00) >> paletteShift, bpp);
           if (slot == -1) return false;
           if (side) w = Min(w, 8 - pixelX);
-          unsigned z = layer == 0 ? ((tile & 0x2000) ? 0xc000 : 0x8000) :
-                       layer == 1 ? ((tile & 0x2000) ? 0xb100 : 0x7100) :
-                       ((tile & 0x2000) ? (p->bg3priority ? 0xf200 : 0x5200) : 0x1200);
+          unsigned z = (tile & 0x2000) ? zHigh : zLow;
           if (slot >= 0 && !TileQuad(f, group, slot, x, y, w, h, pixelX, pixelY,
-                                     tile & 0x4000, tile & 0x8000, z,
-                                     sub ? 255 : ((p->mathEnabled & (1u << layer)) ? 255 : 127)))
+                                     tile & 0x4000, tile & 0x8000, z, tileAlpha))
             return false;
           x += w;
         }
