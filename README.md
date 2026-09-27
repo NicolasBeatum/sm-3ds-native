@@ -25,11 +25,12 @@ Highlights:
 - PICA200 rendering for supported Mode 1 frames; automatic exact fallback for
   unsupported PPU state or mid-frame changes.
 - Lower screen with ROM-decoded room/world maps and ammo icons, Redux suit art,
-  equipment percentage, touch ammo/zoom controls and map markers. Drag the world
-  map or tap a point to center it; the small `S` button centers Samus and `N`
-  toggles area names. World zoom has seven levels and keeps the current map
-  center in place. SETUP opens on the port options, including separate status-bar
-  switches for MAP, ITEMS
+  equipment percentage, touch ammo/zoom controls and map markers. The area map
+  can zoom out to show the entire area, be dragged, and return to following
+  Samus with its `S` button. Drag the world map or tap a point to center it;
+  its `S` button centers Samus and `N` toggles area names. SETUP can hide the
+  floating map buttons. World zoom has seven levels and keeps the current map
+  center in place. SETUP also has separate status-bar switches for MAP, ITEMS
   and SETUP, widescreen and main-HUD controls. Its small `i` tab shows build
   information (`BUILD_FLAGS`, port-specific defines, `FULL_NATIVE` and `LTO`).
 - Correct HDMA rain, fog, windows and colour math without scanline filtering.

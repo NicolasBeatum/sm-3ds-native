@@ -60,10 +60,18 @@ static unsigned g_bottom_frame;
 static bool g_bottom_dirty = true;
 static bool g_world_view;
 static int g_room_zoom = 1;
+static int g_room_view_x_fp, g_room_view_y_fp;
+static int g_room_map_area = -1;
+static int g_room_map_top;
+static bool g_room_follow_samus = true;
+static bool g_room_touch_active, g_room_touch_moved;
+static bool g_room_button_touch;
+static int g_room_last_touch_x, g_room_last_touch_y;
 static int g_world_zoom;
 static int g_world_pan_x, g_world_pan_y;
 static int g_world_map_top;
 static bool g_world_labels = true;
+static bool g_map_buttons_visible = true;
 static bool g_world_touch_active, g_world_touch_moved;
 static int g_world_last_touch_x, g_world_last_touch_y;
 static bool g_hide_main_hud;
@@ -78,7 +86,7 @@ typedef struct MapMarker { uint8_t area, x, y; } MapMarker;
 static MapMarker g_markers[16];
 static int g_marker_count;
 static int g_room_map_x, g_room_map_y, g_room_map_w, g_room_map_h;
-static int g_room_crop_x, g_room_crop_y, g_room_cols, g_room_rows;
+static int g_room_cols, g_room_rows;
 static uint64_t g_touch_down_ms;
 static int g_touch_down_x, g_touch_down_y;
 static int g_clip_left, g_clip_top, g_clip_right = 320, g_clip_bottom = 240;
@@ -394,23 +402,58 @@ static void DrawLine(uint8_t *fb, int x0, int y0, int x1, int y1, UiColor color)
   }
 }
 
+enum { kRoomZoomMin = -3, kRoomZoomMax = 3 };
+
+static void RoomWindow(int zoom, int *cols, int *rows) {
+  static const int widths[] = {64, 52, 40, 30, 24, 20, 16};
+  static const int heights[] = {32, 28, 22, 18, 15, 12, 10};
+  int index = zoom - kRoomZoomMin;
+  if (index < 0) index = 0;
+  if (index > kRoomZoomMax - kRoomZoomMin)
+    index = kRoomZoomMax - kRoomZoomMin;
+  *cols = widths[index];
+  *rows = heights[index];
+}
+
+static void ClampRoomView(int cols, int rows) {
+  int max_x = (64 - cols) * 256;
+  int max_y = (32 - rows) * 256;
+  if (g_room_view_x_fp < 0) g_room_view_x_fp = 0;
+  if (g_room_view_x_fp > max_x) g_room_view_x_fp = max_x;
+  if (g_room_view_y_fp < 0) g_room_view_y_fp = 0;
+  if (g_room_view_y_fp > max_y) g_room_view_y_fp = max_y;
+}
+
+static void ZoomRoomMap(int step) {
+  int next_zoom = g_room_zoom + step;
+  if (next_zoom < kRoomZoomMin || next_zoom > kRoomZoomMax) return;
+  if (!g_room_follow_samus) {
+    int old_cols, old_rows, new_cols, new_rows;
+    RoomWindow(g_room_zoom, &old_cols, &old_rows);
+    RoomWindow(next_zoom, &new_cols, &new_rows);
+    g_room_view_x_fp += (old_cols - new_cols) * 128;
+    g_room_view_y_fp += (old_rows - new_rows) * 128;
+    ClampRoomView(new_cols, new_rows);
+  }
+  g_room_zoom = next_zoom;
+}
+
 static void DrawRoomMap(uint8_t *fb, int top, int bottom) {
   Panel(fb, 5, top, 310, bottom - top);
   SetClip(7, top + 2, 313, bottom - 2);
-  const int window_w[] = {30, 24, 20, 16};
-  const int window_h[] = {18, 15, 12, 10};
-  int zoom = g_room_zoom;
-  if (zoom < 0) zoom = 0;
-  if (zoom > 3) zoom = 3;
-  int cols = window_w[zoom], rows = window_h[zoom];
+  int cols, rows;
+  RoomWindow(g_room_zoom, &cols, &rows);
   int samus_tx = room_x_coordinate_on_map + (samus_x_pos >> 8);
   int samus_ty = room_y_coordinate_on_map + (samus_y_pos >> 8) + 1;
-  int crop_x = samus_tx - cols / 2;
-  int crop_y = samus_ty - rows / 2;
-  if (crop_x < 0) crop_x = 0;
-  if (crop_y < 0) crop_y = 0;
-  if (crop_x > 64 - cols) crop_x = 64 - cols;
-  if (crop_y > 32 - rows) crop_y = 32 - rows;
+  if (g_room_map_area != area_index) {
+    g_room_map_area = area_index;
+    g_room_follow_samus = true;
+  }
+  if (g_room_follow_samus) {
+    g_room_view_x_fp = samus_tx * 256 - cols * 128;
+    g_room_view_y_fp = samus_ty * 256 - rows * 128;
+  }
+  ClampRoomView(cols, rows);
 
   int inner_w = 300, inner_h = bottom - top - 8;
   int scale_x = inner_w * 256 / (cols * 8);
@@ -430,28 +473,38 @@ static void DrawRoomMap(uint8_t *fb, int top, int bottom) {
   g_room_map_y = oy;
   g_room_map_w = draw_w;
   g_room_map_h = draw_h;
-  g_room_crop_x = crop_x;
-  g_room_crop_y = crop_y;
+  g_room_map_top = top;
   g_room_cols = cols;
   g_room_rows = rows;
 
   FillRect(fb, ox, oy, draw_w, draw_h, (UiColor){20, 20, 30});
-  for (int tile_y = 0; tile_y < rows; tile_y++) {
-    int ty = crop_y + tile_y;
-    int y0 = oy + tile_y * draw_h / rows;
-    int y1 = oy + (tile_y + 1) * draw_h / rows;
-    for (int tile_x = 0; tile_x < cols; tile_x++) {
-      int tx = crop_x + tile_x;
+  int clip_x0 = ox > 7 ? ox : 7;
+  int clip_y0 = oy > top + 2 ? oy : top + 2;
+  int clip_x1 = ox + draw_w < 313 ? ox + draw_w : 313;
+  int clip_y1 = oy + draw_h < bottom - 2 ? oy + draw_h : bottom - 2;
+  SetClip(clip_x0, clip_y0, clip_x1, clip_y1);
+  int first_y = g_room_view_y_fp >> 8;
+  int last_y = (g_room_view_y_fp + rows * 256 - 1) >> 8;
+  int first_x = g_room_view_x_fp >> 8;
+  int last_x = (g_room_view_x_fp + cols * 256 - 1) >> 8;
+  for (int ty = first_y; ty <= last_y; ty++) {
+    int y0 = oy + (ty * 256 - g_room_view_y_fp) * draw_h / (rows * 256);
+    int y1 = oy + ((ty + 1) * 256 - g_room_view_y_fp) * draw_h / (rows * 256);
+    if (y1 <= clip_y0 || y0 >= clip_y1 || y1 <= y0) continue;
+    for (int tx = first_x; tx <= last_x; tx++) {
       bool seen = TileBit(explored, tx, ty);
       bool station_only = !seen && TileBit(station, tx, ty);
       if (!seen && !station_only) continue;
-      int x0 = ox + tile_x * draw_w / cols;
-      int x1 = ox + (tile_x + 1) * draw_w / cols;
+      int x0 = ox + (tx * 256 - g_room_view_x_fp) * draw_w / (cols * 256);
+      int x1 = ox + ((tx + 1) * 256 - g_room_view_x_fp) * draw_w / (cols * 256);
+      if (x1 <= clip_x0 || x0 >= clip_x1 || x1 <= x0) continue;
       int index = (tx >> 5) * 1024 + ty * 32 + (tx & 31);
       uint16_t entry = tilemap[index];
-      for (int y = y0; y < y1; y++) {
+      for (int y = y0 < clip_y0 ? clip_y0 : y0;
+           y < y1 && y < clip_y1; y++) {
         int py = (y - y0) * 8 / (y1 - y0);
-        for (int x = x0; x < x1; x++) {
+        for (int x = x0 < clip_x0 ? clip_x0 : x0;
+             x < x1 && x < clip_x1; x++) {
           int px = (x - x0) * 8 / (x1 - x0);
           PutPixel(fb, x, y, AreaMapPixel(tiles, palette, area_index,
                                           entry, px, py, station_only));
@@ -461,18 +514,23 @@ static void DrawRoomMap(uint8_t *fb, int top, int bottom) {
   }
   for (int i = 0; i < g_marker_count; i++) {
     const MapMarker *m = &g_markers[i];
-    if (m->area != area_index || m->x < crop_x || m->x >= crop_x + cols ||
-        m->y < crop_y || m->y >= crop_y + rows)
-      continue;
-    int mx = ox + ((m->x - crop_x) * 8 + 4) * draw_w / (cols * 8);
-    int my = oy + ((m->y - crop_y) * 8 + 4) * draw_h / (rows * 8);
+    if (m->area != area_index) continue;
+    int mx = ox + (m->x * 256 + 128 - g_room_view_x_fp) * draw_w / (cols * 256);
+    int my = oy + (m->y * 256 + 128 - g_room_view_y_fp) * draw_h / (rows * 256);
     StrokeRect(fb, mx - 3, my - 3, 7, 7, 2, kAccent);
   }
-  int dot_x = ox + ((samus_tx - crop_x) * 8 + 4) * draw_w / (cols * 8);
-  int dot_y = oy + ((samus_ty - crop_y) * 8 + 4) * draw_h / (rows * 8);
+  int dot_x = ox + (samus_tx * 256 + 128 - g_room_view_x_fp) * draw_w / (cols * 256);
+  int dot_y = oy + (samus_ty * 256 + 128 - g_room_view_y_fp) * draw_h / (rows * 256);
   if (dot_x >= ox && dot_x < ox + draw_w && dot_y >= oy && dot_y < oy + draw_h)
     FillCircle(fb, dot_x, dot_y, 4, kSamus);
   SetClip(0, 0, 320, 240);
+  if (g_map_buttons_visible) {
+    FillRect(fb, 280, top + 6, 25, 20, kPanel);
+    StrokeRect(fb, 280, top + 6, 25, 20, 1,
+               g_room_follow_samus ? kAccent : kBorder);
+    DrawTextCentered(fb, 292, top + 12, "S", 1,
+                     g_room_follow_samus ? kWhite : kDim);
+  }
 }
 
 typedef struct WorldLayout {
@@ -710,15 +768,17 @@ static void DrawWorldMap(uint8_t *fb, int top, int bottom) {
     FillCircle(fb, ox + world_x * tile_scale + tile_scale / 2,
                oy + world_y * tile_scale + tile_scale / 2, 3, kSamus);
   SetClip(0, 0, 320, 240);
-  /* Floating map controls: S returns to Samus, N toggles area names. */
-  FillRect(fb, 251, top + 6, 25, 20, kPanel);
-  StrokeRect(fb, 251, top + 6, 25, 20, 1, kAccent);
-  DrawTextCentered(fb, 263, top + 12, "S", 1, kWhite);
-  FillRect(fb, 280, top + 6, 25, 20, kPanel);
-  StrokeRect(fb, 280, top + 6, 25, 20, 1,
-             g_world_labels ? kAccent : kBorder);
-  DrawTextCentered(fb, 292, top + 12, "N", 1,
-                   g_world_labels ? kWhite : kDim);
+  if (g_map_buttons_visible) {
+    /* S returns to Samus, N toggles area names. */
+    FillRect(fb, 251, top + 6, 25, 20, kPanel);
+    StrokeRect(fb, 251, top + 6, 25, 20, 1, kAccent);
+    DrawTextCentered(fb, 263, top + 12, "S", 1, kWhite);
+    FillRect(fb, 280, top + 6, 25, 20, kPanel);
+    StrokeRect(fb, 280, top + 6, 25, 20, 1,
+               g_world_labels ? kAccent : kBorder);
+    DrawTextCentered(fb, 292, top + 12, "N", 1,
+                     g_world_labels ? kWhite : kDim);
+  }
 }
 
 static void DrawMapControls(uint8_t *fb) {
@@ -954,8 +1014,8 @@ static void DrawSetupTab(uint8_t *fb, int top) {
   }
 
   int y = top + (compact ? 22 : 32);
-  int step = compact ? 23 : 28;
-  int height = compact ? 20 : 24;
+  int step = compact ? 20 : 24;
+  int height = compact ? 18 : 21;
   DrawSetupRow(fb, y, height, "STATUS BAR MAP",
                g_status_bar_visible[kBottomTab_Map] ? "ON" : "OFF",
                g_status_bar_visible[kBottomTab_Map]);
@@ -969,7 +1029,9 @@ static void DrawSetupTab(uint8_t *fb, int top) {
                g_widescreen ? "ON" : "OFF", g_widescreen);
   DrawSetupRow(fb, y + 4 * step, height, "HIDE MAIN HUD",
                g_hide_main_hud ? "ON" : "OFF", g_hide_main_hud);
-  DrawSetupRow(fb, y + 5 * step, height, "CLEAR MAP MARKERS",
+  DrawSetupRow(fb, y + 5 * step, height, "FLOATING MAP BUTTONS",
+               g_map_buttons_visible ? "ON" : "OFF", g_map_buttons_visible);
+  DrawSetupRow(fb, y + 6 * step, height, "CLEAR MAP MARKERS",
                g_clear_markers_armed ? "TAP AGAIN" : NULL,
                g_clear_markers_armed);
 }
@@ -1039,9 +1101,10 @@ void BottomScreen_LoadSettings(const char *path) {
     else if (strcmp(key, "status_map") == 0) g_status_bar_visible[0] = value != 0;
     else if (strcmp(key, "status_items") == 0) g_status_bar_visible[1] = value != 0;
     else if (strcmp(key, "status_setup") == 0) g_status_bar_visible[2] = value != 0;
-    else if (strcmp(key, "room_zoom") == 0 && value >= 0 && value <= 3) g_room_zoom = value;
+    else if (strcmp(key, "room_zoom") == 0 && value >= kRoomZoomMin && value <= kRoomZoomMax) g_room_zoom = value;
     else if (strcmp(key, "world_zoom") == 0 && value >= 0 && value <= kWorldZoomMax) g_world_zoom = value;
     else if (strcmp(key, "world_labels") == 0) g_world_labels = value != 0;
+    else if (strcmp(key, "map_buttons") == 0) g_map_buttons_visible = value != 0;
   }
   fclose(f);
   g_bottom_dirty = true;
@@ -1057,10 +1120,11 @@ bool BottomScreen_SaveSettings(void) {
   if (!f) return false;
   int written = fprintf(f, "widescreen=%d\nhide_main_hud=%d\nstatus_map=%d\n"
                            "status_items=%d\nstatus_setup=%d\nroom_zoom=%d\nworld_zoom=%d\n"
-                           "world_labels=%d\n",
+                           "world_labels=%d\nmap_buttons=%d\n",
                         g_widescreen, g_hide_main_hud, g_status_bar_visible[0],
                         g_status_bar_visible[1], g_status_bar_visible[2],
-                        g_room_zoom, g_world_zoom, g_world_labels);
+                        g_room_zoom, g_world_zoom, g_world_labels,
+                        g_map_buttons_visible);
   bool okay = written > 0 && fflush(f) == 0;
   if (fclose(f) != 0) okay = false;
   if (!okay) { remove(temporary); return false; }
@@ -1172,6 +1236,8 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
   int x = (int)(normalized_x * 320.0f);
   int y = (int)(normalized_y * 240.0f);
   g_world_touch_active = false;
+  g_room_touch_active = false;
+  g_room_button_touch = false;
   g_touch_down_ms = osGetTime();
   g_touch_down_x = x;
   g_touch_down_y = y;
@@ -1195,7 +1261,8 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
 
   if (g_bottom_tab == kBottomTab_Map && g_world_view &&
       x >= 7 && x < 313 && y >= g_world_map_top + 2 && y < 178) {
-    if (y >= g_world_map_top + 6 && y < g_world_map_top + 26) {
+    if (g_map_buttons_visible &&
+        y >= g_world_map_top + 6 && y < g_world_map_top + 26) {
       if (x >= 251 && x < 276) {
         FocusWorldOnSamus();
         g_bottom_dirty = true;
@@ -1215,15 +1282,33 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
     return;
   }
 
+  if (g_bottom_tab == kBottomTab_Map && !g_world_view) {
+    if (g_map_buttons_visible && x >= 280 && x < 305 &&
+        y >= g_room_map_top + 6 && y < g_room_map_top + 26) {
+      g_room_follow_samus = true;
+      g_room_button_touch = true;
+      g_bottom_dirty = true;
+      return;
+    }
+    if (x >= g_room_map_x && x < g_room_map_x + g_room_map_w &&
+        y >= g_room_map_y && y < g_room_map_y + g_room_map_h) {
+      g_room_touch_active = true;
+      g_room_touch_moved = false;
+      g_room_last_touch_x = x;
+      g_room_last_touch_y = y;
+      return;
+    }
+  }
+
   if (g_bottom_tab == kBottomTab_Map && y >= 182 && y < 208) {
     if (x < 107) {
       g_world_view = !g_world_view;
     } else if (x < 213) {
       if (g_world_view) ZoomWorldMap(-1);
-      else if (g_room_zoom > 0) g_room_zoom--;
+      else ZoomRoomMap(-1);
     } else {
       if (g_world_view) ZoomWorldMap(1);
-      else if (g_room_zoom < 3) g_room_zoom++;
+      else ZoomRoomMap(1);
     }
     g_bottom_dirty = true;
     BottomScreen_SaveSettings();
@@ -1243,21 +1328,22 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
     if (g_setup_build_info)
       return;
     int row_y = top + (compact ? 22 : 32);
-    int step = compact ? 23 : 28;
-    int height = compact ? 20 : 24;
+    int step = compact ? 20 : 24;
+    int height = compact ? 18 : 21;
     if (x >= 13 && x < 307 && y >= row_y) {
       int row = (y - row_y) / step;
-      if (row < 6 && y < row_y + row * step + height) {
+      if (row < 7 && y < row_y + row * step + height) {
         if (row < 3) g_status_bar_visible[row] = !g_status_bar_visible[row];
         else if (row == 3) g_widescreen = !g_widescreen;
         else if (row == 4) g_hide_main_hud = !g_hide_main_hud;
+        else if (row == 5) g_map_buttons_visible = !g_map_buttons_visible;
         else if (g_clear_markers_armed) {
           g_marker_count = 0;
           g_clear_markers_armed = false;
         } else {
           g_clear_markers_armed = true;
         }
-        if (row < 5) BottomScreen_SaveSettings();
+        if (row < 6) BottomScreen_SaveSettings();
       }
     }
     g_bottom_dirty = true;
@@ -1267,9 +1353,23 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
 }
 
 void BottomScreen_HandleTouchMotion(float normalized_x, float normalized_y) {
-  if (!g_world_touch_active) return;
   int x = (int)(normalized_x * 320.0f);
   int y = (int)(normalized_y * 240.0f);
+  if (g_room_touch_active) {
+    int down_dx = x - g_touch_down_x, down_dy = y - g_touch_down_y;
+    if (!g_room_touch_moved && down_dx * down_dx + down_dy * down_dy < 16)
+      return;
+    g_room_touch_moved = true;
+    g_room_follow_samus = false;
+    g_room_view_x_fp -= (x - g_room_last_touch_x) * g_room_cols * 256 / g_room_map_w;
+    g_room_view_y_fp -= (y - g_room_last_touch_y) * g_room_rows * 256 / g_room_map_h;
+    g_room_last_touch_x = x;
+    g_room_last_touch_y = y;
+    ClampRoomView(g_room_cols, g_room_rows);
+    g_bottom_dirty = true;
+    return;
+  }
+  if (!g_world_touch_active) return;
   int down_dx = x - g_touch_down_x, down_dy = y - g_touch_down_y;
   if (!g_world_touch_moved && down_dx * down_dx + down_dy * down_dy < 16)
     return;
@@ -1285,6 +1385,10 @@ void BottomScreen_HandleTouchMotion(float normalized_x, float normalized_y) {
 void BottomScreen_HandleTouchUp(float normalized_x, float normalized_y) {
   int x = (int)(normalized_x * 320.0f);
   int y = (int)(normalized_y * 240.0f);
+  if (g_room_button_touch) {
+    g_room_button_touch = false;
+    return;
+  }
   if (g_world_touch_active) {
     g_world_touch_active = false;
     if (!g_world_touch_moved && x >= 7 && x < 313 &&
@@ -1296,6 +1400,10 @@ void BottomScreen_HandleTouchUp(float normalized_x, float normalized_y) {
     }
     return;
   }
+  if (g_room_touch_active) {
+    g_room_touch_active = false;
+    if (g_room_touch_moved) return;
+  }
   if (!IsLiveGameplay() || g_bottom_tab != kBottomTab_Map || g_world_view ||
       osGetTime() - g_touch_down_ms < 550 ||
       (x - g_touch_down_x) * (x - g_touch_down_x) +
@@ -1303,8 +1411,11 @@ void BottomScreen_HandleTouchUp(float normalized_x, float normalized_y) {
       x < g_room_map_x || x >= g_room_map_x + g_room_map_w ||
       y < g_room_map_y || y >= g_room_map_y + g_room_map_h)
     return;
-  int tx = g_room_crop_x + (x - g_room_map_x) * g_room_cols / g_room_map_w;
-  int ty = g_room_crop_y + (y - g_room_map_y) * g_room_rows / g_room_map_h;
+  int tx = (g_room_view_x_fp +
+            (x - g_room_map_x) * g_room_cols * 256 / g_room_map_w) >> 8;
+  int ty = (g_room_view_y_fp +
+            (y - g_room_map_y) * g_room_rows * 256 / g_room_map_h) >> 8;
+  if ((unsigned)tx >= 64 || (unsigned)ty >= 32) return;
   for (int i = 0; i < g_marker_count; i++) {
     if (g_markers[i].area == area_index && g_markers[i].x == tx && g_markers[i].y == ty) {
       memmove(&g_markers[i], &g_markers[i + 1],
