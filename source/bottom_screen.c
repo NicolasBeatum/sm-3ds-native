@@ -63,8 +63,9 @@ static int g_room_zoom = 1;
 static int g_world_zoom;
 static bool g_hide_main_hud;
 static bool g_widescreen = true;
+static bool g_status_bar_visible[3] = {true, true, false};
 static bool g_clear_markers_armed;
-static bool g_setup_build_info = true;
+static bool g_setup_build_info;
 typedef struct MapMarker { uint8_t area, x, y; } MapMarker;
 static MapMarker g_markers[16];
 static int g_marker_count;
@@ -329,34 +330,35 @@ static void DrawStatus(uint8_t *fb) {
   const int tanks = samus_max_health / 100;
   const int filled = samus_health / 100;
   for (int i = 0; i < 14; i++) {
-    int x = 12 + (i % 7) * 9;
-    int y = 8 + (i / 7) * 12;
+    int x = 17 + (i % 7) * 12;
+    int y = 9 + (i / 7) * 12;
     UiColor color = i < filled ? kEnergy : (i < tanks ? kBorderHi : kBorder);
-    FillRect(fb, x, y, 7, 8, color);
+    FillRect(fb, x, y, 10, 9, color);
     if (i < tanks) {
-      FillRect(fb, x, y, 7, 1, kWhite);
-      FillRect(fb, x, y, 1, 8, kWhite);
+      FillRect(fb, x, y, 10, 1, kWhite);
+      FillRect(fb, x, y, 1, 9, kWhite);
     }
   }
 
   char text[16];
   snprintf(text, sizeof(text), "%02u", samus_health % 100);
-  DrawText(fb, 78, 17, text, 2, kWhite);
+  DrawText(fb, 111, 15, text, 2, kWhite);
 
   const unsigned counts[3] = {samus_missiles, samus_super_missiles, samus_power_bombs};
   const unsigned maximums[3] = {samus_max_missiles, samus_max_super_missiles, samus_max_power_bombs};
   const int slots[3] = {1, 2, 3};
-  const int icon_x[3] = {126, 194, 258};
-  const int number_x[3] = {153, 215, 279};
+  const int icon_x[3] = {151, 218, 269};
+  const int icon_w[3] = {24, 16, 16};
+  const int number_x[3] = {179, 239, 290};
   for (int i = 0; i < 3; i++) {
     if (!maximums[i]) continue;
     if (hud_item_index == slots[i]) {
-      FillRect(fb, icon_x[i] - 3, 7, 57, 26, kSamus);
-      StrokeRect(fb, icon_x[i] - 3, 7, 57, 26, 2, kWhite);
+      FillRect(fb, icon_x[i] - 2, 11, icon_w[i] + 4, 22, kSamus);
+      StrokeRect(fb, icon_x[i] - 2, 11, icon_w[i] + 4, 22, 1, kWhite);
     }
-    DrawAmmoIcon(fb, icon_x[i], 12, i);
+    DrawAmmoIcon(fb, icon_x[i], 14, i);
     snprintf(text, sizeof(text), "%u", counts[i]);
-    DrawText(fb, number_x[i], 17, text, 1, kWhite);
+    DrawText(fb, number_x[i], 15, text, 2, kWhite);
   }
 }
 
@@ -700,72 +702,73 @@ static void DrawReduxSuit(uint8_t *fb, int x, int y, int w, int h) {
 }
 
 static void DrawItemsTab(uint8_t *fb, int top) {
-  Panel(fb, 5, top, 310, 204);
+  Panel(fb, 5, top, 310, 207 - top);
   char text[32];
-  int stat_y = top + 25;
+  int stat_y = top + (top == 44 ? 6 : 25);
   FillRect(fb, 11, stat_y, 107, 24, kSlot);
   StrokeRect(fb, 11, stat_y, 107, 24, 2, kBorder);
   DrawText(fb, 17, stat_y + 3, "ITEMS", 1, kDim);
   snprintf(text, sizeof(text), "%d.0%%", ItemPercent());
-  DrawText(fb, 63, stat_y + 13, text, 1, kWhite);
+  DrawText(fb, 17, stat_y + 13, text, 1, kWhite);
   FillRect(fb, 202, stat_y, 107, 24, kSlot);
   StrokeRect(fb, 202, stat_y, 107, 24, 2, kBorder);
   DrawText(fb, 208, stat_y + 3, "TIME", 1, kDim);
   snprintf(text, sizeof(text), "%02u:%02u:%02u", game_time_hours, game_time_minutes, game_time_seconds);
-  DrawText(fb, 239, stat_y + 13, text, 1, kWhite);
+  DrawText(fb, 208, stat_y + 13, text, 1, kWhite);
 
-  int body_y = stat_y + 29;
-  FillRect(fb, 11, body_y, 112, 61, kSlot);
-  StrokeRect(fb, 11, body_y, 112, 61, 2, kBorder);
+  int body_y = stat_y + (top == 44 ? 28 : 29);
+  FillRect(fb, 11, body_y, 112, 58, kSlot);
+  StrokeRect(fb, 11, body_y, 112, 58, 2, kBorder);
   DrawText(fb, 17, body_y + 4, "SUIT", 1, kAccent);
   DrawItemLine(fb, 17, body_y + 16, "VARIA SUIT", collected_items & 0x0001, equipped_items & 0x0001);
   DrawItemLine(fb, 17, body_y + 28, "GRAVITY SUIT", collected_items & 0x0020, equipped_items & 0x0020);
 
-  FillRect(fb, 11, body_y + 65, 112, 63, kSlot);
-  StrokeRect(fb, 11, body_y + 65, 112, 63, 2, kBorder);
-  DrawText(fb, 17, body_y + 69, "MISC.", 1, kAccent);
-  DrawItemLine(fb, 17, body_y + 81, "MORPHING BALL", collected_items & 0x0004, equipped_items & 0x0004);
-  DrawItemLine(fb, 17, body_y + 93, "BOMB", collected_items & 0x1000, equipped_items & 0x1000);
-  DrawItemLine(fb, 17, body_y + 105, "SPRING BALL", collected_items & 0x0002, equipped_items & 0x0002);
-  DrawItemLine(fb, 17, body_y + 117, "SCREW ATTACK", collected_items & 0x0008, equipped_items & 0x0008);
+  FillRect(fb, 11, body_y + 62, 112, 62, kSlot);
+  StrokeRect(fb, 11, body_y + 62, 112, 62, 2, kBorder);
+  DrawText(fb, 17, body_y + 66, "MISC.", 1, kAccent);
+  DrawItemLine(fb, 17, body_y + 78, "MORPHING BALL", collected_items & 0x0004, equipped_items & 0x0004);
+  DrawItemLine(fb, 17, body_y + 89, "BOMB", collected_items & 0x1000, equipped_items & 0x1000);
+  DrawItemLine(fb, 17, body_y + 100, "SPRING BALL", collected_items & 0x0002, equipped_items & 0x0002);
+  DrawItemLine(fb, 17, body_y + 111, "SCREW ATTACK", collected_items & 0x0008, equipped_items & 0x0008);
 
-  DrawReduxSuit(fb, 132, body_y, 56, 128);
+  DrawReduxSuit(fb, 132, body_y, 56, 124);
 
-  FillRect(fb, 197, body_y, 112, 61, kSlot);
-  StrokeRect(fb, 197, body_y, 112, 61, 2, kBorder);
+  FillRect(fb, 197, body_y, 112, 58, kSlot);
+  StrokeRect(fb, 197, body_y, 112, 58, 2, kBorder);
   DrawText(fb, 203, body_y + 4, "BOOTS", 1, kAccent);
   DrawItemLine(fb, 203, body_y + 16, "HI-JUMP BOOTS", collected_items & 0x0100, equipped_items & 0x0100);
   DrawItemLine(fb, 203, body_y + 28, "SPACE JUMP", collected_items & 0x0200, equipped_items & 0x0200);
   DrawItemLine(fb, 203, body_y + 40, "SPEED BOOSTER", collected_items & 0x2000, equipped_items & 0x2000);
 
-  FillRect(fb, 197, body_y + 65, 112, 63, kSlot);
-  StrokeRect(fb, 197, body_y + 65, 112, 63, 2, kBorder);
-  DrawText(fb, 203, body_y + 69, "BEAM", 1, kAccent);
-  DrawItemLine(fb, 203, body_y + 80, "CHARGE", collected_beams & 0x1000, equipped_beams & 0x1000);
-  DrawItemLine(fb, 203, body_y + 89, "ICE", collected_beams & 0x0002, equipped_beams & 0x0002);
-  DrawItemLine(fb, 203, body_y + 98, "WAVE", collected_beams & 0x0001, equipped_beams & 0x0001);
-  DrawItemLine(fb, 203, body_y + 107, "SPAZER", collected_beams & 0x0004, equipped_beams & 0x0004);
-  DrawItemLine(fb, 203, body_y + 116, "PLASMA", collected_beams & 0x0008, equipped_beams & 0x0008);
+  FillRect(fb, 197, body_y + 62, 112, 62, kSlot);
+  StrokeRect(fb, 197, body_y + 62, 112, 62, 2, kBorder);
+  DrawText(fb, 203, body_y + 66, "BEAM", 1, kAccent);
+  DrawItemLine(fb, 203, body_y + 78, "CHARGE", collected_beams & 0x1000, equipped_beams & 0x1000);
+  DrawItemLine(fb, 203, body_y + 87, "ICE", collected_beams & 0x0002, equipped_beams & 0x0002);
+  DrawItemLine(fb, 203, body_y + 96, "WAVE", collected_beams & 0x0001, equipped_beams & 0x0001);
+  DrawItemLine(fb, 203, body_y + 105, "SPAZER", collected_beams & 0x0004, equipped_beams & 0x0004);
+  DrawItemLine(fb, 203, body_y + 114, "PLASMA", collected_beams & 0x0008, equipped_beams & 0x0008);
 }
 
-static void DrawSetupRow(uint8_t *fb, int y, const char *label, const char *value,
-                         bool enabled) {
-  FillRect(fb, 13, y, 294, 24, kSlot);
-  StrokeRect(fb, 13, y, 294, 24, 2, kBorder);
-  DrawText(fb, 21, y + 9, label, 1, kWhite);
+static void DrawSetupRow(uint8_t *fb, int y, int height, const char *label,
+                         const char *value, bool enabled) {
+  FillRect(fb, 13, y, 294, height, kSlot);
+  StrokeRect(fb, 13, y, 294, height, 2, kBorder);
+  int text_y = y + (height - 7) / 2;
+  DrawText(fb, 21, text_y, label, 1, kWhite);
   if (value)
-    DrawText(fb, 279 - TextWidth(value, 1), y + 9, value, 1,
+    DrawText(fb, 299 - TextWidth(value, 1), text_y, value, 1,
              enabled ? kAccent : kDim);
 }
 
-static void DrawBuildFlags(uint8_t *fb, int y) {
+static void DrawBuildFlags(uint8_t *fb, int y, int max_lines) {
   const char *flags = SM3DS_BUILD_FLAGS;
   if (!*flags) {
     DrawText(fb, 20, y, "NONE", 1, kDim);
     return;
   }
 
-  for (int line = 0; line < 4 && *flags; line++) {
+  for (int line = 0; line < max_lines && *flags; line++) {
     while (*flags == ' ') flags++;
     if (!*flags) break;
 
@@ -780,7 +783,7 @@ static void DrawBuildFlags(uint8_t *fb, int y) {
     char text[48];
     memcpy(text, flags, count);
     text[count] = '\0';
-    if (line == 3 && flags[count]) {
+    if (line == max_lines - 1 && flags[count]) {
       int dots = count > 44 ? 44 : count;
       memcpy(text + dots, "...", 4);
     }
@@ -798,67 +801,80 @@ static void DrawBuildSetting(uint8_t *fb, int x, int y, const char *name,
 }
 
 static void DrawSetupTab(uint8_t *fb, int top) {
-  Panel(fb, 5, top, 310, 204);
-  int nav_y = top + 9;
-  FillRect(fb, 13, nav_y, 142, 24, g_setup_build_info ? kBorder : kSlot);
-  StrokeRect(fb, 13, nav_y, 142, 24, 2,
+  bool compact = top == 44;
+  Panel(fb, 5, top, 310, 207 - top);
+  DrawText(fb, 21, top + (compact ? 7 : 13),
+           g_setup_build_info ? "BUILD INFO" : "SETUP", 1, kWhite);
+  int info_y = top + (compact ? 3 : 7);
+  int info_height = compact ? 16 : 20;
+  FillRect(fb, 281, info_y, 26, info_height, g_setup_build_info ? kBorder : kSlot);
+  StrokeRect(fb, 281, info_y, 26, info_height, 2,
              g_setup_build_info ? kAccent : kBorder);
-  DrawTextCentered(fb, 84, nav_y + 9, "BUILD INFO", 1, kWhite);
-  FillRect(fb, 165, nav_y, 142, 24, g_setup_build_info ? kSlot : kBorder);
-  StrokeRect(fb, 165, nav_y, 142, 24, 2,
-             g_setup_build_info ? kBorder : kAccent);
-  DrawTextCentered(fb, 236, nav_y + 9, "PORT UI", 1, kWhite);
+  FillRect(fb, 293, info_y + 3, 3, 3, kWhite);
+  FillRect(fb, 293, info_y + 8, 3, info_height - 11, kWhite);
 
   if (g_setup_build_info) {
-    FillRect(fb, 13, top + 40, 294, 75, kSlot);
-    StrokeRect(fb, 13, top + 40, 294, 75, 2, kBorder);
-    DrawText(fb, 20, top + 47, "BUILD_FLAGS", 1, kAccent);
-    DrawBuildFlags(fb, top + 60);
-    DrawText(fb, 20, top + 118, "PORT DEFINES", 1, kAccent);
+    int flags_y = top + (compact ? 25 : 32);
+    int flags_height = compact ? 50 : 76;
+    FillRect(fb, 13, flags_y, 294, flags_height, kSlot);
+    StrokeRect(fb, 13, flags_y, 294, flags_height, 2, kBorder);
+    DrawText(fb, 20, flags_y + 6, "BUILD_FLAGS", 1, kAccent);
+    DrawBuildFlags(fb, flags_y + 18, compact ? 2 : 4);
+    DrawText(fb, 20, top + (compact ? 80 : 119), "PORT DEFINES", 1, kAccent);
 #ifdef SM3DS_OLD3DS
-    DrawBuildSetting(fb, 18, top + 132, "OLD3DS", true);
+    DrawBuildSetting(fb, 18, top + (compact ? 94 : 133), "OLD3DS", true);
 #else
-    DrawBuildSetting(fb, 18, top + 132, "OLD3DS", false);
+    DrawBuildSetting(fb, 18, top + (compact ? 94 : 133), "OLD3DS", false);
 #endif
 #ifdef SM3DS_PROFILE
-    DrawBuildSetting(fb, 166, top + 132, "PROFILE", true);
+    DrawBuildSetting(fb, 166, top + (compact ? 94 : 133), "PROFILE", true);
 #else
-    DrawBuildSetting(fb, 166, top + 132, "PROFILE", false);
+    DrawBuildSetting(fb, 166, top + (compact ? 94 : 133), "PROFILE", false);
 #endif
 #ifdef SM3DS_DOOR_TRACE
-    DrawBuildSetting(fb, 18, top + 145, "DOOR_TRACE", true);
+    DrawBuildSetting(fb, 18, top + (compact ? 107 : 146), "DOOR_TRACE", true);
 #else
-    DrawBuildSetting(fb, 18, top + 145, "DOOR_TRACE", false);
+    DrawBuildSetting(fb, 18, top + (compact ? 107 : 146), "DOOR_TRACE", false);
 #endif
 #ifdef SM3DS_DISABLE_PICA
-    DrawBuildSetting(fb, 166, top + 145, "DISABLE_PICA", true);
+    DrawBuildSetting(fb, 166, top + (compact ? 107 : 146), "DISABLE_PICA", true);
 #else
-    DrawBuildSetting(fb, 166, top + 145, "DISABLE_PICA", false);
+    DrawBuildSetting(fb, 166, top + (compact ? 107 : 146), "DISABLE_PICA", false);
 #endif
 #ifdef SM3DS_EMULATED_CPU
-    DrawBuildSetting(fb, 18, top + 158, "EMULATED_CPU", true);
+    DrawBuildSetting(fb, 18, top + (compact ? 120 : 159), "EMULATED_CPU", true);
 #else
-    DrawBuildSetting(fb, 18, top + 158, "EMULATED_CPU", false);
+    DrawBuildSetting(fb, 18, top + (compact ? 120 : 159), "EMULATED_CPU", false);
 #endif
-    DrawText(fb, 20, top + 173, "BUILD VARIABLES", 1, kAccent);
+    DrawText(fb, 20, top + (compact ? 136 : 174), "BUILD VARIABLES", 1, kAccent);
 #ifdef FULL_NATIVE
-    DrawBuildSetting(fb, 18, top + 189, "FULL_NATIVE", true);
+    DrawBuildSetting(fb, 18, top + (compact ? 149 : 188), "FULL_NATIVE", true);
 #else
-    DrawBuildSetting(fb, 18, top + 189, "FULL_NATIVE", false);
+    DrawBuildSetting(fb, 18, top + (compact ? 149 : 188), "FULL_NATIVE", false);
 #endif
-    DrawBuildSetting(fb, 166, top + 189, "LTO", SM3DS_BUILD_LTO != 0);
+    DrawBuildSetting(fb, 166, top + (compact ? 149 : 188), "LTO", SM3DS_BUILD_LTO != 0);
     return;
   }
 
-  DrawTextCentered(fb, 160, top + 42, "STATUS BAR: MAP ONLY", 1, kDim);
-  int y = top + 57;
-  DrawSetupRow(fb, y, "WIDESCREEN", g_widescreen ? "ON" : "OFF", g_widescreen);
-  DrawSetupRow(fb, y + 34, "HIDE MAIN HUD",
+  int y = top + (compact ? 22 : 32);
+  int step = compact ? 23 : 28;
+  int height = compact ? 20 : 24;
+  DrawSetupRow(fb, y, height, "STATUS BAR MAP",
+               g_status_bar_visible[kBottomTab_Map] ? "ON" : "OFF",
+               g_status_bar_visible[kBottomTab_Map]);
+  DrawSetupRow(fb, y + step, height, "STATUS BAR ITEMS",
+               g_status_bar_visible[kBottomTab_Items] ? "ON" : "OFF",
+               g_status_bar_visible[kBottomTab_Items]);
+  DrawSetupRow(fb, y + 2 * step, height, "STATUS BAR SETUP",
+               g_status_bar_visible[kBottomTab_Setup] ? "ON" : "OFF",
+               g_status_bar_visible[kBottomTab_Setup]);
+  DrawSetupRow(fb, y + 3 * step, height, "WIDESCREEN",
+               g_widescreen ? "ON" : "OFF", g_widescreen);
+  DrawSetupRow(fb, y + 4 * step, height, "HIDE MAIN HUD",
                g_hide_main_hud ? "ON" : "OFF", g_hide_main_hud);
-  DrawSetupRow(fb, y + 68, "CLEAR MAP MARKERS",
+  DrawSetupRow(fb, y + 5 * step, height, "CLEAR MAP MARKERS",
                g_clear_markers_armed ? "TAP AGAIN" : NULL,
                g_clear_markers_armed);
-  DrawTextCentered(fb, 160, top + 176, "HOLD MAP TO SET A MARKER", 1, kDim);
 }
 
 static void DrawTabs(uint8_t *fb) {
@@ -905,13 +921,15 @@ bool BottomScreen_Draw(void) {
     DrawIdle(g_bottom_cache);
   } else {
     FillRect(g_bottom_cache, 0, 0, 320, 240, kBg);
-    if (g_bottom_tab == kBottomTab_Map) {
+    bool status_bar = g_status_bar_visible[g_bottom_tab];
+    if (status_bar)
       DrawStatus(g_bottom_cache);
-      DrawMapTab(g_bottom_cache, 44);
+    if (g_bottom_tab == kBottomTab_Map) {
+      DrawMapTab(g_bottom_cache, status_bar ? 44 : 3);
     } else if (g_bottom_tab == kBottomTab_Items) {
-      DrawItemsTab(g_bottom_cache, 3);
+      DrawItemsTab(g_bottom_cache, status_bar ? 44 : 3);
     } else {
-      DrawSetupTab(g_bottom_cache, 3);
+      DrawSetupTab(g_bottom_cache, status_bar ? 44 : 3);
     }
     DrawTabs(g_bottom_cache);
   }
@@ -946,6 +964,19 @@ void BottomScreen_Fini(void) {
   g_bottom_cache = NULL;
 }
 
+static void HandleStatusTouch(int x) {
+  int slot = 0;
+  if (x >= 148 && x < 216 && samus_max_missiles) slot = 1;
+  else if (x >= 216 && x < 266 && samus_max_super_missiles) slot = 2;
+  else if (x >= 266 && samus_max_power_bombs) slot = 3;
+  if (slot) {
+    hud_item_index = hud_item_index == slot ? 0 : slot;
+    samus_auto_cancel_hud_item_index = 0;
+    hud_auto_cancel_flag = 0;
+    g_bottom_dirty = true;
+  }
+}
+
 void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
   int x = (int)(normalized_x * 320.0f);
   int y = (int)(normalized_y * 240.0f);
@@ -955,12 +986,20 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
   if (y >= 209) {
     if (x < 107) g_bottom_tab = kBottomTab_Map;
     else if (x < 213) g_bottom_tab = kBottomTab_Items;
-    else g_bottom_tab = kBottomTab_Setup;
+    else {
+      if (g_bottom_tab != kBottomTab_Setup) g_setup_build_info = false;
+      g_bottom_tab = kBottomTab_Setup;
+    }
     g_bottom_dirty = true;
     return;
   }
   if (!IsLiveGameplay())
     return;
+
+  if (g_status_bar_visible[g_bottom_tab] && y < 42) {
+    HandleStatusTouch(x);
+    return;
+  }
 
   if (g_bottom_tab == kBottomTab_Map && y >= 182 && y < 208) {
     if (x < 107) {
@@ -977,43 +1016,38 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
   }
 
   if (g_bottom_tab == kBottomTab_Setup) {
-    if (y >= 12 && y < 36 &&
-        ((x >= 13 && x < 155) || (x >= 165 && x < 307))) {
-      g_setup_build_info = x < 155;
+    int top = g_status_bar_visible[kBottomTab_Setup] ? 44 : 3;
+    bool compact = top == 44;
+    int info_y = top + (compact ? 3 : 7);
+    if (x >= 281 && x < 307 && y >= info_y &&
+        y < info_y + (compact ? 16 : 20)) {
+      g_setup_build_info = !g_setup_build_info;
       g_bottom_dirty = true;
       return;
     }
     if (g_setup_build_info)
       return;
-    if (y >= 60 && y < 84) {
-      g_widescreen = !g_widescreen;
-    } else if (y >= 94 && y < 118) {
-      g_hide_main_hud = !g_hide_main_hud;
-    } else if (y >= 128 && y < 152) {
-      if (g_clear_markers_armed) {
-        g_marker_count = 0;
-        g_clear_markers_armed = false;
-      } else {
-        g_clear_markers_armed = true;
+    int row_y = top + (compact ? 22 : 32);
+    int step = compact ? 23 : 28;
+    int height = compact ? 20 : 24;
+    if (x >= 13 && x < 307 && y >= row_y) {
+      int row = (y - row_y) / step;
+      if (row < 6 && y < row_y + row * step + height) {
+        if (row < 3) g_status_bar_visible[row] = !g_status_bar_visible[row];
+        else if (row == 3) g_widescreen = !g_widescreen;
+        else if (row == 4) g_hide_main_hud = !g_hide_main_hud;
+        else if (g_clear_markers_armed) {
+          g_marker_count = 0;
+          g_clear_markers_armed = false;
+        } else {
+          g_clear_markers_armed = true;
+        }
       }
     }
     g_bottom_dirty = true;
     return;
   }
 
-  if (g_bottom_tab != kBottomTab_Map || y >= 42)
-    return;
-
-  int slot = 0;
-  if (x >= 116 && x < 184 && samus_max_missiles) slot = 1;
-  else if (x >= 184 && x < 246 && samus_max_super_missiles) slot = 2;
-  else if (x >= 246 && samus_max_power_bombs) slot = 3;
-  if (slot) {
-    hud_item_index = hud_item_index == slot ? 0 : slot;
-    samus_auto_cancel_hud_item_index = 0;
-    hud_auto_cancel_flag = 0;
-    g_bottom_dirty = true;
-  }
 }
 
 void BottomScreen_HandleTouchUp(float normalized_x, float normalized_y) {
