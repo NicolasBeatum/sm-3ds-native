@@ -70,8 +70,9 @@ static void Build(PicaFrame *frame, PicaAtlas *atlas, uint32_t *pixels,
 }
 
 static void AssertCenter(const Capture *normal, const PicaAtlas *normalAtlas,
-                         const Capture *wide, const PicaAtlas *wideAtlas) {
-  for (unsigned y = 0; y < kHudEndLine; y++)
+                         const Capture *wide, const PicaAtlas *wideAtlas,
+                         unsigned height) {
+  for (unsigned y = 0; y < height; y++)
     for (unsigned x = 0; x < kSnesWidth; x++)
       assert(Sample(normal, normalAtlas, x, y) ==
              Sample(wide, wideAtlas, x + kWideExtraX, y));
@@ -79,7 +80,7 @@ static void AssertCenter(const Capture *normal, const PicaAtlas *normalAtlas,
 
 int main(void) {
   Ppu *ppu = calloc(1, sizeof(*ppu));
-  PicaLine lines[kHudEndLine] = {0};
+  PicaLine lines[kSnesHeight] = {0};
   PicaAtlas *normalAtlas = calloc(1, sizeof(*normalAtlas));
   PicaAtlas *wideAtlas = calloc(1, sizeof(*wideAtlas));
   uint32_t *normalPixels = calloc(PICA_ATLAS_W * PICA_ATLAS_H, 4);
@@ -114,7 +115,7 @@ int main(void) {
   PicaFrame frame = {.memory = ppu, .lines = lines, .height = kHudEndLine};
   Build(&frame, normalAtlas, normalPixels, normal, kSnesWidth, 0);
   Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
-  AssertCenter(normal, normalAtlas, wide, wideAtlas);
+  AssertCenter(normal, normalAtlas, wide, wideAtlas, kHudEndLine);
   assert(Sample(wide, wideAtlas, 0, 0) != 0);
   assert(Sample(wide, wideAtlas, kWideWidth - 1, 0) != 0);
 
@@ -147,7 +148,7 @@ int main(void) {
     lines[y].windowsel = 3;
   Build(&frame, normalAtlas, normalPixels, normal, kSnesWidth, 0);
   Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
-  AssertCenter(normal, normalAtlas, wide, wideAtlas);
+  AssertCenter(normal, normalAtlas, wide, wideAtlas, kHudEndLine);
 
   for (unsigned y = 0; y < kHudEndLine; y++) {
     lines[y].screenEnabled[0] = 2;
@@ -158,7 +159,7 @@ int main(void) {
   }
   Build(&frame, normalAtlas, normalPixels, normal, kSnesWidth, 0);
   Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
-  AssertCenter(normal, normalAtlas, wide, wideAtlas);
+  AssertCenter(normal, normalAtlas, wide, wideAtlas, kHudEndLine);
 
   for (unsigned i = 0; i < 2048; i++)
     ppu->vram[0x5800 + i] = 1 + (i & 3);
@@ -172,7 +173,7 @@ int main(void) {
   assert(PicaHudLineCount(&frame) == kHudEndLine);
   Build(&frame, normalAtlas, normalPixels, normal, kSnesWidth, 0);
   Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
-  AssertCenter(normal, normalAtlas, wide, wideAtlas);
+  AssertCenter(normal, normalAtlas, wide, wideAtlas, kHudEndLine);
   assert(Sample(wide, wideAtlas, 0, 0) == 0);
   assert(Sample(wide, wideAtlas, kWideWidth - 1, 0) == 0);
 
@@ -182,7 +183,7 @@ int main(void) {
   assert(PicaHudLineCount(&frame) == 0);
   Build(&frame, normalAtlas, normalPixels, normal, kSnesWidth, 0);
   Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
-  AssertCenter(normal, normalAtlas, wide, wideAtlas);
+  AssertCenter(normal, normalAtlas, wide, wideAtlas, kHudEndLine);
   assert(Sample(wide, wideAtlas, 0, 0) != 0);
   assert(Sample(wide, wideAtlas, kWideWidth - 1, 0) != 0);
 
@@ -207,6 +208,33 @@ int main(void) {
   assert(normal->objCount == 0);
   assert(wide->objCount);
   assert(wide->objFirstX == 260 + kWideExtraX);
+  /* Cover all gameplay scanlines, including independently scrolled BG2 and
+   * a window that changes halfway down the screen. */
+  memset(ppu->highOam, 0, sizeof(ppu->highOam));
+  for (unsigned i = 0; i < 256; i += 2) ppu->oam[i] = 0xf000;
+  for (unsigned y = 0; y < kSnesHeight; y++) {
+    memset(&lines[y], 0, sizeof(lines[y]));
+    lines[y].mode = 1;
+    lines[y].brightness = 15;
+    lines[y].screenEnabled[0] = 3;
+    lines[y].bg[0].tilemapAdr = 0x1000;
+    lines[y].bg[0].tilemapWider = true;
+    lines[y].bg[0].hScroll = 13 + y / 32;
+    lines[y].bg[1] = lines[y].bg[0];
+    lines[y].bg[1].tilemapAdr = 0x1800;
+    lines[y].bg[1].hScroll = 29 + y / 48;
+    if (y >= 80 && y < 160) {
+      lines[y].screenWindowed[0] = 2;
+      lines[y].windowsel = 2u << 4;
+      lines[y].window1left = 48;
+      lines[y].window1right = 112;
+    }
+  }
+  frame.height = kSnesHeight;
+  Build(&frame, normalAtlas, normalPixels, normal, kSnesWidth, 0);
+  Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
+  AssertCenter(normal, normalAtlas, wide, wideAtlas, kSnesHeight);
+
   free(wide);
   free(normal);
   free(widePixels);
