@@ -30,7 +30,11 @@ Highlights:
   and SETUP, widescreen and main-HUD controls. Its small `i` tab shows build
   information (`BUILD_FLAGS`, port-specific defines, `FULL_NATIVE` and `LTO`).
 - Correct HDMA rain, fog, windows and colour math without scanline filtering.
-- Save files at `saves/sm.srm`, with a backup created before replacement.
+- ROM selector on startup. Put `.smc` or `.sfc` files in
+  `sdmc:/3ds/sm3dsnative/`. Saves are kept per ROM in `saves/`, and lower-screen
+  SETUP choices persist in `settings.cfg` in the same SD folder.
+- Hold L + R + A to write a debug report and WRAM/SRAM snapshots into
+  `sdmc:/3ds/sm3dsnative/dump/`.
 - Fixed room BTS loading on ARM, including the Landing Site terrain and blue
   door collision in Crateria.
 
@@ -97,9 +101,6 @@ sudo cp Project_CTR/makerom/bin/makerom /usr/bin
 
 cd sm-3ds-native
 
-# Place your copy of Super Metroid in romfs
-cp ~/Games/sm.smc romfs
-
 # Build SDL2
 make sdl
 
@@ -107,6 +108,17 @@ make sdl
 make -j FULL_NATIVE=1 BUILD_FLAGS="-DSM3DS_OLD3DS" 3dsx
 make FULL_NATIVE=1 BUILD_FLAGS="-DSM3DS_OLD3DS" cia
 ```
+
+Copy a compatible Super Metroid ROM to `sdmc:/3ds/sm3dsnative/` on the 3DS
+microSD card, then choose it from the menu at launch. The folder is created
+automatically if absent. Different ROM filenames use different save files
+(`saves/<ROM filename>.srm`). If a local development build still embeds
+`romfs:/sm.smc`, the game imports it once into the SD folder when it is absent.
+For `sm.smc`, an existing `saves/sm.srm` is copied to the new SD save location
+the first time, leaving the original file intact.
+The public repository does not include game ROM data. The selector currently
+loads existing ROM files; applying translation patches in the menu is planned
+for a later version.
 
 Optional build switches:
 

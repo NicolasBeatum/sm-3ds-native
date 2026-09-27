@@ -66,6 +66,9 @@ static bool g_widescreen = true;
 static bool g_status_bar_visible[3] = {true, true, false};
 static bool g_clear_markers_armed;
 static bool g_setup_build_info;
+static char g_settings_path[256];
+static char g_notice[48];
+static uint64_t g_notice_until_ms;
 typedef struct MapMarker { uint8_t area, x, y; } MapMarker;
 static MapMarker g_markers[16];
 static int g_marker_count;
@@ -896,6 +899,93 @@ static void DrawIdle(uint8_t *fb) {
   DrawTextCentered(fb, 160, 109, "METROID", 2, kBorderHi);
 }
 
+void BottomScreen_DrawRomSelector(const char *const *rows, int row_count,
+                                  int selected, int total, const char *message) {
+  if (!g_bottom_cache) return;
+  uint8_t *fb = g_bottom_cache;
+  FillRect(fb, 0, 0, 320, 240, kBg);
+  DrawTextCentered(fb, 160, 10, "SM 3DS NATIVE", 2, kWhite);
+  DrawTextCentered(fb, 160, 33, "SELECT ROM", 1, kDim);
+  Panel(fb, 9, 49, 302, 153);
+  if (!total) {
+    DrawTextCentered(fb, 160, 93, "NO ROM FOUND", 2, kAccent);
+  } else {
+    for (int i = 0; i < row_count && rows[i]; i++) {
+      int y = 55 + i * 18;
+      if (i == selected) {
+        FillRect(fb, 14, y - 2, 292, 17, kBorder);
+        StrokeRect(fb, 14, y - 2, 292, 17, 1, kAccent);
+      }
+      char short_name[43];
+      snprintf(short_name, sizeof(short_name), "%s", rows[i]);
+      DrawText(fb, 20, y + 2, short_name, 1, i == selected ? kWhite : kDim);
+    }
+  }
+  DrawTextCentered(fb, 160, 211, message, 1, kWhite);
+  if (g_notice[0] && osGetTime() < g_notice_until_ms) {
+    FillRect(fb, 15, 204, 290, 20, kPanel);
+    StrokeRect(fb, 15, 204, 290, 20, 1, kAccent);
+    DrawTextCentered(fb, 160, 210, g_notice, 1, kWhite);
+  }
+  g_bottom_dirty = true;
+}
+
+void BottomScreen_LoadSettings(const char *path) {
+  g_settings_path[0] = 0;
+  if (!path || strlen(path) >= sizeof(g_settings_path)) return;
+  strcpy(g_settings_path, path);
+  FILE *f = fopen(path, "r");
+  if (!f) { BottomScreen_SaveSettings(); return; }
+  char line[96], key[64];
+  int value;
+  while (fgets(line, sizeof(line), f)) {
+    if (sscanf(line, "%63[^=]=%d", key, &value) != 2) continue;
+    if (strcmp(key, "widescreen") == 0) g_widescreen = value != 0;
+    else if (strcmp(key, "hide_main_hud") == 0) g_hide_main_hud = value != 0;
+    else if (strcmp(key, "status_map") == 0) g_status_bar_visible[0] = value != 0;
+    else if (strcmp(key, "status_items") == 0) g_status_bar_visible[1] = value != 0;
+    else if (strcmp(key, "status_setup") == 0) g_status_bar_visible[2] = value != 0;
+    else if (strcmp(key, "room_zoom") == 0 && value >= 0 && value <= 3) g_room_zoom = value;
+    else if (strcmp(key, "world_zoom") == 0 && value >= 0 && value <= 2) g_world_zoom = value;
+  }
+  fclose(f);
+  g_bottom_dirty = true;
+}
+
+bool BottomScreen_SaveSettings(void) {
+  if (!g_settings_path[0]) return false;
+  char temporary[sizeof(g_settings_path) + 5];
+  char backup[sizeof(g_settings_path) + 5];
+  snprintf(temporary, sizeof(temporary), "%s.tmp", g_settings_path);
+  snprintf(backup, sizeof(backup), "%s.bak", g_settings_path);
+  FILE *f = fopen(temporary, "w");
+  if (!f) return false;
+  int written = fprintf(f, "widescreen=%d\nhide_main_hud=%d\nstatus_map=%d\n"
+                           "status_items=%d\nstatus_setup=%d\nroom_zoom=%d\nworld_zoom=%d\n",
+                        g_widescreen, g_hide_main_hud, g_status_bar_visible[0],
+                        g_status_bar_visible[1], g_status_bar_visible[2],
+                        g_room_zoom, g_world_zoom);
+  bool okay = written > 0 && fflush(f) == 0;
+  if (fclose(f) != 0) okay = false;
+  if (!okay) { remove(temporary); return false; }
+  if (rename(temporary, g_settings_path) != 0) {
+    remove(backup);
+    if (rename(g_settings_path, backup) != 0 ||
+        rename(temporary, g_settings_path) != 0) {
+      rename(backup, g_settings_path);
+      remove(temporary);
+      return false;
+    }
+  }
+  return true;
+}
+
+void BottomScreen_ShowNotice(const char *message, uint64_t until_ms) {
+  snprintf(g_notice, sizeof(g_notice), "%s", message ? message : "");
+  g_notice_until_ms = until_ms;
+  g_bottom_dirty = true;
+}
+
 bool BottomScreen_Init(void) {
   g_bottom_cache = linearMemAlign(
       kBottomTextureWidth * kBottomTextureHeight * 4, 0x80);
@@ -932,6 +1022,11 @@ bool BottomScreen_Draw(void) {
       DrawSetupTab(g_bottom_cache, status_bar ? 44 : 3);
     }
     DrawTabs(g_bottom_cache);
+  }
+  if (g_notice[0] && osGetTime() < g_notice_until_ms) {
+    FillRect(g_bottom_cache, 10, 187, 300, 17, kPanel);
+    StrokeRect(g_bottom_cache, 10, 187, 300, 17, 1, kAccent);
+    DrawTextCentered(g_bottom_cache, 160, 192, g_notice, 1, kWhite);
   }
   return true;
 }
@@ -1012,6 +1107,7 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
       else if (g_room_zoom < 3) g_room_zoom++;
     }
     g_bottom_dirty = true;
+    BottomScreen_SaveSettings();
     return;
   }
 
@@ -1042,6 +1138,7 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
         } else {
           g_clear_markers_armed = true;
         }
+        if (row < 5) BottomScreen_SaveSettings();
       }
     }
     g_bottom_dirty = true;

@@ -22,6 +22,9 @@
 #include "bottom_screen.h"
 #include "gpu_presenter.h"
 #include "ppu_gpu.h"
+#include "rom_menu.h"
+#include "debug_dump.h"
+#include "storage_paths.h"
 
 enum Button {
   BTN_A = 0,
@@ -197,6 +200,26 @@ static bool EnableSystemCoreTime(void) {
   return false;
 }
 
+static void ImportLegacySave(const char *rom_name, const char *save_path) {
+  struct stat st;
+  if (strcmp(rom_name, "sm.smc") != 0 || stat(save_path, &st) == 0)
+    return;
+  FILE *source = fopen("saves/sm.srm", "rb");
+  if (!source) return;
+  uint8_t data[8192];
+  bool complete = fread(data, 1, sizeof(data), source) == sizeof(data);
+  fclose(source);
+  if (!complete) return;
+  FILE *target = fopen(save_path, "wb");
+  if (!target) return;
+  if (fwrite(data, 1, sizeof(data), target) != sizeof(data)) {
+    fclose(target);
+    remove(save_path);
+  } else {
+    fclose(target);
+  }
+}
+
 void RtlApuLock(void) {
   SDL_LockMutex(g_audio_mutex);
 }
@@ -362,20 +385,27 @@ int main(int argc, char** argv) {
       SDL_GameControllerOpen(0);
   }
 
-  Result rc = romfsInit();
-  if (rc)
-    while(true);
-
-  // Load ROM from romfs
-  const char* filename = "romfs:/sm.smc";
-  Snes *snes = SnesInit(filename);
-
-  if(snes == NULL) {
-    char buf[256];
-    snprintf(buf, sizeof(buf), "Unable to load ROM: %s\nMake sure sm.smc is in romfs/", filename);
-    Die(buf);
-    return 1;
+  bool romfs_ready = R_SUCCEEDED(romfsInit());
+  if (!BottomScreen_Init())
+    Die("Unable to allocate bottom-screen framebuffer");
+  char filename[256], rom_name[128], save_path[256];
+  Snes *snes = NULL;
+  while (RomMenu_Select(filename, sizeof(filename), rom_name, sizeof(rom_name))) {
+    snes = SnesInit(filename);
+    if (snes) break;
+    BottomScreen_ShowNotice("INVALID OR UNSUPPORTED ROM", osGetTime() + 3000);
   }
+  if (!snes) {
+    BottomScreen_Fini();
+    if (romfs_ready) romfsExit();
+    SDL_Quit();
+    return 0;
+  }
+  if (snprintf(save_path, sizeof(save_path), "%s/%s.srm", SM3DS_SAVE_DIR, rom_name)
+          >= (int)sizeof(save_path) || !RtlSetSramPath(save_path))
+    Die("ROM filename is too long for save path");
+  ImportLegacySave(rom_name, save_path);
+  BottomScreen_LoadSettings(SM3DS_SETTINGS_PATH);
 
   // Create window - 3DS top screen
   SDL_Window *window = SDL_CreateWindow(
@@ -395,8 +425,6 @@ int main(int argc, char** argv) {
   if (!g_pixels)
     Die("Unable to allocate PPU framebuffer");
   memset(g_pixels, 0, 256 * 256 * 4);
-  if (!BottomScreen_Init())
-    Die("Unable to allocate bottom-screen framebuffer");
   g_gpu_presenter = GpuPresenter_Init();
 
   // Setup audio
@@ -429,18 +457,17 @@ int main(int argc, char** argv) {
     g_audiobuffer = (uint8 *)malloc(g_frames_per_block * have.channels * sizeof(int16));
   }
 
-  mkdir("saves", 0755);
   RtlReadSram();
 
   PpuBeginDrawing(snes->snes_ppu, g_pixels, 256 * 4, 0);
   // PpuBeginDrawing(snes->my_ppu, g_my_pixels, 256 * 4, 0);
 
-  RtlReadSram();
-
   bool running = true;
   uint32 lastTick = SDL_GetTicks();
   uint32 frameCtr = 0;
   uint8 audiopaused = true;
+  unsigned dump_buttons = 0;
+  bool dump_chord_latched = false;
 #ifdef SM3DS_PROFILE
   uint32 profileTick = lastTick;
   uint32 profileFrames = 0;
@@ -486,9 +513,22 @@ int main(int argc, char** argv) {
     while (SDL_PollEvent(&event)) {
       switch (event.type) {
       case SDL_JOYBUTTONDOWN:
+        if (event.jbutton.button == BTN_A) dump_buttons |= 1;
+        if (event.jbutton.button == BTN_L) dump_buttons |= 2;
+        if (event.jbutton.button == BTN_R) dump_buttons |= 4;
+        if (dump_buttons == 7 && !dump_chord_latched) {
+          dump_chord_latched = true;
+          bool saved = DebugDump_Write(rom_name, frameCtr);
+          BottomScreen_ShowNotice(saved ? "DEBUG DUMP SAVED" : "DEBUG DUMP FAILED",
+                                  osGetTime() + 3000);
+        }
         HandleCommand(event.jbutton.button, true);
         break;
       case SDL_JOYBUTTONUP:
+        if (event.jbutton.button == BTN_A) dump_buttons &= ~1u;
+        if (event.jbutton.button == BTN_L) dump_buttons &= ~2u;
+        if (event.jbutton.button == BTN_R) dump_buttons &= ~4u;
+        if (dump_buttons != 7) dump_chord_latched = false;
         HandleCommand(event.jbutton.button, false);
         break;
       case SDL_JOYAXISMOTION:
@@ -690,6 +730,7 @@ int main(int argc, char** argv) {
   BottomScreen_Fini();
   linearFree(g_pixels);
   SDL_DestroyWindow(window);
+  if (romfs_ready) romfsExit();
   SDL_Quit();
 #ifdef SM3DS_PROFILE
   if (profile)

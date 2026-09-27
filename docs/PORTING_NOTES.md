@@ -167,5 +167,7 @@ emulator testing and documentation. Nicolás Andrés Hernández Vargas provided
 the project direction and acceptance testing. This disclosure is informational
 and does not replace or alter any upstream license or attribution.
 
-No commercial ROM is included in source control. A legally obtained compatible
-ROM must be supplied locally in `romfs/sm.smc`; `.gitignore` excludes it.
+No commercial ROM is included in source control. A compatible ROM must be
+copied to `sdmc:/3ds/sm3dsnative/` on the 3DS microSD card and selected at
+launch. Local development builds may still embed `romfs/sm.smc` for a one-time
+import into that SD directory; `.gitignore` excludes it.
