@@ -58,12 +58,26 @@ typedef struct PicaQuad {
 
 typedef bool PicaEmit(void *context, unsigned group, const PicaQuad *quad);
 
+/* Room blocks provide side tiles without writing into the SNES's adjacent
+ * 256-pixel BG tilemaps. The center keeps using the original VRAM image. */
+typedef struct PicaWideRoomLayer {
+  const uint16_t *blocks;
+  int cameraX, cameraY;
+} PicaWideRoomLayer;
+
 typedef struct PicaFrame {
   const Ppu *memory;
   const PicaLine *lines;
   PicaAtlas *atlas;
   uint32_t *pixels;
   unsigned width, height;
+  unsigned originX, hudEndY;
+  int worldLeft, worldRight;
+  int bg2Left, bg2Right;
+  bool boundBg2;
+  PicaWideRoomLayer wideRoom[2];
+  const uint16_t *wideTileTable;
+  unsigned wideRoomWidth, wideRoomHeight;
   PicaEmit *emit;
   void *context;
   const char *failure;
@@ -74,4 +88,5 @@ typedef struct PicaFrame {
 void PicaAtlasInit(PicaAtlas *atlas, uint32_t *pixels);
 void PicaAtlasBegin(PicaAtlas *atlas);
 void PicaCaptureLine(PicaLine *out, const Ppu *ppu);
+unsigned PicaHudLineCount(const PicaFrame *frame);
 bool PicaBuildFrame(PicaFrame *frame);

@@ -83,7 +83,8 @@ else
 	EXTRA_CFLAGS :=
 endif
 
-CFLAGS := $(COMMON_FLAGS) -std=gnu99 $(shell $(CURDIR)/../$(SDL)/build/sdl2-config --cflags) -DSYSTEM_VOLUME_MIXER_AVAILABLE=1 $(EXTRA_CFLAGS)
+CFLAGS := $(COMMON_FLAGS) -std=gnu99 $(shell $(PWD)$(SDL)/build/sdl2-config --cflags) -DSYSTEM_VOLUME_MIXER_AVAILABLE=1 $(EXTRA_CFLAGS) \
+	-DSM3DS_BUILD_FLAGS='"$(BUILD_FLAGS)"' -DSM3DS_BUILD_LTO=$(if $(filter 1,$(LTO)),1,0)
 CXXFLAGS := $(COMMON_FLAGS) -std=gnu++17
 # CXXFLAGS += -fno-rtti -fno-exceptions
 
@@ -286,7 +287,7 @@ banner.bnr: $(BANNER_IMAGE_FILE) $(BANNER_AUDIO_FILE)
 icon.icn: $(TOPDIR)/$(ICON)
 	@$(BANNERTOOL) makesmdh -s "$(APP_TITLE)" -l "$(APP_TITLE)" -p "$(APP_AUTHOR)" -i $(TOPDIR)/$(ICON) -o icon.icn > /dev/null
 
-$(OUTPUT_FILE).elf: $(OFILES) $(SDL)/build/libSDL2.a
+$(OUTPUT_FILE).elf: $(OFILES) $(TOPDIR)/$(SDL)/build/libSDL2.a
 
 $(OUTPUT_FILE).3dsx: $(OUTPUT_FILE).elf $(OUTPUT_FILE).smdh
 

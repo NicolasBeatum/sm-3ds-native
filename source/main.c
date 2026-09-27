@@ -14,6 +14,8 @@
 #include "src/types.h"
 #include "src/sm_rtl.h"
 #include "src/sm_cpu_infra.h"
+#include "src/ida_types.h"
+#include "src/variables.h"
 #include "src/config.h"
 #include "src/util.h"
 #include "src/spc_player.h"
@@ -60,6 +62,7 @@ static bool g_gpu_presenter;
 
 static uint8 g_paused, g_turbo, g_replay_turbo = true;
 static uint8 g_gamepad_buttons;
+static int16_t g_circle_axis[2];
 static int g_input1_state;
 static bool g_display_perf;
 static int g_curr_fps;
@@ -165,6 +168,8 @@ extern uint32_t g_profile_pica_gpu_frames;
 extern uint32_t g_profile_pica_cpu_frames;
 extern uint32_t g_profile_pica_vertices;
 extern uint32_t g_profile_pica_decodes;
+extern uint32_t g_profile_pica_wide_gpu_frames;
+extern uint32_t g_profile_pica_wide_cpu_frames;
 #endif
 
 static bool CreateEmulatorDspMarker(void) {
@@ -307,6 +312,18 @@ static void HandleCommand(uint32 j, bool pressed) {
   // }
 }
 
+static void HandleCirclePadAxis(unsigned axis, int16_t value) {
+  if (axis >= 2) return;
+  g_circle_axis[axis] = value;
+  const int deadzone = 8000;
+  uint8 buttons = 0;
+  if (g_circle_axis[0] < -deadzone) buttons |= 1 << 6;
+  if (g_circle_axis[0] > deadzone) buttons |= 1 << 7;
+  if (g_circle_axis[1] < -deadzone) buttons |= 1 << 4;
+  if (g_circle_axis[1] > deadzone) buttons |= 1 << 5;
+  g_gamepad_buttons = buttons;
+}
+
 enum {
   kDefaultFullscreen = 0,
   kMaxWindowScale = 10,
@@ -441,6 +458,8 @@ int main(int argc, char** argv) {
   uint64_t profilePicaPrepareTicks = 0;
   uint32_t profilePicaGpuFrames = 0;
   uint32_t profilePicaCpuFrames = 0;
+  uint32_t profilePicaWideGpuFrames = 0;
+  uint32_t profilePicaWideCpuFrames = 0;
   uint64_t profilePpuSpriteTicks = 0;
   uint64_t profilePpuMainTicks = 0;
   uint64_t profilePpuSubTicks = 0;
@@ -472,6 +491,9 @@ int main(int argc, char** argv) {
       case SDL_JOYBUTTONUP:
         HandleCommand(event.jbutton.button, false);
         break;
+      case SDL_JOYAXISMOTION:
+        HandleCirclePadAxis(event.jaxis.axis, event.jaxis.value);
+        break;
       case SDL_FINGERDOWN:
         BottomScreen_HandleTouch(event.tfinger.x, event.tfinger.y);
         break;
@@ -495,7 +517,14 @@ int main(int argc, char** argv) {
       continue;
     }
 
-    int inputs = g_input1_state | g_gamepad_buttons;
+    int inputs = g_input1_state |
+        ((g_input1_state & 0xf0) ? 0 : g_gamepad_buttons);
+    WideConfig frameViewport = WideConfig_Create(
+        BottomScreen_WidescreenEnabled() &&
+        game_state >= kGameState_7_MainGameplayFadeIn &&
+        game_state <= kGameState_11_LoadingNextRoom);
+    RtlSetSpriteViewportMargin(frameViewport.origin_x);
+    PpuGpuSetWideConfig(frameViewport);
     uint8 is_replay = RtlRunFrame(inputs);
 
     frameCtr++;
@@ -537,6 +566,8 @@ int main(int argc, char** argv) {
       uint64_t picaPrepareTicks = g_profile_pica_prepare_ticks;
       uint32_t picaGpuFrames = g_profile_pica_gpu_frames;
       uint32_t picaCpuFrames = g_profile_pica_cpu_frames;
+      uint32_t picaWideGpuFrames = g_profile_pica_wide_gpu_frames;
+      uint32_t picaWideCpuFrames = g_profile_pica_wide_cpu_frames;
       uint32_t picaSamples = picaGpuFrames - profilePicaGpuFrames;
       if (!picaSamples) picaSamples = 1;
       uint32_t hdmaTopCount = 0;
@@ -555,7 +586,7 @@ int main(int argc, char** argv) {
       uint32_t ppuPhaseFrames = g_profile_ppu_phase_frames;
       uint32_t ppuPhaseSamples = ppuPhaseFrames - profilePpuPhaseFrames;
       if (ppuPhaseSamples == 0) ppuPhaseSamples = 1;
-      fprintf(profile, "ms=%lu fps=%lu game_us=%llu ppu_us=%llu pica_prepare_us=%llu pica_gpu=%lu pica_cpu=%lu pica_vertices=%lu pica_decodes=%lu pica_reason=%s hdma_us=%llu hdma_calls=%lu hdma_channels=%lu hdma_bytes=%lu hdma_top_reg=%02x hdma_top_count=%lu hdma_scroll=%lu hdma_cgram=%lu hdma_color=%lu audio_us=%llu audio_lock_us=%llu audio_generate_us=%llu audio_copy_us=%llu sprite_us=%llu main_us=%llu sub_us=%llu compose_us=%llu color_maps=%lu fixed_maps=%lu backdrop_maps=%lu halfadd=%lu generic_sub=%lu generic_key=%lu audio_callbacks=%lu audio_nonzero=%lu\n",
+      fprintf(profile, "ms=%lu fps=%lu game_us=%llu ppu_us=%llu pica_prepare_us=%llu pica_gpu=%lu pica_cpu=%lu pica_vertices=%lu pica_decodes=%lu pica_reason=%s wide=%u wide_width=%u wide_origin=%u wide_gpu=%lu wide_cpu=%lu hdma_us=%llu hdma_calls=%lu hdma_channels=%lu hdma_bytes=%lu hdma_top_reg=%02x hdma_top_count=%lu hdma_scroll=%lu hdma_cgram=%lu hdma_color=%lu audio_us=%llu audio_lock_us=%llu audio_generate_us=%llu audio_copy_us=%llu sprite_us=%llu main_us=%llu sub_us=%llu compose_us=%llu color_maps=%lu fixed_maps=%lu backdrop_maps=%lu halfadd=%lu generic_sub=%lu generic_key=%lu audio_callbacks=%lu audio_nonzero=%lu\n",
               (unsigned long)profileNow,
               (unsigned long)(profileFrames * 1000 / (profileNow - profileTick)),
               (unsigned long long)((gameTicks - profileGameTicks) * 1000000 / profileFreq / profileFrames),
@@ -566,6 +597,11 @@ int main(int argc, char** argv) {
               (unsigned long)g_profile_pica_vertices,
               (unsigned long)g_profile_pica_decodes,
               PpuGpuReason(),
+              frameViewport.enabled,
+              frameViewport.output_width,
+              frameViewport.origin_x,
+              (unsigned long)(picaWideGpuFrames - profilePicaWideGpuFrames),
+              (unsigned long)(picaWideCpuFrames - profilePicaWideCpuFrames),
               (unsigned long long)((hdmaTicks - profileHdmaTicks) * 1000000 / profileFreq / profileFrames),
               (unsigned long)(hdmaCalls - profileHdmaCalls),
               (unsigned long)(hdmaActiveChannels - profileHdmaActiveChannels),
@@ -618,6 +654,8 @@ int main(int argc, char** argv) {
       profilePicaPrepareTicks = picaPrepareTicks;
       profilePicaGpuFrames = picaGpuFrames;
       profilePicaCpuFrames = picaCpuFrames;
+      profilePicaWideGpuFrames = picaWideGpuFrames;
+      profilePicaWideCpuFrames = picaWideCpuFrames;
       profilePpuSpriteTicks = ppuSpriteTicks;
       profilePpuMainTicks = ppuMainTicks;
       profilePpuSubTicks = ppuSubTicks;

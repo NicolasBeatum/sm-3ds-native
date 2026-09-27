@@ -1,6 +1,8 @@
 #include "ppu_gpu.h"
 #include "ppu_gpu_model.h"
+#include "wide_bounds.h"
 #include "sm_pica_shbin.h"
+#include "src/variables.h"
 
 #include <3ds.h>
 #include <citro2d.h>
@@ -24,6 +26,8 @@ uint32_t g_profile_pica_gpu_frames;
 uint32_t g_profile_pica_cpu_frames;
 uint32_t g_profile_pica_vertices;
 uint32_t g_profile_pica_decodes;
+uint32_t g_profile_pica_wide_gpu_frames;
+uint32_t g_profile_pica_wide_cpu_frames;
 #endif
 
 static struct {
@@ -40,10 +44,15 @@ static struct {
   C3D_BufInfo buffers;
   int scaleLocation;
   Range ranges[PICA_GROUPS];
-  unsigned slot, lastSubmittedSlot, count, width, height, captured;
+  unsigned slot, lastSubmittedSlot, count, width, height, captured, hudLines;
   float invWidth, invHeight;
   const char *reason;
 } g;
+
+static WideConfig g_wide_config = {
+    .output_width = kSnesWidth,
+    .hud_end_y = kHudEndLine,
+};
 
 static bool Clean(const void *p, size_t bytes) {
   if (!bytes) return true;
@@ -315,8 +324,17 @@ bool PpuGpuCanAttempt(void) {
 #endif
 }
 
+void PpuGpuSetWideConfig(WideConfig config) {
+  if (config.output_width != (config.enabled ? kWideWidth : kSnesWidth) ||
+      config.origin_x != (config.enabled ? kWideExtraX : 0) ||
+      config.hud_end_y > kSnesHeight)
+    return;
+  g_wide_config = config;
+}
+
 bool PpuGpuBegin(Ppu *p, unsigned height) {
   g.prepared = g.output = false;
+  g.hudLines = 0;
   if (!g.ready || height > PICA_MAX_LINES) return false;
   if (!SelectBuffers(g.lastSubmittedSlot ^ 1u)) {
     g.reason = "vertex-buffer";
@@ -324,7 +342,7 @@ bool PpuGpuBegin(Ppu *p, unsigned height) {
   }
   memcpy(g.saved, p, sizeof(Ppu));
   g.captured = 0;
-  ResetRanges(256, height);
+  ResetRanges(g_wide_config.output_width, height);
   PicaAtlasBegin(g.cache);
   p->gpuRecording = true;
   p->gpuInvalidWrite = false;
@@ -345,8 +363,43 @@ bool PpuGpuFinish(Ppu *p) {
   p->gpuRecording = false;
   PicaFrame frame = {.memory=g.saved,.lines=g.lines,.atlas=g.cache,
                      .pixels=g.atlas.data,.width=g.width,.height=g.height,
+                     .originX=g_wide_config.origin_x,
+                     .hudEndY=g_wide_config.hud_end_y,
+                     .worldLeft=0,.worldRight=g.width,
+                     .wideRoom={{level_data, (int16_t)layer1_x_pos,
+                                 (int16_t)layer1_y_pos},
+                                {(const uint16_t *)(g_ram + 0x19602),
+                                 (int16_t)layer2_x_pos,
+                                 (int16_t)layer2_y_pos}},
+                     .wideTileTable=(const uint16_t *)(g_ram + 0xA000),
+                     .wideRoomWidth=room_width_in_blocks,
+                     .wideRoomHeight=room_height_in_blocks,
                      .emit=Emit};
   bool ok = !p->gpuInvalidWrite && g.captured == g.height;
+  uint32_t roomBlocks =
+      (uint32_t)room_width_in_blocks * room_height_in_blocks;
+  if (roomBlocks > 0x9600 / sizeof(uint16_t))
+    frame.wideRoom[0].blocks = NULL;
+  if (roomBlocks > (sizeof(g_ram) - 0x19602) / sizeof(uint16_t))
+    frame.wideRoom[1].blocks = NULL;
+  /* A frozen/parallax BG2 is a static VRAM tilemap, not room block data.
+   * Repeat its existing pattern into the side bands. */
+  if ((layer2_scroll_x | layer2_scroll_y) & 1)
+    frame.wideRoom[1].blocks = NULL;
+  if (ok) g.hudLines = PicaHudLineCount(&frame);
+  if (ok && g.width == kWideWidth) {
+    WideWorldSpan span = WideBounds_Compute(
+        (int16_t)layer1_x_pos, (int16_t)layer1_y_pos,
+        room_width_in_blocks, room_width_in_scrolls,
+        room_height_in_scrolls, scrolls);
+    frame.worldLeft = span.left;
+    frame.worldRight = span.right;
+    /* A locked scroll screen ends the visible room for every background.
+     * Letting BG2 or BG3 draw past it repeats scenery behind closed doors. */
+    frame.bg2Left = span.left;
+    frame.bg2Right = span.right;
+    frame.boundBg2 = room_width_in_blocks != 0;
+  }
   if (ok) ok = PicaBuildFrame(&frame);
   if (!ok) {
     g.reason = p->gpuInvalidWrite ? "live-vram-cgram-oam" :
@@ -387,12 +440,15 @@ void PpuGpuCpuFrame(void) {
   g.prepared = g.output = false;
 #ifdef SM3DS_PROFILE
   g_profile_pica_cpu_frames++;
+  if (g_wide_config.enabled) g_profile_pica_wide_cpu_frames++;
 #endif
 }
 
 bool PpuGpuPrepared(void) { return g.prepared; }
 bool PpuGpuOutputActive(void) { return g.output; }
 C3D_Tex *PpuGpuOutput(void) { return g.output ? &g.result : NULL; }
+unsigned PpuGpuOutputWidth(void) { return g.output ? g.width : kSnesWidth; }
+unsigned PpuGpuHudLines(void) { return g.output ? g.hudLines : 0; }
 const char *PpuGpuReason(void) { return g.reason ? g.reason : "uninitialized"; }
 
 bool PpuGpuDraw(void) {
@@ -405,6 +461,7 @@ bool PpuGpuDraw(void) {
     g.lastSubmittedSlot = g.slot;
 #ifdef SM3DS_PROFILE
     g_profile_pica_gpu_frames++;
+    if (g.width == kWideWidth) g_profile_pica_wide_gpu_frames++;
 #endif
   } else {
     g.ready = g.output = false;
