@@ -61,11 +61,19 @@ static bool g_bottom_dirty = true;
 static bool g_world_view;
 static int g_room_zoom = 1;
 static int g_world_zoom;
+static int g_world_pan_x, g_world_pan_y;
+static int g_world_map_top;
+static bool g_world_labels = true;
+static bool g_world_touch_active, g_world_touch_moved;
+static int g_world_last_touch_x, g_world_last_touch_y;
 static bool g_hide_main_hud;
 static bool g_widescreen = true;
 static bool g_status_bar_visible[3] = {true, true, false};
 static bool g_clear_markers_armed;
 static bool g_setup_build_info;
+static char g_settings_path[256];
+static char g_notice[48];
+static uint64_t g_notice_until_ms;
 typedef struct MapMarker { uint8_t area, x, y; } MapMarker;
 static MapMarker g_markers[16];
 static int g_marker_count;
@@ -73,9 +81,18 @@ static int g_room_map_x, g_room_map_y, g_room_map_w, g_room_map_h;
 static int g_room_crop_x, g_room_crop_y, g_room_cols, g_room_rows;
 static uint64_t g_touch_down_ms;
 static int g_touch_down_x, g_touch_down_y;
+static int g_clip_left, g_clip_top, g_clip_right = 320, g_clip_bottom = 240;
+
+static void SetClip(int left, int top, int right, int bottom) {
+  g_clip_left = left;
+  g_clip_top = top;
+  g_clip_right = right;
+  g_clip_bottom = bottom;
+}
 
 static inline void PutPixel(uint8_t *fb, int x, int y, UiColor color) {
-  if ((unsigned)x >= 320 || (unsigned)y >= 240)
+  if (x < g_clip_left || x >= g_clip_right ||
+      y < g_clip_top || y >= g_clip_bottom)
     return;
   const int i = (y * kBottomTextureWidth + x) * 4;
   fb[i + 0] = color.b;
@@ -85,10 +102,10 @@ static inline void PutPixel(uint8_t *fb, int x, int y, UiColor color) {
 }
 
 static void FillRect(uint8_t *fb, int x, int y, int w, int h, UiColor color) {
-  if (x < 0) { w += x; x = 0; }
-  if (y < 0) { h += y; y = 0; }
-  if (x + w > 320) w = 320 - x;
-  if (y + h > 240) h = 240 - y;
+  if (x < g_clip_left) { w += x - g_clip_left; x = g_clip_left; }
+  if (y < g_clip_top) { h += y - g_clip_top; y = g_clip_top; }
+  if (x + w > g_clip_right) w = g_clip_right - x;
+  if (y + h > g_clip_bottom) h = g_clip_bottom - y;
   if (w <= 0 || h <= 0)
     return;
   for (int py = y; py < y + h; py++) {
@@ -379,6 +396,7 @@ static void DrawLine(uint8_t *fb, int x0, int y0, int x1, int y1, UiColor color)
 
 static void DrawRoomMap(uint8_t *fb, int top, int bottom) {
   Panel(fb, 5, top, 310, bottom - top);
+  SetClip(7, top + 2, 313, bottom - 2);
   const int window_w[] = {30, 24, 20, 16};
   const int window_h[] = {18, 15, 12, 10};
   int zoom = g_room_zoom;
@@ -454,6 +472,7 @@ static void DrawRoomMap(uint8_t *fb, int top, int bottom) {
   int dot_y = oy + ((samus_ty - crop_y) * 8 + 4) * draw_h / (rows * 8);
   if (dot_x >= ox && dot_x < ox + draw_w && dot_y >= oy && dot_y < oy + draw_h)
     FillCircle(fb, dot_x, dot_y, 4, kSamus);
+  SetClip(0, 0, 320, 240);
 }
 
 typedef struct WorldLayout {
@@ -484,7 +503,7 @@ static bool WorldAreaVisible(int area) {
   const uint8_t *explored = ExploredBitsForArea(area);
   const uint8_t *station = MapStationBits(area);
   for (int i = 0; i < 256; i++)
-    if (explored[i] || station[i])
+    if (explored[i] || (station && station[i]))
       return true;
   return false;
 }
@@ -556,11 +575,70 @@ static void CenterWorldMap(int tile_scale, int top, int bottom,
   *origin_y = top + (bottom - top) / 2 - (min_y + max_y) / 2;
 }
 
+enum { kWorldZoomMax = 6, kWorldMapBottom = 180 };
+
+static bool WorldPlayerPosition(int *world_x, int *world_y) {
+  if (area_index >= 6) return false;
+  const WorldLayout *layout = &kWorldLayout[area_index];
+  int tile_x = room_x_coordinate_on_map + (samus_x_pos >> 8);
+  int tile_y = room_y_coordinate_on_map + (samus_y_pos >> 8) + 1;
+  if (tile_x < layout->min_x || tile_x >= layout->max_x ||
+      tile_y < layout->min_y || tile_y >= layout->max_y)
+    return false;
+  *world_x = layout->dest_x + tile_x - layout->min_x;
+  *world_y = layout->dest_y + tile_y - layout->min_y;
+  return true;
+}
+
+static void ClampWorldPan(void) {
+  int limit_x = 70 * (2 + g_world_zoom);
+  int limit_y = 57 * (2 + g_world_zoom);
+  if (g_world_pan_x < -limit_x) g_world_pan_x = -limit_x;
+  if (g_world_pan_x > limit_x) g_world_pan_x = limit_x;
+  if (g_world_pan_y < -limit_y) g_world_pan_y = -limit_y;
+  if (g_world_pan_y > limit_y) g_world_pan_y = limit_y;
+}
+
+static void FocusWorldOnSamus(void) {
+  int world_x, world_y, origin_x, origin_y;
+  if (!WorldPlayerPosition(&world_x, &world_y)) return;
+  int scale = 2 + g_world_zoom;
+  CenterWorldMap(scale, g_world_map_top, kWorldMapBottom,
+                 &origin_x, &origin_y);
+  g_world_pan_x = 160 - origin_x - world_x * scale - scale / 2;
+  g_world_pan_y = (g_world_map_top + kWorldMapBottom) / 2 - origin_y -
+                  world_y * scale - scale / 2;
+  ClampWorldPan();
+}
+
+static void ZoomWorldMap(int step) {
+  int old_zoom = g_world_zoom;
+  int new_zoom = old_zoom + step;
+  if (new_zoom < 0 || new_zoom > kWorldZoomMax) return;
+  int old_x, old_y, new_x, new_y;
+  int center_y = (g_world_map_top + kWorldMapBottom) / 2;
+  CenterWorldMap(2 + old_zoom, g_world_map_top, kWorldMapBottom,
+                 &old_x, &old_y);
+  CenterWorldMap(2 + new_zoom, g_world_map_top, kWorldMapBottom,
+                 &new_x, &new_y);
+  int old_scale = 2 + old_zoom, new_scale = 2 + new_zoom;
+  g_world_pan_x = 160 - new_x -
+      (160 - old_x - g_world_pan_x) * new_scale / old_scale;
+  g_world_pan_y = center_y - new_y -
+      (center_y - old_y - g_world_pan_y) * new_scale / old_scale;
+  g_world_zoom = new_zoom;
+  ClampWorldPan();
+}
+
 static void DrawWorldMap(uint8_t *fb, int top, int bottom) {
   Panel(fb, 5, top, 310, bottom - top);
+  SetClip(7, top + 2, 313, bottom - 2);
   int tile_scale = 2 + g_world_zoom;
   int ox, oy;
   CenterWorldMap(tile_scale, top, bottom, &ox, &oy);
+  ox += g_world_pan_x;
+  oy += g_world_pan_y;
+  g_world_map_top = top;
 
   for (unsigned i = 0; i < sizeof(kWorldConnectors) / sizeof(kWorldConnectors[0]); i++) {
     const WorldConnector *c = &kWorldConnectors[i];
@@ -588,6 +666,9 @@ static void DrawWorldMap(uint8_t *fb, int top, int bottom) {
         if (!seen && !station_only) continue;
         int dx0 = ox + (layout->dest_x + tx - layout->min_x) * tile_scale;
         int dy0 = oy + (layout->dest_y + ty - layout->min_y) * tile_scale;
+        if (dx0 >= 313 || dx0 + tile_scale <= 7 ||
+            dy0 >= bottom - 2 || dy0 + tile_scale <= top + 2)
+          continue;
         int index = (tx >> 5) * 1024 + ty * 32 + (tx & 31);
         uint16_t entry = tilemap[index];
         for (int py = 0; py < tile_scale; py++)
@@ -612,16 +693,32 @@ static void DrawWorldMap(uint8_t *fb, int top, int bottom) {
     StrokeRect(fb, mx - 2, my - 2, 5, 5, 1, kAccent);
   }
 
-  for (int area = 0; area < 6; area++) {
-    if (!WorldAreaVisible(area)) continue;
-    int x = ox + kWorldLabelPos[area][0] * tile_scale;
-    int y = oy + kWorldLabelPos[area][1] * tile_scale;
-    const char *label = AreaName(area);
-    int w = TextWidth(label, 1) + 8;
-    FillRect(fb, x - w / 2, y - 5, w, 11, kBg);
-    StrokeRect(fb, x - w / 2, y - 5, w, 11, 1, kBorder);
-    DrawTextCentered(fb, x, y - 3, label, 1, kWhite);
+  if (g_world_labels) {
+    for (int area = 0; area < 6; area++) {
+      if (!WorldAreaVisible(area)) continue;
+      int x = ox + kWorldLabelPos[area][0] * tile_scale;
+      int y = oy + kWorldLabelPos[area][1] * tile_scale;
+      const char *label = AreaName(area);
+      int w = TextWidth(label, 1) + 8;
+      FillRect(fb, x - w / 2, y - 5, w, 11, kBg);
+      StrokeRect(fb, x - w / 2, y - 5, w, 11, 1, kBorder);
+      DrawTextCentered(fb, x, y - 3, label, 1, kWhite);
+    }
   }
+  int world_x, world_y;
+  if (WorldPlayerPosition(&world_x, &world_y))
+    FillCircle(fb, ox + world_x * tile_scale + tile_scale / 2,
+               oy + world_y * tile_scale + tile_scale / 2, 3, kSamus);
+  SetClip(0, 0, 320, 240);
+  /* Floating map controls: S returns to Samus, N toggles area names. */
+  FillRect(fb, 251, top + 6, 25, 20, kPanel);
+  StrokeRect(fb, 251, top + 6, 25, 20, 1, kAccent);
+  DrawTextCentered(fb, 263, top + 12, "S", 1, kWhite);
+  FillRect(fb, 280, top + 6, 25, 20, kPanel);
+  StrokeRect(fb, 280, top + 6, 25, 20, 1,
+             g_world_labels ? kAccent : kBorder);
+  DrawTextCentered(fb, 292, top + 12, "N", 1,
+                   g_world_labels ? kWhite : kDim);
 }
 
 static void DrawMapControls(uint8_t *fb) {
@@ -896,6 +993,95 @@ static void DrawIdle(uint8_t *fb) {
   DrawTextCentered(fb, 160, 109, "METROID", 2, kBorderHi);
 }
 
+void BottomScreen_DrawRomSelector(const char *const *rows, int row_count,
+                                  int selected, int total, const char *message) {
+  if (!g_bottom_cache) return;
+  uint8_t *fb = g_bottom_cache;
+  FillRect(fb, 0, 0, 320, 240, kBg);
+  DrawTextCentered(fb, 160, 10, "SM 3DS NATIVE", 2, kWhite);
+  DrawTextCentered(fb, 160, 33, "SELECT ROM", 1, kDim);
+  Panel(fb, 9, 49, 302, 153);
+  if (!total) {
+    DrawTextCentered(fb, 160, 93, "NO ROM FOUND", 2, kAccent);
+  } else {
+    for (int i = 0; i < row_count && rows[i]; i++) {
+      int y = 55 + i * 18;
+      if (i == selected) {
+        FillRect(fb, 14, y - 2, 292, 17, kBorder);
+        StrokeRect(fb, 14, y - 2, 292, 17, 1, kAccent);
+      }
+      char short_name[43];
+      snprintf(short_name, sizeof(short_name), "%s", rows[i]);
+      DrawText(fb, 20, y + 2, short_name, 1, i == selected ? kWhite : kDim);
+    }
+  }
+  DrawTextCentered(fb, 160, 211, message, 1, kWhite);
+  if (g_notice[0] && osGetTime() < g_notice_until_ms) {
+    FillRect(fb, 15, 204, 290, 20, kPanel);
+    StrokeRect(fb, 15, 204, 290, 20, 1, kAccent);
+    DrawTextCentered(fb, 160, 210, g_notice, 1, kWhite);
+  }
+  g_bottom_dirty = true;
+}
+
+void BottomScreen_LoadSettings(const char *path) {
+  g_settings_path[0] = 0;
+  if (!path || strlen(path) >= sizeof(g_settings_path)) return;
+  strcpy(g_settings_path, path);
+  FILE *f = fopen(path, "r");
+  if (!f) { BottomScreen_SaveSettings(); return; }
+  char line[96], key[64];
+  int value;
+  while (fgets(line, sizeof(line), f)) {
+    if (sscanf(line, "%63[^=]=%d", key, &value) != 2) continue;
+    if (strcmp(key, "widescreen") == 0) g_widescreen = value != 0;
+    else if (strcmp(key, "hide_main_hud") == 0) g_hide_main_hud = value != 0;
+    else if (strcmp(key, "status_map") == 0) g_status_bar_visible[0] = value != 0;
+    else if (strcmp(key, "status_items") == 0) g_status_bar_visible[1] = value != 0;
+    else if (strcmp(key, "status_setup") == 0) g_status_bar_visible[2] = value != 0;
+    else if (strcmp(key, "room_zoom") == 0 && value >= 0 && value <= 3) g_room_zoom = value;
+    else if (strcmp(key, "world_zoom") == 0 && value >= 0 && value <= kWorldZoomMax) g_world_zoom = value;
+    else if (strcmp(key, "world_labels") == 0) g_world_labels = value != 0;
+  }
+  fclose(f);
+  g_bottom_dirty = true;
+}
+
+bool BottomScreen_SaveSettings(void) {
+  if (!g_settings_path[0]) return false;
+  char temporary[sizeof(g_settings_path) + 5];
+  char backup[sizeof(g_settings_path) + 5];
+  snprintf(temporary, sizeof(temporary), "%s.tmp", g_settings_path);
+  snprintf(backup, sizeof(backup), "%s.bak", g_settings_path);
+  FILE *f = fopen(temporary, "w");
+  if (!f) return false;
+  int written = fprintf(f, "widescreen=%d\nhide_main_hud=%d\nstatus_map=%d\n"
+                           "status_items=%d\nstatus_setup=%d\nroom_zoom=%d\nworld_zoom=%d\n"
+                           "world_labels=%d\n",
+                        g_widescreen, g_hide_main_hud, g_status_bar_visible[0],
+                        g_status_bar_visible[1], g_status_bar_visible[2],
+                        g_room_zoom, g_world_zoom, g_world_labels);
+  bool okay = written > 0 && fflush(f) == 0;
+  if (fclose(f) != 0) okay = false;
+  if (!okay) { remove(temporary); return false; }
+  if (rename(temporary, g_settings_path) != 0) {
+    remove(backup);
+    if (rename(g_settings_path, backup) != 0 ||
+        rename(temporary, g_settings_path) != 0) {
+      rename(backup, g_settings_path);
+      remove(temporary);
+      return false;
+    }
+  }
+  return true;
+}
+
+void BottomScreen_ShowNotice(const char *message, uint64_t until_ms) {
+  snprintf(g_notice, sizeof(g_notice), "%s", message ? message : "");
+  g_notice_until_ms = until_ms;
+  g_bottom_dirty = true;
+}
+
 bool BottomScreen_Init(void) {
   g_bottom_cache = linearMemAlign(
       kBottomTextureWidth * kBottomTextureHeight * 4, 0x80);
@@ -932,6 +1118,11 @@ bool BottomScreen_Draw(void) {
       DrawSetupTab(g_bottom_cache, status_bar ? 44 : 3);
     }
     DrawTabs(g_bottom_cache);
+  }
+  if (g_notice[0] && osGetTime() < g_notice_until_ms) {
+    FillRect(g_bottom_cache, 10, 187, 300, 17, kPanel);
+    StrokeRect(g_bottom_cache, 10, 187, 300, 17, 1, kAccent);
+    DrawTextCentered(g_bottom_cache, 160, 192, g_notice, 1, kWhite);
   }
   return true;
 }
@@ -980,6 +1171,7 @@ static void HandleStatusTouch(int x) {
 void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
   int x = (int)(normalized_x * 320.0f);
   int y = (int)(normalized_y * 240.0f);
+  g_world_touch_active = false;
   g_touch_down_ms = osGetTime();
   g_touch_down_x = x;
   g_touch_down_y = y;
@@ -1001,17 +1193,40 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
     return;
   }
 
+  if (g_bottom_tab == kBottomTab_Map && g_world_view &&
+      x >= 7 && x < 313 && y >= g_world_map_top + 2 && y < 178) {
+    if (y >= g_world_map_top + 6 && y < g_world_map_top + 26) {
+      if (x >= 251 && x < 276) {
+        FocusWorldOnSamus();
+        g_bottom_dirty = true;
+        return;
+      }
+      if (x >= 280 && x < 305) {
+        g_world_labels = !g_world_labels;
+        g_bottom_dirty = true;
+        BottomScreen_SaveSettings();
+        return;
+      }
+    }
+    g_world_touch_active = true;
+    g_world_touch_moved = false;
+    g_world_last_touch_x = x;
+    g_world_last_touch_y = y;
+    return;
+  }
+
   if (g_bottom_tab == kBottomTab_Map && y >= 182 && y < 208) {
     if (x < 107) {
       g_world_view = !g_world_view;
     } else if (x < 213) {
-      if (g_world_view) { if (g_world_zoom > 0) g_world_zoom--; }
+      if (g_world_view) ZoomWorldMap(-1);
       else if (g_room_zoom > 0) g_room_zoom--;
     } else {
-      if (g_world_view) { if (g_world_zoom < 2) g_world_zoom++; }
+      if (g_world_view) ZoomWorldMap(1);
       else if (g_room_zoom < 3) g_room_zoom++;
     }
     g_bottom_dirty = true;
+    BottomScreen_SaveSettings();
     return;
   }
 
@@ -1042,6 +1257,7 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
         } else {
           g_clear_markers_armed = true;
         }
+        if (row < 5) BottomScreen_SaveSettings();
       }
     }
     g_bottom_dirty = true;
@@ -1050,9 +1266,36 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
 
 }
 
+void BottomScreen_HandleTouchMotion(float normalized_x, float normalized_y) {
+  if (!g_world_touch_active) return;
+  int x = (int)(normalized_x * 320.0f);
+  int y = (int)(normalized_y * 240.0f);
+  int down_dx = x - g_touch_down_x, down_dy = y - g_touch_down_y;
+  if (!g_world_touch_moved && down_dx * down_dx + down_dy * down_dy < 16)
+    return;
+  g_world_touch_moved = true;
+  g_world_pan_x += x - g_world_last_touch_x;
+  g_world_pan_y += y - g_world_last_touch_y;
+  g_world_last_touch_x = x;
+  g_world_last_touch_y = y;
+  ClampWorldPan();
+  g_bottom_dirty = true;
+}
+
 void BottomScreen_HandleTouchUp(float normalized_x, float normalized_y) {
   int x = (int)(normalized_x * 320.0f);
   int y = (int)(normalized_y * 240.0f);
+  if (g_world_touch_active) {
+    g_world_touch_active = false;
+    if (!g_world_touch_moved && x >= 7 && x < 313 &&
+        y >= g_world_map_top + 2 && y < 178) {
+      g_world_pan_x += 160 - x;
+      g_world_pan_y += (g_world_map_top + kWorldMapBottom) / 2 - y;
+      ClampWorldPan();
+      g_bottom_dirty = true;
+    }
+    return;
+  }
   if (!IsLiveGameplay() || g_bottom_tab != kBottomTab_Map || g_world_view ||
       osGetTime() - g_touch_down_ms < 550 ||
       (x - g_touch_down_x) * (x - g_touch_down_x) +
