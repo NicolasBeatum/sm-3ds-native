@@ -26,7 +26,9 @@ Highlights:
   unsupported PPU state or mid-frame changes.
 - MetroidArch-compatible lower screen with ROM-decoded room/world maps and
   ammo icons, Redux suit art, equipment percentage, touch ammo/zoom controls,
-  map markers and functional per-tab setup options.
+  map markers and functional per-tab setup options. SETUP opens on BUILD INFO,
+  showing the compiled `BUILD_FLAGS`, port-specific defines, `FULL_NATIVE` and
+  `LTO`; its PORT UI page contains the companion-screen controls.
 - Correct HDMA rain, fog, windows and colour math without scanline filtering.
 - Save files at `saves/sm.srm`, with a backup created before replacement.
 - Fixed room BTS loading on ARM, including the Landing Site terrain and blue

@@ -10,6 +10,15 @@
 #include "src/sm_rtl.h"
 #include "redux_suit_data.h"
 
+#ifndef SM3DS_BUILD_FLAGS
+#define SM3DS_BUILD_FLAGS ""
+#endif
+
+#ifndef SM3DS_BUILD_LTO
+#define SM3DS_BUILD_LTO 0
+#endif
+
+
 /* Native 320x240 companion screen inspired by MetroidArch's dual-screen UI.
  * The palette, 5x7 font, tabs and status layout deliberately track that UI,
  * while all values come straight from sm-3ds' live decompiled game state. */
@@ -55,6 +64,7 @@ static int g_world_zoom;
 static bool g_hide_main_hud;
 static bool g_widescreen = true;
 static bool g_clear_markers_armed;
+static bool g_setup_build_info = true;
 typedef struct MapMarker { uint8_t area, x, y; } MapMarker;
 static MapMarker g_markers[16];
 static int g_marker_count;
@@ -230,6 +240,8 @@ static const uint8_t *Glyph(char c) {
   static const uint8_t COLON[7] = {0,4,4,0,4,4,0};
   static const uint8_t PERCENT[7] = {17,18,2,4,8,9,17};
   static const uint8_t PLUS[7] = {0,4,4,31,4,4,0};
+  static const uint8_t UNDERSCORE[7] = {0,0,0,0,0,0,31};
+  static const uint8_t EQUALS[7] = {0,0,31,0,31,0,0};
   static const uint8_t EMPTY[7] = {0,0,0,0,0,0,0};
   static const uint8_t *letters[26] = {A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z};
   static const uint8_t *numbers[10] = {N0,N1,N2,N3,N4,N5,N6,N7,N8,N9};
@@ -243,6 +255,8 @@ static const uint8_t *Glyph(char c) {
     case ':': return COLON;
     case '%': return PERCENT;
     case '+': return PLUS;
+    case '_': return UNDERSCORE;
+    case '=': return EQUALS;
     default: return EMPTY;
   }
 }
@@ -744,10 +758,100 @@ static void DrawSetupRow(uint8_t *fb, int y, const char *label, const char *valu
              enabled ? kAccent : kDim);
 }
 
+static void DrawBuildFlags(uint8_t *fb, int y) {
+  const char *flags = SM3DS_BUILD_FLAGS;
+  if (!*flags) {
+    DrawText(fb, 20, y, "NONE", 1, kDim);
+    return;
+  }
+
+  for (int line = 0; line < 4 && *flags; line++) {
+    while (*flags == ' ') flags++;
+    if (!*flags) break;
+
+    int count = 0;
+    while (flags[count] && count < 47) count++;
+    if (flags[count]) {
+      int word_end = count;
+      while (word_end > 0 && flags[word_end] != ' ') word_end--;
+      if (word_end > 0) count = word_end;
+    }
+
+    char text[48];
+    memcpy(text, flags, count);
+    text[count] = '\0';
+    if (line == 3 && flags[count]) {
+      int dots = count > 44 ? 44 : count;
+      memcpy(text + dots, "...", 4);
+    }
+    DrawText(fb, 20, y + line * 13, text, 1, kWhite);
+    flags += count;
+  }
+}
+
+static void DrawBuildSetting(uint8_t *fb, int x, int y, const char *name,
+                             bool enabled) {
+  const char *value = enabled ? "ON" : "OFF";
+  DrawText(fb, x, y, name, 1, kWhite);
+  DrawText(fb, x + 135 - TextWidth(value, 1), y, value, 1,
+           enabled ? kAccent : kDim);
+}
+
 static void DrawSetupTab(uint8_t *fb, int top) {
   Panel(fb, 5, top, 310, 204);
-  DrawTextCentered(fb, 160, top + 28, "STATUS BAR: MAP ONLY", 1, kDim);
-  int y = top + 51;
+  int nav_y = top + 9;
+  FillRect(fb, 13, nav_y, 142, 24, g_setup_build_info ? kBorder : kSlot);
+  StrokeRect(fb, 13, nav_y, 142, 24, 2,
+             g_setup_build_info ? kAccent : kBorder);
+  DrawTextCentered(fb, 84, nav_y + 9, "BUILD INFO", 1, kWhite);
+  FillRect(fb, 165, nav_y, 142, 24, g_setup_build_info ? kSlot : kBorder);
+  StrokeRect(fb, 165, nav_y, 142, 24, 2,
+             g_setup_build_info ? kBorder : kAccent);
+  DrawTextCentered(fb, 236, nav_y + 9, "PORT UI", 1, kWhite);
+
+  if (g_setup_build_info) {
+    FillRect(fb, 13, top + 40, 294, 75, kSlot);
+    StrokeRect(fb, 13, top + 40, 294, 75, 2, kBorder);
+    DrawText(fb, 20, top + 47, "BUILD_FLAGS", 1, kAccent);
+    DrawBuildFlags(fb, top + 60);
+    DrawText(fb, 20, top + 118, "PORT DEFINES", 1, kAccent);
+#ifdef SM3DS_OLD3DS
+    DrawBuildSetting(fb, 18, top + 132, "OLD3DS", true);
+#else
+    DrawBuildSetting(fb, 18, top + 132, "OLD3DS", false);
+#endif
+#ifdef SM3DS_PROFILE
+    DrawBuildSetting(fb, 166, top + 132, "PROFILE", true);
+#else
+    DrawBuildSetting(fb, 166, top + 132, "PROFILE", false);
+#endif
+#ifdef SM3DS_DOOR_TRACE
+    DrawBuildSetting(fb, 18, top + 145, "DOOR_TRACE", true);
+#else
+    DrawBuildSetting(fb, 18, top + 145, "DOOR_TRACE", false);
+#endif
+#ifdef SM3DS_DISABLE_PICA
+    DrawBuildSetting(fb, 166, top + 145, "DISABLE_PICA", true);
+#else
+    DrawBuildSetting(fb, 166, top + 145, "DISABLE_PICA", false);
+#endif
+#ifdef SM3DS_EMULATED_CPU
+    DrawBuildSetting(fb, 18, top + 158, "EMULATED_CPU", true);
+#else
+    DrawBuildSetting(fb, 18, top + 158, "EMULATED_CPU", false);
+#endif
+    DrawText(fb, 20, top + 173, "BUILD VARIABLES", 1, kAccent);
+#ifdef FULL_NATIVE
+    DrawBuildSetting(fb, 18, top + 189, "FULL_NATIVE", true);
+#else
+    DrawBuildSetting(fb, 18, top + 189, "FULL_NATIVE", false);
+#endif
+    DrawBuildSetting(fb, 166, top + 189, "LTO", SM3DS_BUILD_LTO != 0);
+    return;
+  }
+
+  DrawTextCentered(fb, 160, top + 42, "STATUS BAR: MAP ONLY", 1, kDim);
+  int y = top + 57;
   DrawSetupRow(fb, y, "WIDESCREEN", g_widescreen ? "ON" : "OFF", g_widescreen);
   DrawSetupRow(fb, y + 34, "HIDE MAIN HUD",
                g_hide_main_hud ? "ON" : "OFF", g_hide_main_hud);
@@ -873,6 +977,14 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
   }
 
   if (g_bottom_tab == kBottomTab_Setup) {
+    if (y >= 12 && y < 36 &&
+        ((x >= 13 && x < 155) || (x >= 165 && x < 307))) {
+      g_setup_build_info = x < 155;
+      g_bottom_dirty = true;
+      return;
+    }
+    if (g_setup_build_info)
+      return;
     if (y >= 54 && y < 78) {
       g_widescreen = !g_widescreen;
     } else if (y >= 88 && y < 112) {
