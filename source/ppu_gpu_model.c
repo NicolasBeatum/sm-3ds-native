@@ -266,6 +266,28 @@ static bool HasLayer(const PicaFrame *f, unsigned sub, unsigned mask) {
   return false;
 }
 
+static bool WideRoomTile(const PicaFrame *f, unsigned layer, int x, int y,
+                         uint16_t *tile, unsigned *tileX, unsigned *tileY) {
+  const PicaWideRoomLayer *room = &f->wideRoom[layer];
+  if (!room->blocks || !f->wideTileTable || !f->wideRoomWidth ||
+      !f->wideRoomHeight) return false;
+  int worldX = room->cameraX + x - (int)f->originX;
+  int worldY = room->cameraY + y;
+  if (worldX < 0 || worldY < 0 ||
+      worldX / 16 >= (int)f->wideRoomWidth ||
+      worldY / 16 >= (int)f->wideRoomHeight) return false;
+  unsigned block = room->blocks[(worldY / 16) * f->wideRoomWidth + worldX / 16];
+  unsigned quadrant = ((worldY & 8) ? 2 : 0) | ((worldX & 8) ? 1 : 0);
+  if (block & 0x400) quadrant ^= 1;
+  if (block & 0x800) quadrant ^= 2;
+  *tile = f->wideTileTable[(block & 0x3ff) * 4 + quadrant] ^
+      ((block & 0x400) ? 0x4000 : 0) ^
+      ((block & 0x800) ? 0x8000 : 0);
+  *tileX = worldX & 7;
+  *tileY = worldY & 7;
+  return true;
+}
+
 static bool Backgrounds(PicaFrame *f, unsigned sub) {
   unsigned group = sub * 2;
   for (unsigned y = 0; y < f->height;) {
@@ -295,7 +317,26 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
       unsigned wy = (y + 1 + bg->vScroll) & (bg->tilemapHigher ? 511 : 255);
       unsigned h = EqualRun(f, y, offsetof(PicaLine, bg) + layer * sizeof(BgLayer),
                             sizeof(BgLayer));
+      for (unsigned run = 1; run < h; run++) {
+        const PicaLine *next = &f->lines[y + run];
+        if (next->screenEnabled[sub] != p->screenEnabled[sub] ||
+            next->screenWindowed[sub] != p->screenWindowed[sub] ||
+            next->forcedBlank != p->forcedBlank ||
+            next->addSubscreen != p->addSubscreen ||
+            next->windowsel != p->windowsel ||
+            next->window1left != p->window1left ||
+            next->window1right != p->window1right ||
+            next->window2left != p->window2left ||
+            next->window2right != p->window2right ||
+            memcmp(next->windowLogic, p->windowLogic,
+                   sizeof(p->windowLogic))) {
+          h = run;
+          break;
+        }
+      }
       h = Min(h, 8 - (wy & 7));
+      if (layer < 2 && f->wideRoom[layer].blocks)
+        h = Min(h, 8 - ((f->wideRoom[layer].cameraY + (int)y + 1) & 7));
       if (p->forcedBlank || !(p->screenEnabled[sub] & (1u << layer)) ||
           (sub && !p->addSubscreen)) { y += h; continue; }
       WindowSpans win;
@@ -304,6 +345,10 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
         spanLeft = f->worldLeft;
         spanRight = f->worldRight;
       } else if (layer == 1 && f->boundBg2 &&
+                 f->width == kWideWidth && !IsHudLine(f, y)) {
+        spanLeft = f->bg2Left;
+        spanRight = f->bg2Right;
+      } else if (layer == 2 && f->boundBg2 &&
                  f->width == kWideWidth && !IsHudLine(f, y)) {
         spanLeft = f->bg2Left;
         spanRight = f->bg2Right;
@@ -318,21 +363,35 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
         if (win.bits & (1u << i)) continue;
         int x = win.edges[i], end = win.edges[i + 1];
         while (x < end) {
+          bool side = f->width == kWideWidth && layer < 2 &&
+              !IsHudLine(f, y) && f->wideRoom[layer].blocks &&
+              (x < (int)f->originX || x >= (int)f->originX + kSnesWidth);
           unsigned wx = (x - (int)f->originX + bg->hScroll) &
                         (bg->tilemapWider ? 511 : 255);
           unsigned map = (bg->tilemapAdr + ((wy >> 3) & 31) * 32 +
                           ((wx >> 3) & 31) + (wx >= 256 ? 0x400 : 0) +
                           (wy >= 256 ? (bg->tilemapWider ? 0x800 : 0x400) : 0)) & 0x7fff;
-          unsigned tile = f->memory->vram[map];
+          uint16_t tile = f->memory->vram[map];
+          unsigned pixelX = wx & 7, pixelY = wy & 7;
+          unsigned w = Min(8 - (wx & 7), end - x);
+          if (x < (int)f->originX)
+            w = Min(w, (int)f->originX - x);
+          else if (x < (int)f->originX + kSnesWidth)
+            w = Min(w, (int)f->originX + kSnesWidth - x);
+          if (side && !WideRoomTile(f, layer, x, y + 1, &tile,
+                                    &pixelX, &pixelY)) {
+            x += w;
+            continue;
+          }
           unsigned bpp = layer == 2 ? 2 : 4;
           int slot = Tile(f, (bg->tileAdr + (tile & 1023) * (bpp == 4 ? 16 : 8)) & 0x7fff,
                           (tile & 0x1c00) >> (bpp == 4 ? 6 : 8), bpp);
           if (slot == -1) return false;
-          unsigned w = Min(8 - (wx & 7), end - x);
+          if (side) w = Min(w, 8 - pixelX);
           unsigned z = layer == 0 ? ((tile & 0x2000) ? 0xc000 : 0x8000) :
                        layer == 1 ? ((tile & 0x2000) ? 0xb100 : 0x7100) :
                        ((tile & 0x2000) ? (p->bg3priority ? 0xf200 : 0x5200) : 0x1200);
-          if (slot >= 0 && !TileQuad(f, group, slot, x, y, w, h, wx & 7, wy & 7,
+          if (slot >= 0 && !TileQuad(f, group, slot, x, y, w, h, pixelX, pixelY,
                                      tile & 0x4000, tile & 0x8000, z,
                                      sub ? 255 : ((p->mathEnabled & (1u << layer)) ? 255 : 127)))
             return false;

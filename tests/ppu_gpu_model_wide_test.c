@@ -250,6 +250,54 @@ int main(void) {
   Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
   AssertCenter(normal, normalAtlas, wide, wideAtlas, kSnesHeight);
 
+  /* Virtual room tiles occupy only the side bands. A 256-pixel SNES tilemap
+   * must not be widened by writing into the next background's VRAM. */
+  uint16_t *roomBlocks = calloc(32 * 16, sizeof(*roomBlocks));
+  uint16_t *roomTiles = calloc(1024 * 4, sizeof(*roomTiles));
+  assert(roomBlocks && roomTiles);
+  for (unsigned i = 0; i < 32 * 16; i++) roomBlocks[i] = 1;
+  for (unsigned i = 0; i < 4; i++) roomTiles[4 + i] = 6;
+  for (unsigned i = 0; i < 16; i++) {
+    ppu->vram[5 * 16 + i] = 0xffff;
+    ppu->vram[6 * 16 + i] = 0xffff;
+  }
+  for (unsigned i = 0; i < 1024; i++) ppu->vram[0x1000 + i] = 5;
+  for (unsigned y = 0; y < 40; y++) {
+    memset(&lines[y], 0, sizeof(lines[y]));
+    lines[y].mode = 1;
+    lines[y].brightness = 15;
+    lines[y].screenEnabled[0] = 1;
+    lines[y].bg[0].tilemapAdr = 0x1000;
+  }
+  frame.height = 40;
+  frame.wideRoom[0] = (PicaWideRoomLayer){roomBlocks, kWideExtraX, 0};
+  frame.wideTileTable = roomTiles;
+  frame.wideRoomWidth = 32;
+  frame.wideRoomHeight = 16;
+  Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
+  unsigned sidePixel = Sample(wide, wideAtlas, 0, 33);
+  unsigned centerPixel = Sample(wide, wideAtlas, kWideExtraX + 40, 33);
+  assert(sidePixel != 0 && centerPixel != 0);
+  assert(sidePixel != centerPixel);
+  assert(Sample(wide, wideAtlas, kWideWidth - 8, 33) == sidePixel);
+
+  /* Gameplay BG3 must stop at the physical room edge as well. Otherwise
+   * its wrapped 256-pixel tilemap repeats past a doorway. */
+  for (unsigned y = 32; y < 40; y++) {
+    lines[y].screenEnabled[0] = 4;
+    lines[y].bg[2].tilemapAdr = 0x2000;
+  }
+  for (unsigned i = 0; i < 1024; i++) ppu->vram[0x2000 + i] = 5;
+  frame.boundBg2 = true;
+  frame.bg2Left = kWideExtraX;
+  frame.bg2Right = kWideExtraX + kSnesWidth;
+  Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
+  assert(Sample(wide, wideAtlas, 0, 33) == 0);
+  assert(Sample(wide, wideAtlas, kWideExtraX + 40, 33) != 0);
+  assert(Sample(wide, wideAtlas, kWideWidth - 1, 33) == 0);
+  free(roomTiles);
+  free(roomBlocks);
+
   free(wide);
   free(normal);
   free(widePixels);

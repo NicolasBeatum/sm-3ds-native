@@ -366,8 +366,22 @@ bool PpuGpuFinish(Ppu *p) {
                      .originX=g_wide_config.origin_x,
                      .hudEndY=g_wide_config.hud_end_y,
                      .worldLeft=0,.worldRight=g.width,
+                     .wideRoom={{level_data, (int16_t)layer1_x_pos,
+                                 (int16_t)layer1_y_pos},
+                                {(const uint16_t *)(g_ram + 0x19602),
+                                 (int16_t)layer2_x_pos,
+                                 (int16_t)layer2_y_pos}},
+                     .wideTileTable=(const uint16_t *)(g_ram + 0xA000),
+                     .wideRoomWidth=room_width_in_blocks,
+                     .wideRoomHeight=room_height_in_blocks,
                      .emit=Emit};
   bool ok = !p->gpuInvalidWrite && g.captured == g.height;
+  uint32_t roomBlocks =
+      (uint32_t)room_width_in_blocks * room_height_in_blocks;
+  if (roomBlocks > 0x9600 / sizeof(uint16_t))
+    frame.wideRoom[0].blocks = NULL;
+  if (roomBlocks > (sizeof(g_ram) - 0x19602) / sizeof(uint16_t))
+    frame.wideRoom[1].blocks = NULL;
   if (ok) g.hudLines = PicaHudLineCount(&frame);
   if (ok && g.width == kWideWidth) {
     WideWorldSpan span = WideBounds_Compute(
@@ -376,13 +390,10 @@ bool PpuGpuFinish(Ppu *p) {
         room_height_in_scrolls, scrolls);
     frame.worldLeft = span.left;
     frame.worldRight = span.right;
-    /* BG2 may show behind blocked scroll screens, but not beyond the room's
-     * physical edges. Outside data repeats edge tiles such as spike walls. */
-    WideWorldSpan bg2Span = WideBounds_Compute(
-        (int16_t)layer1_x_pos, (int16_t)layer1_y_pos,
-        room_width_in_blocks, 0, 0, NULL);
-    frame.bg2Left = bg2Span.left;
-    frame.bg2Right = bg2Span.right;
+    /* A locked scroll screen ends the visible room for every background.
+     * Letting BG2 or BG3 draw past it repeats scenery behind closed doors. */
+    frame.bg2Left = span.left;
+    frame.bg2Right = span.right;
     frame.boundBg2 = room_width_in_blocks != 0;
   }
   if (ok) ok = PicaBuildFrame(&frame);
