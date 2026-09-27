@@ -62,6 +62,7 @@ static bool g_gpu_presenter;
 
 static uint8 g_paused, g_turbo, g_replay_turbo = true;
 static uint8 g_gamepad_buttons;
+static int16_t g_circle_axis[2];
 static int g_input1_state;
 static bool g_display_perf;
 static int g_curr_fps;
@@ -311,6 +312,18 @@ static void HandleCommand(uint32 j, bool pressed) {
   // }
 }
 
+static void HandleCirclePadAxis(unsigned axis, int16_t value) {
+  if (axis >= 2) return;
+  g_circle_axis[axis] = value;
+  const int deadzone = 8000;
+  uint8 buttons = 0;
+  if (g_circle_axis[0] < -deadzone) buttons |= 1 << 6;
+  if (g_circle_axis[0] > deadzone) buttons |= 1 << 7;
+  if (g_circle_axis[1] < -deadzone) buttons |= 1 << 4;
+  if (g_circle_axis[1] > deadzone) buttons |= 1 << 5;
+  g_gamepad_buttons = buttons;
+}
+
 enum {
   kDefaultFullscreen = 0,
   kMaxWindowScale = 10,
@@ -478,6 +491,9 @@ int main(int argc, char** argv) {
       case SDL_JOYBUTTONUP:
         HandleCommand(event.jbutton.button, false);
         break;
+      case SDL_JOYAXISMOTION:
+        HandleCirclePadAxis(event.jaxis.axis, event.jaxis.value);
+        break;
       case SDL_FINGERDOWN:
         BottomScreen_HandleTouch(event.tfinger.x, event.tfinger.y);
         break;
@@ -501,7 +517,8 @@ int main(int argc, char** argv) {
       continue;
     }
 
-    int inputs = g_input1_state | g_gamepad_buttons;
+    int inputs = g_input1_state |
+        ((g_input1_state & 0xf0) ? 0 : g_gamepad_buttons);
     WideConfig frameViewport = WideConfig_Create(
         BottomScreen_WidescreenEnabled() &&
         game_state >= kGameState_7_MainGameplayFadeIn &&

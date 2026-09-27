@@ -511,40 +511,50 @@ static bool Objects(PicaFrame *f, unsigned sub) {
 }
 
 static bool Compose(PicaFrame *f) {
-  /* Each TEV configuration is one contiguous vertex range. */
+  WindowSpans windows[PICA_MAX_LINES];
+  uint8_t spanFlags[PICA_MAX_LINES][5];
+  for (unsigned y = 0; y < f->height;) {
+    const PicaLine *p = &f->lines[y];
+    unsigned h = 1;
+    while (y + h < f->height) {
+      const PicaLine *q = &f->lines[y + h];
+      if (p->clipMode != q->clipMode || p->preventMathMode != q->preventMathMode ||
+          p->subtractColor != q->subtractColor || p->halfColor != q->halfColor ||
+          p->forcedBlank != q->forcedBlank || p->windowsel != q->windowsel ||
+          memcmp(p->windowLogic, q->windowLogic, sizeof(p->windowLogic)) ||
+          p->window1left != q->window1left || p->window1right != q->window1right ||
+          p->window2left != q->window2left || p->window2right != q->window2right) break;
+      h++;
+    }
+    f->bandEnd[y] = y + h;
+    WindowSpans *win = &windows[y];
+    Windows(f, p, 5, true, 0, f->width, win);
+    for (unsigned i = 0; i < win->nr; i++) {
+      bool inside = (win->bits & (1u << i)) != 0;
+      bool clip = p->clipMode == 3 || (p->clipMode == 2 && inside) ||
+                  (p->clipMode == 1 && !inside);
+      bool prevent = p->preventMathMode == 3 ||
+                     (p->preventMathMode == 2 && inside) ||
+                     (p->preventMathMode == 1 && !inside);
+      unsigned flags = (p->subtractColor ? 1 : 0) | (p->halfColor ? 2 : 0) |
+                       (clip ? 4 : 0) | (prevent ? 8 : 0);
+      spanFlags[y][i] = p->forcedBlank ? 12 : flags;
+    }
+    y += h;
+  }
+
+  /* Each TEV configuration is one contiguous vertex range. HDMA can change
+   * state every scanline, so compute its spans once before grouping vertices. */
   for (unsigned wanted = 0; wanted < 16; wanted++) {
-    for (unsigned y = 0; y < f->height;) {
-      const PicaLine *p = &f->lines[y];
-      unsigned h = 1;
-      while (y + h < f->height) {
-        const PicaLine *q = &f->lines[y + h];
-        if (p->clipMode != q->clipMode || p->preventMathMode != q->preventMathMode ||
-            p->subtractColor != q->subtractColor || p->halfColor != q->halfColor ||
-            p->forcedBlank != q->forcedBlank || p->windowsel != q->windowsel ||
-            memcmp(p->windowLogic, q->windowLogic, sizeof(p->windowLogic)) ||
-            p->window1left != q->window1left || p->window1right != q->window1right ||
-            p->window2left != q->window2left || p->window2right != q->window2right) break;
-        h++;
+    for (unsigned y = 0; y < f->height; y = f->bandEnd[y]) {
+      const WindowSpans *win = &windows[y];
+      for (unsigned i = 0; i < win->nr; i++) {
+        if (spanFlags[y][i] != wanted) continue;
+        PicaQuad quad = {win->edges[i],(int)y,win->edges[i+1],f->bandEnd[y],
+                         win->edges[i]*8,4096-(int)y*16,win->edges[i+1]*8,
+                         4096-(int)f->bandEnd[y]*16,1,255,255,255,255};
+        if (!Emit(f, 4 + wanted, quad)) return false;
       }
-      WindowSpans win;
-      Windows(f, p, 5, true, 0, f->width, &win);
-      for (unsigned i = 0; i < win.nr; i++) {
-        bool inside = (win.bits & (1u << i)) != 0;
-        bool clip = p->clipMode == 3 || (p->clipMode == 2 && inside) ||
-                    (p->clipMode == 1 && !inside);
-        bool prevent = p->preventMathMode == 3 ||
-                       (p->preventMathMode == 2 && inside) ||
-                       (p->preventMathMode == 1 && !inside);
-        unsigned flags = (p->subtractColor ? 1 : 0) | (p->halfColor ? 2 : 0) |
-                         (clip ? 4 : 0) | (prevent ? 8 : 0);
-        if (p->forcedBlank) flags = 12;
-        if (flags != wanted) continue;
-        PicaQuad quad = {win.edges[i],(int)y,win.edges[i+1],(int)(y+h),
-                         win.edges[i]*8,4096-(int)y*16,win.edges[i+1]*8,
-                         4096-(int)(y+h)*16,1,255,255,255,255};
-        if (!Emit(f, 4 + flags, quad)) return false;
-      }
-      y += h;
     }
   }
   return true;
