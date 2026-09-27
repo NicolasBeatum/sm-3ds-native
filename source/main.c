@@ -506,6 +506,7 @@ int main(int argc, char** argv) {
         BottomScreen_WidescreenEnabled() &&
         game_state >= kGameState_7_MainGameplayFadeIn &&
         game_state <= kGameState_11_LoadingNextRoom);
+    RtlSetSpriteViewportMargin(frameViewport.origin_x);
     PpuGpuSetWideConfig(frameViewport);
     uint8 is_replay = RtlRunFrame(inputs);
 
