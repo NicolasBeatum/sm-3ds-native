@@ -376,6 +376,14 @@ bool PpuGpuFinish(Ppu *p) {
         room_height_in_scrolls, scrolls);
     frame.worldLeft = span.left;
     frame.worldRight = span.right;
+    /* BG2 may show behind blocked scroll screens, but not beyond the room's
+     * physical edges. Outside data repeats edge tiles such as spike walls. */
+    WideWorldSpan bg2Span = WideBounds_Compute(
+        (int16_t)layer1_x_pos, (int16_t)layer1_y_pos,
+        room_width_in_blocks, 0, 0, NULL);
+    frame.bg2Left = bg2Span.left;
+    frame.bg2Right = bg2Span.right;
+    frame.boundBg2 = room_width_in_blocks != 0;
   }
   if (ok) ok = PicaBuildFrame(&frame);
   if (!ok) {

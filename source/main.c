@@ -504,7 +504,8 @@ int main(int argc, char** argv) {
     int inputs = g_input1_state | g_gamepad_buttons;
     WideConfig frameViewport = WideConfig_Create(
         BottomScreen_WidescreenEnabled() &&
-        game_state == kGameState_8_MainGameplay);
+        game_state >= kGameState_7_MainGameplayFadeIn &&
+        game_state <= kGameState_11_LoadingNextRoom);
     PpuGpuSetWideConfig(frameViewport);
     uint8 is_replay = RtlRunFrame(inputs);
 

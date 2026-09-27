@@ -66,6 +66,8 @@ typedef struct PicaFrame {
   unsigned width, height;
   unsigned originX, hudEndY;
   int worldLeft, worldRight;
+  int bg2Left, bg2Right;
+  bool boundBg2;
   PicaEmit *emit;
   void *context;
   const char *failure;

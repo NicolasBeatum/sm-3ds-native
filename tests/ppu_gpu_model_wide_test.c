@@ -133,6 +133,21 @@ int main(void) {
   unsigned bg2Edge = Sample(wide, wideAtlas, 0, 0);
   unsigned bg1Center = Sample(wide, wideAtlas, kWideExtraX + 20, 0);
   assert(bg2Edge != 0);
+  frame.boundBg2 = true;
+  frame.bg2Left = kWideExtraX;
+  frame.bg2Right = kWideExtraX + kSnesWidth;
+  BuildWithBounds(&frame, wideAtlas, widePixels, wide, kWideWidth,
+                  kWideExtraX, kWideExtraX,
+                  kWideExtraX + kSnesWidth);
+  assert(Sample(wide, wideAtlas, 0, 0) == 0);
+  assert(Sample(wide, wideAtlas, kWideExtraX + 20, 0) == bg1Center);
+  frame.bg2Right = kWideWidth;
+  BuildWithBounds(&frame, wideAtlas, widePixels, wide, kWideWidth,
+                  kWideExtraX, kWideExtraX,
+                  kWideExtraX + kSnesWidth);
+  assert(Sample(wide, wideAtlas, 0, 0) == 0);
+  assert(Sample(wide, wideAtlas, kWideWidth - 1, 0) != 0);
+  frame.boundBg2 = false;
   for (unsigned y = 0; y < kHudEndLine; y++)
     lines[y].screenEnabled[0] = 2;
   Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);

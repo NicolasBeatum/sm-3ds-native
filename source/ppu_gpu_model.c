@@ -303,6 +303,10 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
       if (layer == 0 && f->width == kWideWidth && !IsHudLine(f, y)) {
         spanLeft = f->worldLeft;
         spanRight = f->worldRight;
+      } else if (layer == 1 && f->boundBg2 &&
+                 f->width == kWideWidth && !IsHudLine(f, y)) {
+        spanLeft = f->bg2Left;
+        spanRight = f->bg2Right;
       } else if (layer == 2 && IsHudLine(f, y)) {
         spanLeft = f->originX;
         spanRight = spanLeft + kSnesWidth;
@@ -494,7 +498,9 @@ bool PicaBuildFrame(PicaFrame *f) {
         (f->width == kWideWidth && f->originX == kWideExtraX)) ||
       !f->height || f->height > PICA_MAX_LINES ||
       f->hudEndY > f->height || f->worldLeft < 0 ||
-      f->worldRight > (int)f->width || f->worldLeft > f->worldRight) {
+      f->worldRight > (int)f->width || f->worldLeft > f->worldRight ||
+      (f->boundBg2 && (f->bg2Left < 0 || f->bg2Right > (int)f->width ||
+                       f->bg2Left > f->bg2Right))) {
     f->failure = "dimensions";
     return false;
   }

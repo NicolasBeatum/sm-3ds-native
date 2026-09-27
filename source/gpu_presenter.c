@@ -16,6 +16,12 @@ enum {
   kSourceHeight = kSnesHeight,
   kDrawWidth = 274,
   kDrawHeight = 240,
+  /* Keep the 256-pixel native view at the same physical size in both modes.
+   * The 400-pixel render is cropped equally on both sides before display. */
+  kWideVisibleSourceWidth =
+      (kWideWidth * kSnesWidth + kDrawWidth / 2) / kDrawWidth,
+  kWideCropX = (kWideWidth - kWideVisibleSourceWidth) / 2,
+  kWideHudSide = (400 - kDrawWidth) / 2,
 };
 
 static C3D_RenderTarget *g_top_target;
@@ -221,9 +227,12 @@ bool GpuPresenter_DrawTop(const uint8_t *pixels) {
       .subtex = gpu_ppu ? &g_top_gpu_subtexture : &g_top_subtexture,
   };
   if (gpu_ppu) {
-    g_top_gpu_subtexture.width = wide ? kWideWidth : kSnesWidth;
+    g_top_gpu_subtexture.width = wide ? kWideVisibleSourceWidth : kSnesWidth;
+    g_top_gpu_subtexture.left =
+        wide ? (float)kWideCropX / 512.0f : 0.0f;
     g_top_gpu_subtexture.right =
-        (float)g_top_gpu_subtexture.width / 512.0f;
+        wide ? (float)(kWideCropX + kWideVisibleSourceWidth) / 512.0f :
+               (float)kSnesWidth / 512.0f;
   }
   C2D_DrawParams params = {
       .pos = {
@@ -248,7 +257,8 @@ bool GpuPresenter_DrawTop(const uint8_t *pixels) {
     ConfigureArgbTextureEnv();
   C2D_Flush();
   unsigned hudLines = gpu_ppu ? PpuGpuHudLines() :
-      (game_state == kGameState_8_MainGameplay ? kHudEndLine : 0);
+      (game_state >= kGameState_7_MainGameplayFadeIn &&
+       game_state <= kGameState_11_LoadingNextRoom ? kHudEndLine : 0);
   const float hudHeight =
       (float)((hudLines * kDrawHeight + kSnesHeight - 1) / kSnesHeight);
   const u32 black = C2D_Color32(0, 0, 0, 255);
@@ -258,9 +268,9 @@ bool GpuPresenter_DrawTop(const uint8_t *pixels) {
                       hudHeight, black);
     C2D_Flush();
   } else if (wide && hudLines) {
-    C2D_DrawRectSolid(0.0f, 0.0f, 0.1f, kWideExtraX, hudHeight, black);
-    C2D_DrawRectSolid(kWideExtraX + kSnesWidth, 0.0f, 0.1f,
-                      kWideExtraX, hudHeight, black);
+    C2D_DrawRectSolid(0.0f, 0.0f, 0.1f, kWideHudSide, hudHeight, black);
+    C2D_DrawRectSolid(kWideHudSide + kDrawWidth, 0.0f, 0.1f,
+                      kWideHudSide, hudHeight, black);
     C2D_Flush();
   }
   return true;
