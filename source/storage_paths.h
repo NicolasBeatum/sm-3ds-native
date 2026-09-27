@@ -4,3 +4,4 @@
 #define SM3DS_SAVE_DIR SM3DS_SD_ROOT "/saves"
 #define SM3DS_DUMP_DIR SM3DS_SD_ROOT "/dump"
 #define SM3DS_SETTINGS_PATH SM3DS_SD_ROOT "/settings.cfg"
+#define SM3DS_LAUNCHER_PATH SM3DS_SD_ROOT "/launcher.cfg"

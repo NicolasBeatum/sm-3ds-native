@@ -15,5 +15,6 @@ bool BottomScreen_WidescreenEnabled(void);
 void BottomScreen_LoadSettings(const char *path);
 bool BottomScreen_SaveSettings(void);
 void BottomScreen_DrawRomSelector(const char *const *rows, int row_count,
-                                  int selected, int total, const char *message);
+                                  int selected, int total, bool native_engine,
+                                  const char *message);
 void BottomScreen_ShowNotice(const char *message, uint64_t until_ms);

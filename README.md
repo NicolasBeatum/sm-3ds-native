@@ -32,7 +32,9 @@ Highlights:
 - Correct HDMA rain, fog, windows and colour math without scanline filtering.
 - ROM selector on startup. Put `.smc` or `.sfc` files in
   `sdmc:/3ds/sm3dsnative/`. Saves are kept per ROM in `saves/`, and lower-screen
-  SETUP choices persist in `settings.cfg` in the same SD folder.
+  SETUP choices persist in `settings.cfg` in the same SD folder. Press `Y` in
+  the selector to choose the native or emulated game engine before loading;
+  this choice persists in `launcher.cfg`.
 - Hold L + R + A to write a debug report and WRAM/SRAM snapshots into
   `sdmc:/3ds/sm3dsnative/dump/`.
 - Fixed room BTS loading on ARM, including the Landing Site terrain and blue
@@ -114,6 +116,9 @@ microSD card, then choose it from the menu at launch. The folder is created
 automatically if absent. Different ROM filenames use different save files
 (`saves/<ROM filename>.srm`). Builds deliberately include no game ROM, even
 when a local `romfs/sm.smc` exists in the source checkout.
+The selector's `OLD3DS BUILD` line reports the compiled optimization; it cannot
+be changed at runtime. The emulated engine is intended for compatibility and
+will generally be slower than the native engine.
 For `sm.smc`, an existing `saves/sm.srm` is copied to the new SD save location
 the first time, leaving the original file intact.
 The public repository does not include game ROM data. The selector currently

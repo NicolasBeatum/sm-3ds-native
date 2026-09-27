@@ -76,9 +76,18 @@ static int g_room_map_x, g_room_map_y, g_room_map_w, g_room_map_h;
 static int g_room_crop_x, g_room_crop_y, g_room_cols, g_room_rows;
 static uint64_t g_touch_down_ms;
 static int g_touch_down_x, g_touch_down_y;
+static int g_clip_left, g_clip_top, g_clip_right = 320, g_clip_bottom = 240;
+
+static void SetClip(int left, int top, int right, int bottom) {
+  g_clip_left = left;
+  g_clip_top = top;
+  g_clip_right = right;
+  g_clip_bottom = bottom;
+}
 
 static inline void PutPixel(uint8_t *fb, int x, int y, UiColor color) {
-  if ((unsigned)x >= 320 || (unsigned)y >= 240)
+  if (x < g_clip_left || x >= g_clip_right ||
+      y < g_clip_top || y >= g_clip_bottom)
     return;
   const int i = (y * kBottomTextureWidth + x) * 4;
   fb[i + 0] = color.b;
@@ -88,10 +97,10 @@ static inline void PutPixel(uint8_t *fb, int x, int y, UiColor color) {
 }
 
 static void FillRect(uint8_t *fb, int x, int y, int w, int h, UiColor color) {
-  if (x < 0) { w += x; x = 0; }
-  if (y < 0) { h += y; y = 0; }
-  if (x + w > 320) w = 320 - x;
-  if (y + h > 240) h = 240 - y;
+  if (x < g_clip_left) { w += x - g_clip_left; x = g_clip_left; }
+  if (y < g_clip_top) { h += y - g_clip_top; y = g_clip_top; }
+  if (x + w > g_clip_right) w = g_clip_right - x;
+  if (y + h > g_clip_bottom) h = g_clip_bottom - y;
   if (w <= 0 || h <= 0)
     return;
   for (int py = y; py < y + h; py++) {
@@ -382,6 +391,7 @@ static void DrawLine(uint8_t *fb, int x0, int y0, int x1, int y1, UiColor color)
 
 static void DrawRoomMap(uint8_t *fb, int top, int bottom) {
   Panel(fb, 5, top, 310, bottom - top);
+  SetClip(7, top + 2, 313, bottom - 2);
   const int window_w[] = {30, 24, 20, 16};
   const int window_h[] = {18, 15, 12, 10};
   int zoom = g_room_zoom;
@@ -457,6 +467,7 @@ static void DrawRoomMap(uint8_t *fb, int top, int bottom) {
   int dot_y = oy + ((samus_ty - crop_y) * 8 + 4) * draw_h / (rows * 8);
   if (dot_x >= ox && dot_x < ox + draw_w && dot_y >= oy && dot_y < oy + draw_h)
     FillCircle(fb, dot_x, dot_y, 4, kSamus);
+  SetClip(0, 0, 320, 240);
 }
 
 typedef struct WorldLayout {
@@ -561,6 +572,7 @@ static void CenterWorldMap(int tile_scale, int top, int bottom,
 
 static void DrawWorldMap(uint8_t *fb, int top, int bottom) {
   Panel(fb, 5, top, 310, bottom - top);
+  SetClip(7, top + 2, 313, bottom - 2);
   int tile_scale = 2 + g_world_zoom;
   int ox, oy;
   CenterWorldMap(tile_scale, top, bottom, &ox, &oy);
@@ -625,6 +637,7 @@ static void DrawWorldMap(uint8_t *fb, int top, int bottom) {
     StrokeRect(fb, x - w / 2, y - 5, w, 11, 1, kBorder);
     DrawTextCentered(fb, x, y - 3, label, 1, kWhite);
   }
+  SetClip(0, 0, 320, 240);
 }
 
 static void DrawMapControls(uint8_t *fb) {
@@ -900,13 +913,14 @@ static void DrawIdle(uint8_t *fb) {
 }
 
 void BottomScreen_DrawRomSelector(const char *const *rows, int row_count,
-                                  int selected, int total, const char *message) {
+                                  int selected, int total, bool native_engine,
+                                  const char *message) {
   if (!g_bottom_cache) return;
   uint8_t *fb = g_bottom_cache;
   FillRect(fb, 0, 0, 320, 240, kBg);
   DrawTextCentered(fb, 160, 10, "SM 3DS NATIVE", 2, kWhite);
   DrawTextCentered(fb, 160, 33, "SELECT ROM", 1, kDim);
-  Panel(fb, 9, 49, 302, 153);
+  Panel(fb, 9, 49, 302, 117);
   if (!total) {
     DrawTextCentered(fb, 160, 93, "NO ROM FOUND", 2, kAccent);
   } else {
@@ -921,7 +935,16 @@ void BottomScreen_DrawRomSelector(const char *const *rows, int row_count,
       DrawText(fb, 20, y + 2, short_name, 1, i == selected ? kWhite : kDim);
     }
   }
-  DrawTextCentered(fb, 160, 211, message, 1, kWhite);
+  Panel(fb, 9, 169, 302, 33);
+  DrawText(fb, 17, 174, "Y ENGINE:", 1, kAccent);
+  DrawText(fb, 92, 174, native_engine ? "NATIVE" : "EMULATED", 1, kWhite);
+  DrawText(fb, 17, 187, "OLD3DS BUILD:", 1, kDim);
+#ifdef SM3DS_OLD3DS
+  DrawText(fb, 116, 187, "ON", 1, kDim);
+#else
+  DrawText(fb, 116, 187, "OFF", 1, kDim);
+#endif
+  DrawTextCentered(fb, 160, 213, message, 1, kWhite);
   if (g_notice[0] && osGetTime() < g_notice_until_ms) {
     FillRect(fb, 15, 204, 290, 20, kPanel);
     StrokeRect(fb, 15, 204, 290, 20, 1, kAccent);

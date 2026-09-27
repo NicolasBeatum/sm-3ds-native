@@ -388,8 +388,11 @@ int main(int argc, char** argv) {
   if (!BottomScreen_Init())
     Die("Unable to allocate bottom-screen framebuffer");
   char filename[256], rom_name[128], save_path[256];
+  bool native_engine = true;
   Snes *snes = NULL;
-  while (RomMenu_Select(filename, sizeof(filename), rom_name, sizeof(rom_name))) {
+  while (RomMenu_Select(filename, sizeof(filename), rom_name, sizeof(rom_name),
+                        &native_engine)) {
+    RtlSelectEngine(native_engine);
     snes = SnesInit(filename);
     if (snes) break;
     BottomScreen_ShowNotice("INVALID OR UNSUPPORTED ROM", osGetTime() + 3000);
