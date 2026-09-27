@@ -266,25 +266,44 @@ static bool HasLayer(const PicaFrame *f, unsigned sub, unsigned mask) {
   return false;
 }
 
-static bool WideRoomTile(const PicaFrame *f, unsigned layer, int x, int y,
-                         uint16_t *tile, unsigned *tileX, unsigned *tileY) {
+typedef struct WideTileRow {
+  const uint16_t *blocks, *tileTable;
+  int cameraX;
+  unsigned blockRow, quadrantY, pixelY;
+  bool valid;
+} WideTileRow;
+
+static WideTileRow WideRoomRow(const PicaFrame *f, unsigned layer, int y) {
   const PicaWideRoomLayer *room = &f->wideRoom[layer];
-  if (!room->blocks || !f->wideTileTable || !f->wideRoomWidth ||
-      !f->wideRoomHeight) return false;
-  int worldX = room->cameraX + x - (int)f->originX;
   int worldY = room->cameraY + y;
-  if (worldX < 0 || worldY < 0 ||
-      worldX / 16 >= (int)f->wideRoomWidth ||
-      worldY / 16 >= (int)f->wideRoomHeight) return false;
-  unsigned block = room->blocks[(worldY / 16) * f->wideRoomWidth + worldX / 16];
-  unsigned quadrant = ((worldY & 8) ? 2 : 0) | ((worldX & 8) ? 1 : 0);
+  WideTileRow row = {0};
+  if (!room->blocks || !f->wideTileTable || !f->wideRoomWidth ||
+      !f->wideRoomHeight || worldY < 0 ||
+      worldY / 16 >= (int)f->wideRoomHeight) return row;
+  row.blocks = room->blocks;
+  row.tileTable = f->wideTileTable;
+  row.cameraX = room->cameraX;
+  row.blockRow = (worldY / 16) * f->wideRoomWidth;
+  row.quadrantY = (worldY & 8) ? 2 : 0;
+  row.pixelY = worldY & 7;
+  row.valid = true;
+  return row;
+}
+
+static bool WideRoomTile(const PicaFrame *f, const WideTileRow *row, int x,
+                         uint16_t *tile, unsigned *tileX, unsigned *tileY) {
+  int worldX = row->cameraX + x - (int)f->originX;
+  if (!row->valid || worldX < 0 ||
+      worldX / 16 >= (int)f->wideRoomWidth) return false;
+  unsigned block = row->blocks[row->blockRow + worldX / 16];
+  unsigned quadrant = row->quadrantY | ((worldX & 8) ? 1 : 0);
   if (block & 0x400) quadrant ^= 1;
   if (block & 0x800) quadrant ^= 2;
-  *tile = f->wideTileTable[(block & 0x3ff) * 4 + quadrant] ^
+  *tile = row->tileTable[(block & 0x3ff) * 4 + quadrant] ^
       ((block & 0x400) ? 0x4000 : 0) ^
       ((block & 0x800) ? 0x8000 : 0);
   *tileX = worldX & 7;
-  *tileY = worldY & 7;
+  *tileY = row->pixelY;
   return true;
 }
 
@@ -341,47 +360,55 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
           (sub && !p->addSubscreen)) { y += h; continue; }
       WindowSpans win;
       int spanLeft = 0, spanRight = f->width;
-      if (layer == 0 && f->width == kWideWidth && !IsHudLine(f, y)) {
+      bool hudLine = IsHudLine(f, y);
+      if (layer == 0 && f->width == kWideWidth && !hudLine) {
         spanLeft = f->worldLeft;
         spanRight = f->worldRight;
       } else if (layer == 1 && f->boundBg2 &&
-                 f->width == kWideWidth && !IsHudLine(f, y)) {
+                 f->width == kWideWidth && !hudLine) {
         spanLeft = f->bg2Left;
         spanRight = f->bg2Right;
       } else if (layer == 2 && f->boundBg2 &&
-                 f->width == kWideWidth && !IsHudLine(f, y)) {
+                 f->width == kWideWidth && !hudLine) {
         spanLeft = f->bg2Left;
         spanRight = f->bg2Right;
-      } else if (layer == 2 && IsHudLine(f, y)) {
+      } else if (layer == 2 && hudLine) {
         spanLeft = f->originX;
         spanRight = spanLeft + kSnesWidth;
       }
       if (spanLeft >= spanRight) { y += h; continue; }
       Windows(f, p, layer, (p->screenWindowed[sub] & (1u << layer)) != 0,
               spanLeft, spanRight, &win);
+      bool roomSides = f->width == kWideWidth && layer < 2 && !hudLine &&
+                       f->wideRoom[layer].blocks;
+      WideTileRow roomRow = {0};
+      if (roomSides) roomRow = WideRoomRow(f, layer, y + 1);
       for (unsigned i = 0; i < win.nr; i++) {
         if (win.bits & (1u << i)) continue;
         int x = win.edges[i], end = win.edges[i + 1];
         while (x < end) {
-          bool side = f->width == kWideWidth && layer < 2 &&
-              !IsHudLine(f, y) && f->wideRoom[layer].blocks &&
+          bool side = roomSides &&
               (x < (int)f->originX || x >= (int)f->originX + kSnesWidth);
           unsigned wx = (x - (int)f->originX + bg->hScroll) &
                         (bg->tilemapWider ? 511 : 255);
-          unsigned map = (bg->tilemapAdr + ((wy >> 3) & 31) * 32 +
-                          ((wx >> 3) & 31) + (wx >= 256 ? 0x400 : 0) +
-                          (wy >= 256 ? (bg->tilemapWider ? 0x800 : 0x400) : 0)) & 0x7fff;
-          uint16_t tile = f->memory->vram[map];
+          uint16_t tile;
           unsigned pixelX = wx & 7, pixelY = wy & 7;
           unsigned w = Min(8 - (wx & 7), end - x);
           if (x < (int)f->originX)
             w = Min(w, (int)f->originX - x);
           else if (x < (int)f->originX + kSnesWidth)
             w = Min(w, (int)f->originX + kSnesWidth - x);
-          if (side && !WideRoomTile(f, layer, x, y + 1, &tile,
-                                    &pixelX, &pixelY)) {
-            x += w;
-            continue;
+          if (side) {
+            if (!WideRoomTile(f, &roomRow, x, &tile,
+                              &pixelX, &pixelY)) {
+              x += w;
+              continue;
+            }
+          } else {
+            unsigned map = (bg->tilemapAdr + ((wy >> 3) & 31) * 32 +
+                            ((wx >> 3) & 31) + (wx >= 256 ? 0x400 : 0) +
+                            (wy >= 256 ? (bg->tilemapWider ? 0x800 : 0x400) : 0)) & 0x7fff;
+            tile = f->memory->vram[map];
           }
           unsigned bpp = layer == 2 ? 2 : 4;
           int slot = Tile(f, (bg->tileAdr + (tile & 1023) * (bpp == 4 ? 16 : 8)) & 0x7fff,
