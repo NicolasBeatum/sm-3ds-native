@@ -112,8 +112,8 @@ make FULL_NATIVE=1 BUILD_FLAGS="-DSM3DS_OLD3DS" cia
 Copy a compatible Super Metroid ROM to `sdmc:/3ds/sm3dsnative/` on the 3DS
 microSD card, then choose it from the menu at launch. The folder is created
 automatically if absent. Different ROM filenames use different save files
-(`saves/<ROM filename>.srm`). If a local development build still embeds
-`romfs:/sm.smc`, the game imports it once into the SD folder when it is absent.
+(`saves/<ROM filename>.srm`). Builds deliberately include no game ROM, even
+when a local `romfs/sm.smc` exists in the source checkout.
 For `sm.smc`, an existing `saves/sm.srm` is copied to the new SD save location
 the first time, leaving the original file intact.
 The public repository does not include game ROM data. The selector currently

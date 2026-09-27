@@ -27,7 +27,16 @@ OUTPUT := output
 SOURCES := source
 DATA := data
 INCLUDES := $(SOURCES) include
-ROMFS := romfs
+# Only ship the empty RomFS stub. User ROMs are read from the microSD card.
+# In particular, a local romfs/sm.smc must never enter distributable builds.
+ROMFS := resources/romfs_stub
+ROMFS_UNEXPECTED := $(shell find $(PWD)$(ROMFS) -type f ! -path '$(PWD)$(ROMFS)/blank' -print -quit)
+ifneq ($(strip $(ROMFS_UNEXPECTED)),)
+$(error Unexpected file in distributable RomFS: $(ROMFS_UNEXPECTED))
+endif
+ifneq ($(shell wc -c < $(PWD)$(ROMFS)/blank),0)
+$(error Distributable RomFS stub must stay empty)
+endif
 RESOURCES := resources
 SDL := SDL
 

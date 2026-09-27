@@ -385,7 +385,6 @@ int main(int argc, char** argv) {
       SDL_GameControllerOpen(0);
   }
 
-  bool romfs_ready = R_SUCCEEDED(romfsInit());
   if (!BottomScreen_Init())
     Die("Unable to allocate bottom-screen framebuffer");
   char filename[256], rom_name[128], save_path[256];
@@ -397,7 +396,6 @@ int main(int argc, char** argv) {
   }
   if (!snes) {
     BottomScreen_Fini();
-    if (romfs_ready) romfsExit();
     SDL_Quit();
     return 0;
   }
@@ -730,7 +728,6 @@ int main(int argc, char** argv) {
   BottomScreen_Fini();
   linearFree(g_pixels);
   SDL_DestroyWindow(window);
-  if (romfs_ready) romfsExit();
   SDL_Quit();
 #ifdef SM3DS_PROFILE
   if (profile)

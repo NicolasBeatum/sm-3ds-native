@@ -15,27 +15,6 @@
 enum { kMaxRoms = 128, kNameSize = 128, kVisibleRows = 8 };
 static char g_names[kMaxRoms][kNameSize];
 
-static void ImportBundledRom(void) {
-  struct stat st;
-  const char *destination = SM3DS_SD_ROOT "/sm.smc";
-  if (stat(destination, &st) == 0) return;
-  FILE *source = fopen("romfs:/sm.smc", "rb");
-  if (!source) return;
-  FILE *target = fopen(SM3DS_SD_ROOT "/sm.smc.tmp", "wb");
-  if (!target) { fclose(source); return; }
-  char buffer[16384];
-  size_t count;
-  bool okay = true;
-  while ((count = fread(buffer, 1, sizeof(buffer), source)) != 0) {
-    if (fwrite(buffer, 1, count, target) != count) { okay = false; break; }
-  }
-  if (ferror(source) || fflush(target) != 0) okay = false;
-  if (fclose(target) != 0) okay = false;
-  fclose(source);
-  if (!okay || rename(SM3DS_SD_ROOT "/sm.smc.tmp", destination) != 0)
-    remove(SM3DS_SD_ROOT "/sm.smc.tmp");
-}
-
 static bool IsRomName(const char *name) {
   size_t n = strlen(name);
   if (n < 5 || n >= kNameSize) return false;
@@ -93,7 +72,6 @@ bool RomMenu_Select(char *path, size_t path_size, char *name, size_t name_size) 
   mkdir(SM3DS_SD_ROOT, 0755);
   mkdir(SM3DS_SAVE_DIR, 0755);
   mkdir(SM3DS_DUMP_DIR, 0755);
-  ImportBundledRom();
   int count = ScanRoms(), selected = 0;
   const char *message = count ? "A LOAD  X REFRESH  START EXIT" :
       "COPY .SMC TO /3DS/SM3DSNATIVE/";
