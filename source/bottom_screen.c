@@ -9,6 +9,7 @@
 #include "src/variables.h"
 #include "src/sm_rtl.h"
 #include "redux_suit_data.h"
+#include "version.h"
 
 #ifndef SM3DS_BUILD_FLAGS
 #define SM3DS_BUILD_FLAGS ""
@@ -79,6 +80,7 @@ static bool g_widescreen = true;
 static bool g_status_bar_visible[3] = {true, true, false};
 static bool g_clear_markers_armed;
 static bool g_setup_build_info;
+static bool g_dump_requested;
 static char g_settings_path[256];
 static char g_notice[48];
 static uint64_t g_notice_until_ms;
@@ -303,6 +305,61 @@ static void DrawText(uint8_t *fb, int x, int y, const char *text, int scale, UiC
 
 static void DrawTextCentered(uint8_t *fb, int cx, int y, const char *text, int scale, UiColor color) {
   DrawText(fb, cx - TextWidth(text, scale) / 2, y, text, scale, color);
+}
+
+static void FillTopRect(uint8_t *fb, int x, int y, int w, int h, UiColor color) {
+  if (x < 0) { w += x; x = 0; }
+  if (y < 0) { h += y; y = 0; }
+  if (x + w > 400) w = 400 - x;
+  if (y + h > 240) h = 240 - y;
+  for (int px = x; px < x + w; px++) {
+    for (int py = y; py < y + h; py++) {
+      uint8_t *dst = fb + (px * 240 + (239 - py)) * 4;
+      dst[0] = 0xff;
+      dst[1] = color.b;
+      dst[2] = color.g;
+      dst[3] = color.r;
+    }
+  }
+}
+
+static void DrawTopText(uint8_t *fb, int cx, int y, const char *text,
+                        int scale, UiColor color) {
+  int x = cx - TextWidth(text, scale) / 2;
+  for (; *text; text++, x += 6 * scale) {
+    const uint8_t *rows = Glyph(*text);
+    for (int row = 0; row < 7; row++)
+      for (int col = 0; col < 5; col++)
+        if (rows[row] & (1 << (4 - col)))
+          FillTopRect(fb, x + col * scale, y + row * scale,
+                      scale, scale, color);
+  }
+}
+
+void BottomScreen_DrawRomSelectorTop(void) {
+  uint8_t *fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
+  if (!fb) return;
+  FillTopRect(fb, 0, 0, 400, 240, kBg);
+  FillTopRect(fb, 12, 12, 376, 216, kPanel);
+  FillTopRect(fb, 12, 12, 376, 2, kBorder);
+  FillTopRect(fb, 12, 226, 376, 2, kBorder);
+  FillTopRect(fb, 12, 12, 2, 216, kBorder);
+  FillTopRect(fb, 386, 12, 2, 216, kBorder);
+  DrawTopText(fb, 200, 22, "SUPER METROID", 3, kWhite);
+  char subtitle[48];
+  snprintf(subtitle, sizeof(subtitle), "3DS NATIVE PORT %s", APP_VERSION);
+  DrawTopText(fb, 200, 49, subtitle, 1, kAccent);
+  FillTopRect(fb, 32, 66, 336, 2, kBorder);
+  DrawTopText(fb, 200, 76, "PORT DIRECTION AND TESTING", 1, kDim);
+  DrawTopText(fb, 200, 88, "NICOLASBEATUM", 2, kWhite);
+  DrawTopText(fb, 200, 111, "ORIGINAL PROJECTS", 1, kDim);
+  DrawTopText(fb, 200, 123, "CHARLESAVERILL/SM-3DS + SM-3DS-LIB", 1, kWhite);
+  DrawTopText(fb, 200, 135, "SNESREV/SM + LIBSDL-ORG/SDL", 1, kWhite);
+  DrawTopText(fb, 200, 153, "LOWER UI AND REDUX SUIT DATA", 1, kDim);
+  DrawTopText(fb, 200, 165, "RAEKWON1603/METROIDARCH", 1, kWhite);
+  DrawTopText(fb, 200, 184, "SUPER METROID AND ASSETS: NINTENDO", 1, kWhite);
+  DrawTopText(fb, 200, 201, "OPENAI CODEX: AI-ASSISTED DEVELOPMENT", 1, kDim);
+  DrawTopText(fb, 200, 215, "UNOFFICIAL - PROVIDE YOUR OWN ROM", 1, kAccent);
 }
 
 static const char *AreaName(unsigned area) {
@@ -971,6 +1028,9 @@ static void DrawSetupTab(uint8_t *fb, int top) {
   FillRect(fb, 293, info_y + 8, 3, info_height - 11, kWhite);
 
   if (g_setup_build_info) {
+    FillRect(fb, 185, info_y, 88, info_height, kSlot);
+    StrokeRect(fb, 185, info_y, 88, info_height, 2, kAccent);
+    DrawText(fb, 202, info_y + (compact ? 4 : 6), "SAVE DUMP", 1, kWhite);
     int flags_y = top + (compact ? 25 : 32);
     int flags_height = compact ? 50 : 76;
     FillRect(fb, 13, flags_y, 294, flags_height, kSlot);
@@ -1325,8 +1385,12 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
       g_bottom_dirty = true;
       return;
     }
-    if (g_setup_build_info)
+    if (g_setup_build_info) {
+      if (x >= 185 && x < 273 && y >= info_y &&
+          y < info_y + (compact ? 16 : 20))
+        g_dump_requested = true;
       return;
+    }
     int row_y = top + (compact ? 22 : 32);
     int step = compact ? 20 : 24;
     int height = compact ? 18 : 21;
@@ -1350,6 +1414,12 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
     return;
   }
 
+}
+
+bool BottomScreen_ConsumeDumpRequest(void) {
+  bool requested = g_dump_requested;
+  g_dump_requested = false;
+  return requested;
 }
 
 void BottomScreen_HandleTouchMotion(float normalized_x, float normalized_y) {

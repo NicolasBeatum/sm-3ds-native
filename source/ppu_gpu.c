@@ -2,6 +2,8 @@
 #include "ppu_gpu_model.h"
 #include "wide_bounds.h"
 #include "sm_pica_shbin.h"
+#include "src/ida_types.h"
+#include "src/sm_rtl.h"
 #include "src/variables.h"
 
 #include <3ds.h>
@@ -231,6 +233,14 @@ static bool DrawComposition(void) {
     ConfigureCompose(i);
     DrawRange(4 + i);
   }
+  if (g.ranges[20].count) {
+    ResetTev();
+    C3D_TexEnv *e = C3D_GetTexEnv(0);
+    C3D_TexEnvSrc(e, C3D_Both, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR,
+                  GPU_PRIMARY_COLOR);
+    C3D_TexEnvFunc(e, C3D_Both, GPU_REPLACE);
+    DrawRange(20);
+  }
   return true;
 }
 
@@ -365,7 +375,12 @@ bool PpuGpuFinish(Ppu *p) {
                      .pixels=g.atlas.data,.width=g.width,.height=g.height,
                      .originX=g_wide_config.origin_x,
                      .hudEndY=g_wide_config.hud_end_y,
+                     .objectX=g_oam_unwrapped_x,
+                     .objectXValid=g_oam_unwrapped_valid,
                      .worldLeft=0,.worldRight=g.width,
+                     .extendEyeBeam=g.width == kWideWidth &&
+                                    enemy_data[1].enemy_ptr == 0xe6bf &&
+                                    kraid_unk9000 != 0,
                      .wideRoom={{level_data, (int16_t)layer1_x_pos,
                                  (int16_t)layer1_y_pos},
                                 {(const uint16_t *)(g_ram + 0x19602),

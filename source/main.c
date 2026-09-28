@@ -347,6 +347,12 @@ static void HandleCirclePadAxis(unsigned axis, int16_t value) {
   g_gamepad_buttons = buttons;
 }
 
+static void SaveDebugDump(const char *rom_name, uint32_t frame_number) {
+  bool saved = DebugDump_Write(rom_name, frame_number);
+  BottomScreen_ShowNotice(saved ? "DEBUG DUMP SAVED" : "DEBUG DUMP FAILED",
+                          osGetTime() + 3000);
+}
+
 enum {
   kDefaultFullscreen = 0,
   kMaxWindowScale = 10,
@@ -392,7 +398,7 @@ int main(int argc, char** argv) {
   while (RomMenu_Select(filename, sizeof(filename), rom_name, sizeof(rom_name))) {
     snes = SnesInit(filename);
     if (snes) break;
-    BottomScreen_ShowNotice("INVALID OR UNSUPPORTED ROM", osGetTime() + 3000);
+    BottomScreen_ShowNotice(SnesRomLoadError(), osGetTime() + 3000);
   }
   if (!snes) {
     BottomScreen_Fini();
@@ -516,9 +522,7 @@ int main(int argc, char** argv) {
         if (event.jbutton.button == BTN_R) dump_buttons |= 4;
         if (dump_buttons == 7 && !dump_chord_latched) {
           dump_chord_latched = true;
-          bool saved = DebugDump_Write(rom_name, frameCtr);
-          BottomScreen_ShowNotice(saved ? "DEBUG DUMP SAVED" : "DEBUG DUMP FAILED",
-                                  osGetTime() + 3000);
+          SaveDebugDump(rom_name, frameCtr);
         }
         HandleCommand(event.jbutton.button, true);
         break;
@@ -546,6 +550,9 @@ int main(int argc, char** argv) {
         break;
       }
     }
+
+    if (BottomScreen_ConsumeDumpRequest())
+      SaveDebugDump(rom_name, frameCtr);
 
     if (g_paused != audiopaused) {
       audiopaused = g_paused;

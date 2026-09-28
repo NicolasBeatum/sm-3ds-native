@@ -1,6 +1,16 @@
 # Changelog
 
-## 0.2.0 - 2026-09-26
+## 0.1.0 - 2026-09-28
+
+First public ROM-free release. The startup ROM selector now shows the game
+title, version and project credits on the upper screen, including
+NicolasBeatum as project director and tester. The 3DSX and CIA metadata use
+NicolasBeatum as the publisher. Both packages require a user-supplied ROM on
+the microSD card.
+
+This release also includes the lower-screen companion UI, widescreen renderer,
+Spanish translation ROM validation, HDMA spotlight fixes, per-ROM saves,
+persistent setup options and timestamped debug dumps described below.
 
 ### Gameplay correctness
 

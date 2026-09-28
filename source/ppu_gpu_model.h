@@ -12,7 +12,7 @@ enum {
   PICA_HASH = 16384,
   PICA_MAX_LINES = 240,
   PICA_MAX_VERTICES = 262140,
-  PICA_GROUPS = 20,
+  PICA_GROUPS = 21,
 };
 
 /* Only state that can affect a Mode 1 scanline is copied here.  VRAM,
@@ -75,6 +75,10 @@ typedef struct PicaFrame {
   int worldLeft, worldRight;
   int bg2Left, bg2Right;
   bool boundBg2;
+  bool extendEyeBeam;
+  int16_t beamLeft[PICA_MAX_LINES], beamRight[PICA_MAX_LINES];
+  const int16_t *objectX;
+  const uint8_t *objectXValid;
   PicaWideRoomLayer wideRoom[2];
   const uint16_t *wideTileTable;
   unsigned wideRoomWidth, wideRoomHeight;

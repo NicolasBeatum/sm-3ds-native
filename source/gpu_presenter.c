@@ -268,9 +268,12 @@ bool GpuPresenter_DrawTop(const uint8_t *pixels) {
                       hudHeight, black);
     C2D_Flush();
   } else if (wide && hudLines) {
-    C2D_DrawRectSolid(0.0f, 0.0f, 0.1f, kWideHudSide, hudHeight, black);
+    /* The rounded-up mask covers one row beyond the image's HUD boundary.
+     * Leave the first widened playfield row visible at both sides. */
+    const float sideHudHeight = hudHeight > 0.0f ? hudHeight - 1.0f : 0.0f;
+    C2D_DrawRectSolid(0.0f, 0.0f, 0.1f, kWideHudSide, sideHudHeight, black);
     C2D_DrawRectSolid(kWideHudSide + kDrawWidth, 0.0f, 0.1f,
-                      kWideHudSide, hudHeight, black);
+                      kWideHudSide, sideHudHeight, black);
     C2D_Flush();
   }
   return true;

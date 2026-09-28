@@ -36,7 +36,9 @@ Highlights:
 - Correct HDMA rain, fog, windows and colour math without scanline filtering.
 - ROM selector on startup. Put `.smc` or `.sfc` files in
   `sdmc:/3ds/sm3dsnative/`. Saves are kept per ROM in `saves/`, and lower-screen
-  SETUP and map choices persist in `settings.cfg` in the same SD folder.
+  SETUP and map choices persist in `settings.cfg` in the same SD folder. The
+  upper selector screen displays the game title, version and project credits,
+  with NicolasBeatum prominently credited for project direction and testing.
 - Hold L + R + A to write a debug report and WRAM/SRAM snapshots into
   `sdmc:/3ds/sm3dsnative/dump/`.
 - Fixed room BTS loading on ARM, including the Landing Site terrain and blue
@@ -84,6 +86,17 @@ copyright or required attribution of any upstream project.
 
 ## Building
 
+### Release 0.1.0
+
+Download the ROM-free `.3dsx` for the Homebrew Launcher or the `.cia` for FBI
+from the [v0.1.0 release](https://github.com/NicolasBeatum/sm-3ds-native/releases/tag/v0.1.0).
+The release also includes a QR code for FBI's **Remote Install → Scan QR Code**.
+After installation, supply your own compatible `.smc` or `.sfc` ROM in
+`sdmc:/3ds/sm3dsnative/` and select it at startup. Neither release build
+contains a game ROM or translation patch.
+
+![FBI QR code for the v0.1.0 CIA](docs/assets/fbi-v0.1.0.png)
+
 ### Setup
 
 ```bash
@@ -125,6 +138,22 @@ the first time, leaving the original file intact.
 The public repository does not include game ROM data. The selector currently
 loads existing ROM files; applying translation patches in the menu is planned
 for a later version.
+
+### Spanish translation 1.0 hardware test
+
+The Klint/Pacochan Spanish 1.0 IPS uses offsets for a ROM with a 512-byte
+copier header. Start with the unpatched JU ROM (3,145,728 bytes; CRC32
+`D63ED5F8`), prepend a 512-byte copier header, then apply the IPS. The port
+accepts that headered patched ROM directly. You can also remove the header
+after applying the IPS; the resulting 3,145,728-byte ROM has CRC32 `A1BF5696`.
+Copy the patched `.smc` or `.sfc` to `sdmc:/3ds/sm3dsnative/` and select it at
+launch. A ROM patched without the header (CRC32 `CB6EF725`) corrupts the intro
+and is rejected with an explanatory message.
+
+The build contains neither the ROM nor the IPS. This change does not apply IPS
+files in the launcher yet; use the already patched `.sfc` for this test. The
+translation itself covers approximately 80% of the original game, and the
+port's own lower-screen interface remains in English.
 
 Optional build switches:
 
