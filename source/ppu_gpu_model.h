@@ -75,6 +75,8 @@ typedef struct PicaFrame {
   int worldLeft, worldRight;
   int bg2Left, bg2Right;
   bool boundBg2;
+  const int16_t *objectX;
+  const uint8_t *objectXValid;
   PicaWideRoomLayer wideRoom[2];
   const uint16_t *wideTileTable;
   unsigned wideRoomWidth, wideRoomHeight;

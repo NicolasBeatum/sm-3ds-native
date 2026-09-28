@@ -2,6 +2,7 @@
 #include "ppu_gpu_model.h"
 #include "wide_bounds.h"
 #include "sm_pica_shbin.h"
+#include "src/sm_rtl.h"
 #include "src/variables.h"
 
 #include <3ds.h>
@@ -365,6 +366,8 @@ bool PpuGpuFinish(Ppu *p) {
                      .pixels=g.atlas.data,.width=g.width,.height=g.height,
                      .originX=g_wide_config.origin_x,
                      .hudEndY=g_wide_config.hud_end_y,
+                     .objectX=g_oam_unwrapped_x,
+                     .objectXValid=g_oam_unwrapped_valid,
                      .worldLeft=0,.worldRight=g.width,
                      .wideRoom={{level_data, (int16_t)layer1_x_pos,
                                  (int16_t)layer1_y_pos},

@@ -223,6 +223,20 @@ int main(void) {
   assert(normal->objCount == 0);
   assert(wide->objCount);
   assert(wide->objFirstX == 260 + kWideExtraX);
+  /* OAM X=312 can mean either a real right-side sprite or a sprite at -200
+   * that wrapped at 512. Preserve the producer's signed coordinate. */
+  ppu->oam[0] = 56;
+  int16_t unwrappedX[128] = {-200};
+  uint8_t unwrappedValid[128] = {1};
+  frame.objectX = unwrappedX;
+  frame.objectXValid = unwrappedValid;
+  Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
+  assert(wide->objCount == 0);
+  unwrappedX[0] = 312;
+  Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
+  assert(wide->objCount && wide->objFirstX == 312 + kWideExtraX);
+  frame.objectX = NULL;
+  frame.objectXValid = NULL;
   /* Cover all gameplay scanlines, including independently scrolled BG2 and
    * a window that changes halfway down the screen. */
   memset(ppu->highOam, 0, sizeof(ppu->highOam));

@@ -442,6 +442,9 @@ static unsigned HighOam(const Ppu *p, unsigned index) {
 
 static int ObjectX(const PicaFrame *f, unsigned index, unsigned high,
                    unsigned size) {
+  if (f->width > kSnesWidth && f->objectX && f->objectXValid &&
+      f->objectXValid[index >> 1])
+    return f->objectX[index >> 1];
   int x = (f->memory->oam[index] & 255) + (high & 1) * 256;
   if (x >= 256) x -= 512;
   /* X=256..327 wraps to negative OAM coordinates. It cannot be a visible
