@@ -161,7 +161,7 @@ port's own lower-screen interface remains in English.
 
 ### Hardware diagnostics
 
-Stay in a slow scene for at least three seconds, then use **SETUP → i → SAVE
+Stay in a slow scene for about ten seconds, then use **SETUP → i → SAVE
 DUMP** or hold **L + R + A**. The newest folder under
 `sdmc:/3ds/sm3dsnative/dump/` contains `info.txt`, `frame-times.csv`, WRAM,
 SRAM and (when the display capture succeeds) `top.bmp`, `bottom.bmp` and their
