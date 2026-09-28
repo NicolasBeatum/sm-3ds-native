@@ -79,6 +79,7 @@ static bool g_widescreen = true;
 static bool g_status_bar_visible[3] = {true, true, false};
 static bool g_clear_markers_armed;
 static bool g_setup_build_info;
+static bool g_dump_requested;
 static char g_settings_path[256];
 static char g_notice[48];
 static uint64_t g_notice_until_ms;
@@ -971,6 +972,9 @@ static void DrawSetupTab(uint8_t *fb, int top) {
   FillRect(fb, 293, info_y + 8, 3, info_height - 11, kWhite);
 
   if (g_setup_build_info) {
+    FillRect(fb, 185, info_y, 88, info_height, kSlot);
+    StrokeRect(fb, 185, info_y, 88, info_height, 2, kAccent);
+    DrawText(fb, 202, info_y + (compact ? 4 : 6), "SAVE DUMP", 1, kWhite);
     int flags_y = top + (compact ? 25 : 32);
     int flags_height = compact ? 50 : 76;
     FillRect(fb, 13, flags_y, 294, flags_height, kSlot);
@@ -1325,8 +1329,12 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
       g_bottom_dirty = true;
       return;
     }
-    if (g_setup_build_info)
+    if (g_setup_build_info) {
+      if (x >= 185 && x < 273 && y >= info_y &&
+          y < info_y + (compact ? 16 : 20))
+        g_dump_requested = true;
       return;
+    }
     int row_y = top + (compact ? 22 : 32);
     int step = compact ? 20 : 24;
     int height = compact ? 18 : 21;
@@ -1350,6 +1358,12 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
     return;
   }
 
+}
+
+bool BottomScreen_ConsumeDumpRequest(void) {
+  bool requested = g_dump_requested;
+  g_dump_requested = false;
+  return requested;
 }
 
 void BottomScreen_HandleTouchMotion(float normalized_x, float normalized_y) {

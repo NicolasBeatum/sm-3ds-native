@@ -338,17 +338,21 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
                             sizeof(BgLayer));
       for (unsigned run = 1; run < h; run++) {
         const PicaLine *next = &f->lines[y + run];
-        if (next->screenEnabled[sub] != p->screenEnabled[sub] ||
-            next->screenWindowed[sub] != p->screenWindowed[sub] ||
+        unsigned layerBit = 1u << layer;
+        bool windowed = (p->screenWindowed[sub] & layerBit) != 0;
+        if (((next->screenEnabled[sub] ^ p->screenEnabled[sub]) & layerBit) ||
+            ((next->screenWindowed[sub] ^ p->screenWindowed[sub]) & layerBit) ||
             next->forcedBlank != p->forcedBlank ||
             next->addSubscreen != p->addSubscreen ||
-            next->windowsel != p->windowsel ||
-            next->window1left != p->window1left ||
-            next->window1right != p->window1right ||
-            next->window2left != p->window2left ||
-            next->window2right != p->window2right ||
-            memcmp(next->windowLogic, p->windowLogic,
-                   sizeof(p->windowLogic))) {
+            (!sub && ((next->mathEnabled ^ p->mathEnabled) & layerBit)) ||
+            (layer == 2 && next->bg3priority != p->bg3priority) ||
+            (windowed &&
+             ((((next->windowsel ^ p->windowsel) >> (layer * 4)) & 15) ||
+              next->window1left != p->window1left ||
+              next->window1right != p->window1right ||
+              next->window2left != p->window2left ||
+              next->window2right != p->window2right ||
+              next->windowLogic[layer] != p->windowLogic[layer]))) {
           h = run;
           break;
         }

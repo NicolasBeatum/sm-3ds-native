@@ -119,6 +119,26 @@ int main(void) {
   assert(Sample(wide, wideAtlas, 0, 0) != 0);
   assert(Sample(wide, wideAtlas, kWideWidth - 1, 0) != 0);
 
+  /* A spotlight can move its color window on every scanline. Background
+   * layers that do not use that window must keep their tile-height runs. */
+  for (unsigned y = 0; y < kHudEndLine; y++)
+    lines[y].screenWindowed[0] = 0;
+  Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
+  unsigned unwindowedQuads = wide->count;
+  for (unsigned y = 0; y < kHudEndLine; y++) {
+    lines[y].window1left = y;
+    lines[y].window1right = 100 + y;
+    lines[y].windowsel = 2u << 20;
+  }
+  Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
+  assert(wide->count == unwindowedQuads);
+  for (unsigned y = 0; y < kHudEndLine; y++) {
+    lines[y].screenWindowed[0] = 1;
+    lines[y].window1left = 40;
+    lines[y].window1right = 100;
+    lines[y].windowsel = 2;
+  }
+
   /* Room limits apply to BG1. BG2 remains visible behind the side walls. */
   for (unsigned i = 0; i < 2048; i++) ppu->vram[0x1800 + i] = 5;
   for (unsigned y = 0; y < kHudEndLine; y++) {
