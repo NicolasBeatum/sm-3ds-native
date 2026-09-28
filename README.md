@@ -36,7 +36,9 @@ Highlights:
 - Correct HDMA rain, fog, windows and colour math without scanline filtering.
 - ROM selector on startup. Put `.smc` or `.sfc` files in
   `sdmc:/3ds/sm3dsnative/`. Saves are kept per ROM in `saves/`, and lower-screen
-  SETUP and map choices persist in `settings.cfg` in the same SD folder.
+  SETUP and map choices persist in `settings.cfg` in the same SD folder. The
+  upper selector screen displays the game title, version and project credits,
+  with NicolasBeatum prominently credited for project direction and testing.
 - Hold L + R + A to write a debug report and WRAM/SRAM snapshots into
   `sdmc:/3ds/sm3dsnative/dump/`.
 - Fixed room BTS loading on ARM, including the Landing Site terrain and blue
@@ -83,6 +85,17 @@ copyright or required attribution of any upstream project.
 ![title screen on Azahar](screenshots/titlescreen.png)
 
 ## Building
+
+### Release 0.1.0
+
+Download the ROM-free `.3dsx` for the Homebrew Launcher or the `.cia` for FBI
+from the [v0.1.0 release](https://github.com/NicolasBeatum/sm-3ds-native/releases/tag/v0.1.0).
+The release also includes a QR code for FBI's **Remote Install → Scan QR Code**.
+After installation, supply your own compatible `.smc` or `.sfc` ROM in
+`sdmc:/3ds/sm3dsnative/` and select it at startup. Neither release build
+contains a game ROM or translation patch.
+
+![FBI QR code for the v0.1.0 CIA](docs/assets/fbi-v0.1.0.png)
 
 ### Setup
 

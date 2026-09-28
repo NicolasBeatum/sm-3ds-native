@@ -59,8 +59,7 @@ static void DrawMenu(int count, int selected, const char *message) {
     rows[i] = g_names[first + i];
   BottomScreen_DrawRomSelector(rows, kVisibleRows, selected - first, count,
                                message);
-  u8 *top = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
-  if (top) memset(top, 0, 400 * 240 * 4);
+  BottomScreen_DrawRomSelectorTop();
   BottomScreen_CopyToFramebuffer();
   gfxFlushBuffers();
   gfxSwapBuffers();

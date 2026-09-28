@@ -9,6 +9,7 @@
 #include "src/variables.h"
 #include "src/sm_rtl.h"
 #include "redux_suit_data.h"
+#include "version.h"
 
 #ifndef SM3DS_BUILD_FLAGS
 #define SM3DS_BUILD_FLAGS ""
@@ -304,6 +305,61 @@ static void DrawText(uint8_t *fb, int x, int y, const char *text, int scale, UiC
 
 static void DrawTextCentered(uint8_t *fb, int cx, int y, const char *text, int scale, UiColor color) {
   DrawText(fb, cx - TextWidth(text, scale) / 2, y, text, scale, color);
+}
+
+static void FillTopRect(uint8_t *fb, int x, int y, int w, int h, UiColor color) {
+  if (x < 0) { w += x; x = 0; }
+  if (y < 0) { h += y; y = 0; }
+  if (x + w > 400) w = 400 - x;
+  if (y + h > 240) h = 240 - y;
+  for (int px = x; px < x + w; px++) {
+    for (int py = y; py < y + h; py++) {
+      uint8_t *dst = fb + (px * 240 + (239 - py)) * 4;
+      dst[0] = 0xff;
+      dst[1] = color.b;
+      dst[2] = color.g;
+      dst[3] = color.r;
+    }
+  }
+}
+
+static void DrawTopText(uint8_t *fb, int cx, int y, const char *text,
+                        int scale, UiColor color) {
+  int x = cx - TextWidth(text, scale) / 2;
+  for (; *text; text++, x += 6 * scale) {
+    const uint8_t *rows = Glyph(*text);
+    for (int row = 0; row < 7; row++)
+      for (int col = 0; col < 5; col++)
+        if (rows[row] & (1 << (4 - col)))
+          FillTopRect(fb, x + col * scale, y + row * scale,
+                      scale, scale, color);
+  }
+}
+
+void BottomScreen_DrawRomSelectorTop(void) {
+  uint8_t *fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
+  if (!fb) return;
+  FillTopRect(fb, 0, 0, 400, 240, kBg);
+  FillTopRect(fb, 12, 12, 376, 216, kPanel);
+  FillTopRect(fb, 12, 12, 376, 2, kBorder);
+  FillTopRect(fb, 12, 226, 376, 2, kBorder);
+  FillTopRect(fb, 12, 12, 2, 216, kBorder);
+  FillTopRect(fb, 386, 12, 2, 216, kBorder);
+  DrawTopText(fb, 200, 22, "SUPER METROID", 3, kWhite);
+  char subtitle[48];
+  snprintf(subtitle, sizeof(subtitle), "3DS NATIVE PORT %s", APP_VERSION);
+  DrawTopText(fb, 200, 49, subtitle, 1, kAccent);
+  FillTopRect(fb, 32, 66, 336, 2, kBorder);
+  DrawTopText(fb, 200, 76, "PORT DIRECTION AND TESTING", 1, kDim);
+  DrawTopText(fb, 200, 88, "NICOLASBEATUM", 2, kWhite);
+  DrawTopText(fb, 200, 111, "ORIGINAL PROJECTS", 1, kDim);
+  DrawTopText(fb, 200, 123, "CHARLESAVERILL/SM-3DS + SM-3DS-LIB", 1, kWhite);
+  DrawTopText(fb, 200, 135, "SNESREV/SM + LIBSDL-ORG/SDL", 1, kWhite);
+  DrawTopText(fb, 200, 153, "LOWER UI AND REDUX SUIT DATA", 1, kDim);
+  DrawTopText(fb, 200, 165, "RAEKWON1603/METROIDARCH", 1, kWhite);
+  DrawTopText(fb, 200, 184, "SUPER METROID AND ASSETS: NINTENDO", 1, kWhite);
+  DrawTopText(fb, 200, 201, "OPENAI CODEX: AI-ASSISTED DEVELOPMENT", 1, kDim);
+  DrawTopText(fb, 200, 215, "UNOFFICIAL - PROVIDE YOUR OWN ROM", 1, kAccent);
 }
 
 static const char *AreaName(unsigned area) {
