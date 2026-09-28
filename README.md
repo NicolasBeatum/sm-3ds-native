@@ -40,7 +40,11 @@ Highlights:
   upper selector screen displays the game title, version and project credits,
   with NicolasBeatum prominently credited for project direction and testing.
 - Hold L + R + A to write a debug report and WRAM/SRAM snapshots into
-  `sdmc:/3ds/sm3dsnative/dump/`.
+  `sdmc:/3ds/sm3dsnative/dump/`. Each new dump also includes up to 120 recent
+  frame timings (measured FPS, game/render/presentation work and widescreen/GPU
+  state) and attempts BMP and raw captures of both LCDs; `info.txt` records
+  whether each capture succeeded. The diagnostic layout was
+  inspired by [zelda-alttp-3ds](https://github.com/EstebanPdN/zelda-alttp-3ds).
 - Fixed room BTS loading on ARM, including the Landing Site terrain and blue
   door collision in Crateria.
 
@@ -154,6 +158,17 @@ The build contains neither the ROM nor the IPS. This change does not apply IPS
 files in the launcher yet; use the already patched `.sfc` for this test. The
 translation itself covers approximately 80% of the original game, and the
 port's own lower-screen interface remains in English.
+
+### Hardware diagnostics
+
+Stay in a slow scene for at least three seconds, then use **SETUP → i → SAVE
+DUMP** or hold **L + R + A**. The newest folder under
+`sdmc:/3ds/sm3dsnative/dump/` contains `info.txt`, `frame-times.csv`, WRAM,
+SRAM and (when the display capture succeeds) `top.bmp`, `bottom.bmp` and their
+raw framebuffers. `measured_fps` is calculated from recent real frame
+intervals; the phase timings identify game, upper-screen, lower-screen and
+presentation work. Capturing the same scene once with widescreen on and once
+off makes the difference measurable. Older v2 dumps contain no FPS data.
 
 Optional build switches:
 
