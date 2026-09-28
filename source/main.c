@@ -392,7 +392,7 @@ int main(int argc, char** argv) {
   while (RomMenu_Select(filename, sizeof(filename), rom_name, sizeof(rom_name))) {
     snes = SnesInit(filename);
     if (snes) break;
-    BottomScreen_ShowNotice("INVALID OR UNSUPPORTED ROM", osGetTime() + 3000);
+    BottomScreen_ShowNotice(SnesRomLoadError(), osGetTime() + 3000);
   }
   if (!snes) {
     BottomScreen_Fini();

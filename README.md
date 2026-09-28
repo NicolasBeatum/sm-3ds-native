@@ -126,6 +126,22 @@ The public repository does not include game ROM data. The selector currently
 loads existing ROM files; applying translation patches in the menu is planned
 for a later version.
 
+### Spanish translation 1.0 hardware test
+
+The Klint/Pacochan Spanish 1.0 IPS uses offsets for a ROM with a 512-byte
+copier header. Start with the unpatched JU ROM (3,145,728 bytes; CRC32
+`D63ED5F8`), prepend a 512-byte copier header, then apply the IPS. The port
+accepts that headered patched ROM directly. You can also remove the header
+after applying the IPS; the resulting 3,145,728-byte ROM has CRC32 `A1BF5696`.
+Copy the patched `.smc` or `.sfc` to `sdmc:/3ds/sm3dsnative/` and select it at
+launch. A ROM patched without the header (CRC32 `CB6EF725`) corrupts the intro
+and is rejected with an explanatory message.
+
+The build contains neither the ROM nor the IPS. This change does not apply IPS
+files in the launcher yet; use the already patched `.sfc` for this test. The
+translation itself covers approximately 80% of the original game, and the
+port's own lower-screen interface remains in English.
+
 Optional build switches:
 
 | Variable / define | Purpose |
