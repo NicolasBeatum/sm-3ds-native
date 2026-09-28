@@ -7,9 +7,13 @@
 
 typedef struct Capture {
   PicaQuad quads[4096];
+  PicaQuad subQuads[16384];
   unsigned count;
+  unsigned subCount;
   int objFirstX;
   unsigned objCount;
+  bool colorWindowSide;
+  bool blackMaskRight;
 } Capture;
 
 static bool CaptureQuad(void *context, unsigned group, const PicaQuad *quad) {
@@ -17,18 +21,28 @@ static bool CaptureQuad(void *context, unsigned group, const PicaQuad *quad) {
   if (group == 0) {
     assert(capture->count < 4096);
     capture->quads[capture->count++] = *quad;
+  } else if (group == 2) {
+    assert(capture->subCount < 16384);
+    capture->subQuads[capture->subCount++] = *quad;
   } else if (group == 1) {
     if (!capture->objCount) capture->objFirstX = quad->x0;
     capture->objCount++;
+  } else if (group == 8 && quad->x1 > kWideExtraX + kSnesWidth &&
+             quad->y0 >= 20) {
+    capture->colorWindowSide = true;
+  } else if (group == 20 &&
+             quad->x0 == kWideExtraX + kSnesWidth &&
+             quad->x1 == kWideWidth && quad->y0 == kHudEndLine) {
+    capture->blackMaskRight = true;
   }
   return true;
 }
 
-static unsigned Sample(const Capture *capture, const PicaAtlas *atlas,
-                       unsigned x, unsigned y) {
+static unsigned SampleQuads(const PicaQuad *quads, unsigned count,
+                            const PicaAtlas *atlas, unsigned x, unsigned y) {
   const PicaQuad *top = NULL;
-  for (unsigned i = 0; i < capture->count; i++) {
-    const PicaQuad *q = &capture->quads[i];
+  for (unsigned i = 0; i < count; i++) {
+    const PicaQuad *q = &quads[i];
     if ((int)x >= q->x0 && (int)x < q->x1 &&
         (int)y >= q->y0 && (int)y < q->y1 &&
         (!top || q->depth > top->depth))
@@ -43,6 +57,11 @@ static unsigned Sample(const Capture *capture, const PicaAtlas *atlas,
   unsigned slot = (v / 8) * (PICA_ATLAS_W / 8) + u / 8;
   assert(slot < PICA_SLOTS);
   return 1 + (atlas->tile[slot].key << 6) + (v % 8) * 8 + u % 8;
+}
+
+static unsigned Sample(const Capture *capture, const PicaAtlas *atlas,
+                       unsigned x, unsigned y) {
+  return SampleQuads(capture->quads, capture->count, atlas, x, y);
 }
 
 static void BuildWithBounds(PicaFrame *frame, PicaAtlas *atlas,
@@ -133,10 +152,60 @@ int main(void) {
   Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
   assert(wide->count == unwindowedQuads);
   for (unsigned y = 0; y < kHudEndLine; y++) {
+    lines[y].window1left = 30 + y / 2;
+    lines[y].window1right = y < 13 ? 150 + 8 * y : 255;
+    lines[y].clipMode = 2;
+  }
+  Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
+  assert(!wide->colorWindowSide);
+  frame.extendEyeBeam = true;
+  Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
+  assert(wide->colorWindowSide);
+  frame.extendEyeBeam = false;
+  frame.height = kSnesHeight;
+  for (unsigned y = 0; y < kSnesHeight; y++) {
+    lines[y].mode = 1;
+    lines[y].brightness = 15;
+    lines[y].screenEnabled[0] = 0;
+    lines[y].screenEnabled[1] = 4;
+    lines[y].screenWindowed[1] = 4;
+    lines[y].addSubscreen = true;
+    lines[y].bg[2] = lines[y].bg[0];
+    lines[y].bg[2].tilemapAdr = 0x1000;
+    lines[y].windowsel = (2u << 8) | (2u << 20);
+    lines[y].window1left = 40 + y / 2;
+    lines[y].window1right = y < 88 ? 80 + y * 2 : 255;
+  }
+  Build(&frame, normalAtlas, normalPixels, normal, kWideWidth, kWideExtraX);
+  unsigned beamBaselineQuads = normal->subCount;
+  frame.extendEyeBeam = true;
+  Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
+  assert(wide->subCount < beamBaselineQuads / 2);
+  assert(SampleQuads(normal->subQuads, normal->subCount, normalAtlas,
+                     kWideWidth - 20, 180) !=
+         SampleQuads(wide->subQuads, wide->subCount, wideAtlas,
+                     kWideWidth - 20, 180));
+  for (unsigned y = 16; y < kSnesHeight; y += 7)
+    for (unsigned x = kWideExtraX; x < kWideExtraX + kSnesWidth; x += 5)
+      assert(SampleQuads(normal->subQuads, normal->subCount, normalAtlas, x, y) ==
+             SampleQuads(wide->subQuads, wide->subCount, wideAtlas, x, y));
+  BuildWithBounds(&frame, wideAtlas, widePixels, wide, kWideWidth,
+                  kWideExtraX, 0, kWideExtraX + kSnesWidth);
+  assert(wide->blackMaskRight);
+  frame.extendEyeBeam = false;
+  frame.height = kHudEndLine;
+  for (unsigned y = 0; y < kHudEndLine; y++) {
+    lines[y].screenEnabled[0] = 1;
+    lines[y].screenEnabled[1] = 0;
+    lines[y].screenWindowed[1] = 0;
+    lines[y].addSubscreen = false;
+  }
+  for (unsigned y = 0; y < kHudEndLine; y++) {
     lines[y].screenWindowed[0] = 1;
     lines[y].window1left = 40;
     lines[y].window1right = 100;
     lines[y].windowsel = 2;
+    lines[y].clipMode = 0;
   }
 
   /* Room limits apply to BG1. BG2 remains visible behind the side walls. */
