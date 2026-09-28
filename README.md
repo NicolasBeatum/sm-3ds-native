@@ -169,6 +169,9 @@ raw framebuffers. `measured_fps` is calculated from recent real frame
 intervals; the phase timings identify game, upper-screen, lower-screen and
 presentation work. Capturing the same scene once with widescreen on and once
 off makes the difference measurable. Older v2 dumps contain no FPS data.
+Diagnostic builds with `SM3DS_PHASE_DIAG` also split the game phase into native
+logic and PPU preparation (`avg_logic_us` and `avg_ppu_us`). This adds only a few
+clock reads per frame and helps locate slow scenes on the original 3DS.
 
 Optional build switches:
 

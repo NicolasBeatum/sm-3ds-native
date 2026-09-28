@@ -14,8 +14,8 @@ static void ReadFile(FILE *file, char *buffer, size_t capacity) {
 int main(void) {
   FrameDiagnostics_Init(1000000);
   for (unsigned frame = 1; frame <= 120; frame++)
-    FrameDiagnostics_Record(frame, 20000, 5000, 7000, 2000, 1000,
-                            true, frame % 2 == 0, true);
+    FrameDiagnostics_Record(frame, 20000, 5000, 2000, 3000, 7000, 2000,
+                            1000, true, frame % 2 == 0, true, true);
 
   FILE *summary = tmpfile();
   FILE *csv = tmpfile();
@@ -27,18 +27,20 @@ int main(void) {
   assert(strstr(text, "recent_frames=120\n"));
   assert(strstr(text, "measured_fps=50.00\n"));
   assert(strstr(text, "avg_work_us=15000\n"));
+  assert(strstr(text, "avg_logic_us=2000\n"));
+  assert(strstr(text, "avg_ppu_us=3000\n"));
   assert(strstr(text, "intervals_over_16667us=120\n"));
   assert(strstr(text, "recent_pica_gpu_frames=60\n"));
 
-  FrameDiagnostics_Record(121, 10000, 2000, 3000, 1000, 1000,
-                          false, false, true);
+  FrameDiagnostics_Record(121, 10000, 2000, 700, 1200, 3000, 1000, 1000,
+                          false, false, true, true);
   fclose(csv);
   csv = tmpfile();
   assert(csv && FrameDiagnostics_WriteCsv(csv));
   ReadFile(csv, text, sizeof(text));
   assert(strstr(text, "\n1,20000,") == NULL);
   assert(strstr(text, "\n2,20000,"));
-  assert(strstr(text, "\n121,10000,2000,3000,1000,1000,7000,0,0,1\n"));
+  assert(strstr(text, "\n121,10000,2000,700,1200,3000,1000,1000,7000,0,0,1,1\n"));
   fclose(summary);
   fclose(csv);
   return 0;

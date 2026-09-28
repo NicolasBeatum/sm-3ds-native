@@ -15,7 +15,8 @@ static bool PixelRgb(const uint8_t *src, GSPGPU_FramebufferFormat format,
                      uint8_t *red, uint8_t *green, uint8_t *blue) {
   switch (format) {
     case GSP_RGBA8_OES:
-      *red = src[0]; *green = src[1]; *blue = src[2];
+      /* The 3DS framebuffer stores RGBA8 pixels in ABGR byte order. */
+      *red = src[3]; *green = src[2]; *blue = src[1];
       return true;
     case GSP_BGR8_OES:
       *red = src[2]; *green = src[1]; *blue = src[0];

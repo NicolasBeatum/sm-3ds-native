@@ -618,13 +618,27 @@ int main(int argc, char** argv) {
       gfxSwapBuffers();
     }
     uint64_t afterPresent = SDL_GetPerformanceCounter();
+#ifdef SM3DS_PHASE_DIAG
+    uint32_t logicTicks = g_diag_logic_ticks;
+    uint32_t ppuTicks = g_diag_ppu_ticks;
+#else
+    uint32_t logicTicks = 0;
+    uint32_t ppuTicks = 0;
+#endif
     FrameDiagnostics_Record(
         frameCtr, intervalTicks,
         PerformanceTicksBetween(frameStart, afterGame),
+        logicTicks, ppuTicks,
         PerformanceTicksBetween(afterGame, afterTop),
         PerformanceTicksBetween(afterTop, afterBottom),
         PerformanceTicksBetween(afterBottom, afterPresent),
-        frameViewport.enabled, pica_frame, gpu_frame);
+        frameViewport.enabled, pica_frame, gpu_frame,
+#ifdef SM3DS_PHASE_DIAG
+        g_diag_phase_valid
+#else
+        false
+#endif
+        );
 
 #ifdef SM3DS_PROFILE
     uint32 profileNow = SDL_GetTicks();
