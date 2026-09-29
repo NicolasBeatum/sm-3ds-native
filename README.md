@@ -90,16 +90,16 @@ copyright or required attribution of any upstream project.
 
 ## Building
 
-### Release 0.1.0
+### Release 0.1.1
 
 Download the ROM-free `.3dsx` for the Homebrew Launcher or the `.cia` for FBI
-from the [v0.1.0 release](https://github.com/NicolasBeatum/sm-3ds-native/releases/tag/v0.1.0).
+from the [v0.1.1 release](https://github.com/NicolasBeatum/sm-3ds-native/releases/tag/v0.1.1).
 The release also includes a QR code for FBI's **Remote Install → Scan QR Code**.
 After installation, supply your own compatible `.smc` or `.sfc` ROM in
 `sdmc:/3ds/sm3dsnative/` and select it at startup. Neither release build
 contains a game ROM or translation patch.
 
-![FBI QR code for the v0.1.0 CIA](docs/assets/fbi-v0.1.0.png)
+![FBI QR code for the v0.1.1 CIA](docs/assets/fbi-v0.1.1.png)
 
 ### Setup
 
