@@ -3,6 +3,10 @@
 
 #include <stddef.h>
 #include <string.h>
+#ifdef SM3DS_PHASE_DIAG
+#include "SDL2/SDL.h"
+PicaBuildTiming g_pica_build_timing;
+#endif
 
 static const uint8_t kMorton[64] = {
     0,1,4,5,16,17,20,21,2,3,6,7,18,19,22,23,
@@ -685,6 +689,7 @@ static void ExtendEyeBeam(const PicaFrame *f, int16_t *left, int16_t *right) {
 static bool Compose(PicaFrame *f) {
   WindowSpans windows[PICA_MAX_LINES];
   uint8_t spanFlags[PICA_MAX_LINES][5];
+  uint16_t usedFlags = 0;
   for (unsigned y = 0; y < f->height;) {
     const PicaLine *p = &f->lines[y];
     unsigned h = 1;
@@ -723,6 +728,7 @@ static bool Compose(PicaFrame *f) {
       unsigned flags = (p->subtractColor ? 1 : 0) | (p->halfColor ? 2 : 0) |
                        (clip ? 4 : 0) | (prevent ? 8 : 0);
       spanFlags[y][i] = p->forcedBlank ? 12 : flags;
+      usedFlags |= 1u << spanFlags[y][i];
     }
     y += h;
   }
@@ -730,6 +736,7 @@ static bool Compose(PicaFrame *f) {
   /* Each TEV configuration is one contiguous vertex range. HDMA can change
    * state every scanline, so compute its spans once before grouping vertices. */
   for (unsigned wanted = 0; wanted < 16; wanted++) {
+    if (!(usedFlags & (1u << wanted))) continue;
     for (unsigned y = 0; y < f->height; y = f->bandEnd[y]) {
       const WindowSpans *win = &windows[y];
       for (unsigned i = 0; i < win->nr; i++) {
@@ -759,6 +766,9 @@ static bool Compose(PicaFrame *f) {
 }
 
 bool PicaBuildFrame(PicaFrame *f) {
+#ifdef SM3DS_PHASE_DIAG
+  memset(&g_pica_build_timing, 0, sizeof(g_pica_build_timing));
+#endif
   memset(f->quads, 0, sizeof(f->quads));
   f->failure = NULL;
   if (!((f->width == kSnesWidth && f->originX == 0) ||
@@ -782,6 +792,25 @@ bool PicaBuildFrame(PicaFrame *f) {
   }
   if (f->extendEyeBeam)
     ExtendEyeBeam(f, f->beamLeft, f->beamRight);
+#ifdef SM3DS_PHASE_DIAG
+  uint64_t before = SDL_GetPerformanceCounter();
+  if (!Backgrounds(f, 0)) return false;
+  uint64_t after = SDL_GetPerformanceCounter();
+  g_pica_build_timing.bg_main = after - before;
+  if (!Objects(f, 0)) return false;
+  before = SDL_GetPerformanceCounter();
+  g_pica_build_timing.obj_main = before - after;
+  if (!Backgrounds(f, 1)) return false;
+  after = SDL_GetPerformanceCounter();
+  g_pica_build_timing.bg_sub = after - before;
+  if (!Objects(f, 1)) return false;
+  before = SDL_GetPerformanceCounter();
+  g_pica_build_timing.obj_sub = before - after;
+  if (!Compose(f)) return false;
+  g_pica_build_timing.compose = SDL_GetPerformanceCounter() - before;
+  return true;
+#else
   return Backgrounds(f, 0) && Objects(f, 0) && Backgrounds(f, 1) &&
          Objects(f, 1) && Compose(f);
+#endif
 }

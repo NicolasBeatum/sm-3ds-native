@@ -639,6 +639,14 @@ int main(int argc, char** argv) {
         false
 #endif
         );
+#ifdef SM3DS_PHASE_DIAG
+    if (pica_frame) {
+      PpuGpuTiming timing = PpuGpuGetTiming();
+      FrameDiagnostics_RecordPpuDetail(
+          timing.bg_main, timing.obj_main, timing.bg_sub, timing.obj_sub,
+          timing.compose, timing.upload);
+    }
+#endif
 
 #ifdef SM3DS_PROFILE
     uint32 profileNow = SDL_GetTicks();

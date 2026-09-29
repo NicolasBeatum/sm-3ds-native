@@ -172,6 +172,9 @@ off makes the difference measurable. Older v2 dumps contain no FPS data.
 Diagnostic builds with `SM3DS_PHASE_DIAG` also split the game phase into native
 logic and PPU preparation (`avg_logic_us` and `avg_ppu_us`). This adds only a few
 clock reads per frame and helps locate slow scenes on the original 3DS.
+Recent diagnostic builds further separate main/sub background and object work,
+color composition, and vertex/atlas upload. These timings are recorded only
+for frames that actually use the PICA renderer.
 
 Optional build switches:
 
