@@ -482,6 +482,30 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
       for (unsigned i = 0; i < win.nr; i++) {
         if (win.bits & (1u << i)) continue;
         int x = win.edges[i], end = win.edges[i + 1];
+        /* In the original 256-pixel viewport every tile comes from VRAM.
+         * Keep the side-band room lookup and boundary splits out of this
+         * common path, which runs for thousands of background tiles. */
+        if (f->width == kSnesWidth) {
+          unsigned scrollMask = bg->tilemapWider ? 511 : 255;
+          while (x < end) {
+            unsigned wx = (x + bg->hScroll) & scrollMask;
+            unsigned pixelX = wx & 7;
+            unsigned w = Min(8 - pixelX, end - x);
+            unsigned map = (mapRow + ((wx >> 3) & 31) +
+                            (wx >= 256 ? 0x400 : 0)) & 0x7fff;
+            uint16_t tile = f->memory->vram[map];
+            int slot = Tile(f, (bg->tileAdr + (tile & 1023) * tileWords) &
+                               0x7fff, (tile & 0x1c00) >> paletteShift, bpp);
+            if (slot == -1) return false;
+            if (slot >= 0 &&
+                !TileQuad(f, group, slot, x, y, w, h, pixelX, wy & 7,
+                          tile & 0x4000, tile & 0x8000,
+                          (tile & 0x2000) ? zHigh : zLow, tileAlpha))
+              return false;
+            x += w;
+          }
+          continue;
+        }
         while (x < end) {
           bool side = roomSides &&
               (x < (int)f->originX || x >= (int)f->originX + kSnesWidth);
