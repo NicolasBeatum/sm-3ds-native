@@ -342,9 +342,22 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
   }
 
   for (unsigned layer = 0; layer < 3; layer++) {
-    if (!HasLayer(f, sub, 1u << layer)) continue;
+    unsigned layerBit = 1u << layer;
+    if (!HasLayer(f, sub, layerBit)) continue;
     for (unsigned y = 0; y < f->height;) {
       const PicaLine *p = &f->lines[y];
+      /* Disabled lines cannot emit tiles. Skip the whole inactive stretch
+       * before comparing BG registers and looking up tile rows. */
+      if (p->forcedBlank || !(p->screenEnabled[sub] & layerBit) ||
+          (sub && !p->addSubscreen)) {
+        do {
+          y++;
+          if (y == f->height) break;
+          p = &f->lines[y];
+        } while (p->forcedBlank || !(p->screenEnabled[sub] & layerBit) ||
+                 (sub && !p->addSubscreen));
+        continue;
+      }
       const BgLayer *bg = &p->bg[layer];
       unsigned wy = (y + 1 + bg->vScroll) & (bg->tilemapHigher ? 511 : 255);
       /* A tile-height chunk cannot cross either 8-pixel row boundary.
@@ -358,7 +371,6 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
                             sizeof(BgLayer), maxRun);
       for (unsigned run = 1; run < h; run++) {
         const PicaLine *next = &f->lines[y + run];
-        unsigned layerBit = 1u << layer;
         bool windowed = (p->screenWindowed[sub] & layerBit) != 0;
         bool beamWindowTiles = f->extendEyeBeam && sub == 1 && layer == 2 &&
                                windowed;
@@ -380,8 +392,6 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
           break;
         }
       }
-      if (p->forcedBlank || !(p->screenEnabled[sub] & (1u << layer)) ||
-          (sub && !p->addSubscreen)) { y += h; continue; }
       WindowSpans win;
       int spanLeft = 0, spanRight = f->width;
       bool hudLine = IsHudLine(f, y);
