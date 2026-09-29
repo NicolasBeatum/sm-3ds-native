@@ -265,9 +265,9 @@ OUTPUT_FILE := $(OUTPUT_DIR)/$(OUTPUT_NAME)
 APP_ICON := $(TOPDIR)/$(ICON)
 APP_ROMFS := $(TOPDIR)/$(ROMFS)
 
-# The usual 0x9E exheader descriptor permits 30% of the system CPU core.
-# Allow a higher limit in a diagnostic CIA without recompiling the ELF.
-APP_MAX_CPU ?= 0x9E
+# Match the 80% system-core limit requested at runtime. The old 0x9E
+# descriptor capped installed CIAs at 30%, while 3DSX ran at 80%.
+APP_MAX_CPU ?= 0xD0
 
 COMMON_MAKEROM_PARAMS := -rsf $(RSF) -target t -exefslogo -elf $(OUTPUT_FILE).elf -icon icon.icn -banner banner.bnr \
 	-DAPP_TITLE="$(APP_TITLE)" -DAPP_PRODUCT_CODE="$(APP_PRODUCT_CODE)" -DAPP_UNIQUE_ID="$(APP_UNIQUE_ID)" \

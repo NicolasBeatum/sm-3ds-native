@@ -182,6 +182,7 @@ Optional build switches:
 | ----------------- | ------- |
 | `FULL_NATIVE=1` | Run the decompiled native game logic. |
 | `BUILD_FLAGS="-DSM3DS_OLD3DS"` | Enable the optimized Old 3DS timing and rendering path. |
+| `APP_MAX_CPU=0xD0` | Allow an installed CIA to request up to 80% of the system CPU core (the default). `0x9E` limits it to 30%. This packaging setting does not affect 3DSX. |
 | `LTO=1` | Enable link-time optimization for compilation and linking. |
 | `-DSM3DS_PROFILE` | Write performance counters to `sdmc:/sm3ds-profile.log`. |
 | `-DSM3DS_DOOR_TRACE` | Write targeted Crateria door/BTS diagnostics. |
