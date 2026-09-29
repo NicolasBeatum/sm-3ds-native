@@ -263,10 +263,10 @@ static bool TileQuad(PicaFrame *f, unsigned group, unsigned slot,
 }
 
 static unsigned EqualRun(const PicaFrame *f, unsigned y,
-                         size_t offset, size_t size) {
+                         size_t offset, size_t size, unsigned maxRun) {
   unsigned end = y + 1;
   const uint8_t *base = (const uint8_t *)&f->lines[y] + offset;
-  while (end < f->height &&
+  while (end < f->height && end - y < maxRun &&
          !memcmp(base, (const uint8_t *)&f->lines[end] + offset, size))
     end++;
   return end - y;
@@ -347,8 +347,15 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
       const PicaLine *p = &f->lines[y];
       const BgLayer *bg = &p->bg[layer];
       unsigned wy = (y + 1 + bg->vScroll) & (bg->tilemapHigher ? 511 : 255);
+      /* A tile-height chunk cannot cross either 8-pixel row boundary.
+       * Bound the state comparison now instead of scanning the remaining
+       * frame and discarding that result afterward. */
+      unsigned maxRun = 8 - (wy & 7);
+      if (layer < 2 && f->wideRoom[layer].blocks)
+        maxRun = Min(maxRun,
+                     8 - ((f->wideRoom[layer].cameraY + (int)y + 1) & 7));
       unsigned h = EqualRun(f, y, offsetof(PicaLine, bg) + layer * sizeof(BgLayer),
-                            sizeof(BgLayer));
+                            sizeof(BgLayer), maxRun);
       for (unsigned run = 1; run < h; run++) {
         const PicaLine *next = &f->lines[y + run];
         unsigned layerBit = 1u << layer;
@@ -373,9 +380,6 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
           break;
         }
       }
-      h = Min(h, 8 - (wy & 7));
-      if (layer < 2 && f->wideRoom[layer].blocks)
-        h = Min(h, 8 - ((f->wideRoom[layer].cameraY + (int)y + 1) & 7));
       if (p->forcedBlank || !(p->screenEnabled[sub] & (1u << layer)) ||
           (sub && !p->addSubscreen)) { y += h; continue; }
       WindowSpans win;
