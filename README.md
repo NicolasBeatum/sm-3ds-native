@@ -40,7 +40,11 @@ Highlights:
   upper selector screen displays the game title, version and project credits,
   with NicolasBeatum prominently credited for project direction and testing.
 - Hold L + R + A to write a debug report and WRAM/SRAM snapshots into
-  `sdmc:/3ds/sm3dsnative/dump/`.
+  `sdmc:/3ds/sm3dsnative/dump/`. Each new dump also includes up to 120 recent
+  frame timings (measured FPS, game/render/presentation work and widescreen/GPU
+  state) and attempts BMP and raw captures of both LCDs; `info.txt` records
+  whether each capture succeeded. The diagnostic layout was
+  inspired by [zelda-alttp-3ds](https://github.com/EstebanPdN/zelda-alttp-3ds).
 - Fixed room BTS loading on ARM, including the Landing Site terrain and blue
   door collision in Crateria.
 
@@ -86,16 +90,16 @@ copyright or required attribution of any upstream project.
 
 ## Building
 
-### Release 0.1.0
+### Release 0.1.1
 
 Download the ROM-free `.3dsx` for the Homebrew Launcher or the `.cia` for FBI
-from the [v0.1.0 release](https://github.com/NicolasBeatum/sm-3ds-native/releases/tag/v0.1.0).
+from the [v0.1.1 release](https://github.com/NicolasBeatum/sm-3ds-native/releases/tag/v0.1.1).
 The release also includes a QR code for FBI's **Remote Install → Scan QR Code**.
 After installation, supply your own compatible `.smc` or `.sfc` ROM in
 `sdmc:/3ds/sm3dsnative/` and select it at startup. Neither release build
 contains a game ROM or translation patch.
 
-![FBI QR code for the v0.1.0 CIA](docs/assets/fbi-v0.1.0.png)
+![FBI QR code for the v0.1.1 CIA](docs/assets/fbi-v0.1.1.png)
 
 ### Setup
 
@@ -155,12 +159,30 @@ files in the launcher yet; use the already patched `.sfc` for this test. The
 translation itself covers approximately 80% of the original game, and the
 port's own lower-screen interface remains in English.
 
+### Hardware diagnostics
+
+Stay in a slow scene for about ten seconds, then use **SETUP → i → SAVE
+DUMP** or hold **L + R + A**. The newest folder under
+`sdmc:/3ds/sm3dsnative/dump/` contains `info.txt`, `frame-times.csv`, WRAM,
+SRAM and (when the display capture succeeds) `top.bmp`, `bottom.bmp` and their
+raw framebuffers. `measured_fps` is calculated from recent real frame
+intervals; the phase timings identify game, upper-screen, lower-screen and
+presentation work. Capturing the same scene once with widescreen on and once
+off makes the difference measurable. Older v2 dumps contain no FPS data.
+Diagnostic builds with `SM3DS_PHASE_DIAG` also split the game phase into native
+logic and PPU preparation (`avg_logic_us` and `avg_ppu_us`). This adds only a few
+clock reads per frame and helps locate slow scenes on the original 3DS.
+Recent diagnostic builds further separate main/sub background and object work,
+color composition, and vertex/atlas upload. These timings are recorded only
+for frames that actually use the PICA renderer.
+
 Optional build switches:
 
 | Variable / define | Purpose |
 | ----------------- | ------- |
 | `FULL_NATIVE=1` | Run the decompiled native game logic. |
 | `BUILD_FLAGS="-DSM3DS_OLD3DS"` | Enable the optimized Old 3DS timing and rendering path. |
+| `APP_MAX_CPU=0xD0` | Allow an installed CIA to request up to 80% of the system CPU core (the default). `0x9E` limits it to 30%. This packaging setting does not affect 3DSX. |
 | `LTO=1` | Enable link-time optimization for compilation and linking. |
 | `-DSM3DS_PROFILE` | Write performance counters to `sdmc:/sm3ds-profile.log`. |
 | `-DSM3DS_DOOR_TRACE` | Write targeted Crateria door/BTS diagnostics. |

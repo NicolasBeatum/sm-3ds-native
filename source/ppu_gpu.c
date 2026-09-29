@@ -10,7 +10,7 @@
 #include <citro2d.h>
 #include <stdlib.h>
 #include <string.h>
-#ifdef SM3DS_PROFILE
+#if defined(SM3DS_PROFILE) || defined(SM3DS_PHASE_DIAG)
 #include "SDL2/SDL.h"
 #endif
 
@@ -55,6 +55,9 @@ static WideConfig g_wide_config = {
     .output_width = kSnesWidth,
     .hud_end_y = kHudEndLine,
 };
+#ifdef SM3DS_PHASE_DIAG
+static uint64_t g_diag_upload_ticks;
+#endif
 
 static bool Clean(const void *p, size_t bytes) {
   if (!bytes) return true;
@@ -367,6 +370,9 @@ void PpuGpuLine(const Ppu *p, unsigned y) {
 }
 
 bool PpuGpuFinish(Ppu *p) {
+#ifdef SM3DS_PHASE_DIAG
+  g_diag_upload_ticks = 0;
+#endif
 #ifdef SM3DS_PROFILE
   uint64_t started = SDL_GetPerformanceCounter();
 #endif
@@ -426,6 +432,9 @@ bool PpuGpuFinish(Ppu *p) {
 #endif
     return false;
   }
+#ifdef SM3DS_PHASE_DIAG
+  uint64_t upload_before = SDL_GetPerformanceCounter();
+#endif
   for (unsigned i = 1; i < PICA_SLOTS;) {
     if (!(g.cache->dirty[i / 32] & (1u << (i & 31)))) { i++; continue; }
     unsigned first = i++;
@@ -436,6 +445,9 @@ bool PpuGpuFinish(Ppu *p) {
       g.cache->dirty[j / 32] &= ~(1u << (j & 31));
   }
   if (!Clean(g.vertices, g.count * sizeof(Vertex))) ok = false;
+#ifdef SM3DS_PHASE_DIAG
+  g_diag_upload_ticks = SDL_GetPerformanceCounter() - upload_before;
+#endif
   if (!ok) {
     g.reason = "cache-clean";
     memcpy(p, g.saved, sizeof(Ppu));
@@ -465,6 +477,16 @@ C3D_Tex *PpuGpuOutput(void) { return g.output ? &g.result : NULL; }
 unsigned PpuGpuOutputWidth(void) { return g.output ? g.width : kSnesWidth; }
 unsigned PpuGpuHudLines(void) { return g.output ? g.hudLines : 0; }
 const char *PpuGpuReason(void) { return g.reason ? g.reason : "uninitialized"; }
+#ifdef SM3DS_PHASE_DIAG
+PpuGpuTiming PpuGpuGetTiming(void) {
+  return (PpuGpuTiming){g_pica_build_timing.bg_main,
+                        g_pica_build_timing.obj_main,
+                        g_pica_build_timing.bg_sub,
+                        g_pica_build_timing.obj_sub,
+                        g_pica_build_timing.compose,
+                        g_diag_upload_ticks};
+}
+#endif
 
 bool PpuGpuDraw(void) {
   if (!g.prepared) return g.output;

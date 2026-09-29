@@ -24,6 +24,7 @@
 #include "ppu_gpu.h"
 #include "rom_menu.h"
 #include "debug_dump.h"
+#include "frame_diagnostics.h"
 #include "storage_paths.h"
 
 enum Button {
@@ -353,6 +354,20 @@ static void SaveDebugDump(const char *rom_name, uint32_t frame_number) {
                           osGetTime() + 3000);
 }
 
+static uint32_t PerformanceTicksBetween(uint64_t begin, uint64_t end) {
+  uint64_t ticks = end - begin;
+  return ticks > UINT32_MAX ? UINT32_MAX : (uint32_t)ticks;
+}
+
+#ifdef SM3DS_PHASE_DIAG
+static void TraceExit(FILE *trace, const char *stage) {
+  if (trace) {
+    fprintf(trace, "%llu %s\n", (unsigned long long)osGetTime(), stage);
+    fflush(trace);
+  }
+}
+#endif
+
 enum {
   kDefaultFullscreen = 0,
   kMaxWindowScale = 10,
@@ -469,6 +484,8 @@ int main(int argc, char** argv) {
   bool running = true;
   uint32 lastTick = SDL_GetTicks();
   uint32 frameCtr = 0;
+  FrameDiagnostics_Init(SDL_GetPerformanceFrequency());
+  uint64_t lastFrameStart = 0;
   uint8 audiopaused = true;
   unsigned dump_buttons = 0;
   bool dump_chord_latched = false;
@@ -514,7 +531,7 @@ int main(int argc, char** argv) {
   while (running) {
     SDL_Event event;
 
-    while (SDL_PollEvent(&event)) {
+    while (running && SDL_PollEvent(&event)) {
       switch (event.type) {
       case SDL_JOYBUTTONDOWN:
         if (event.jbutton.button == BTN_A) dump_buttons |= 1;
@@ -523,6 +540,7 @@ int main(int argc, char** argv) {
         if (dump_buttons == 7 && !dump_chord_latched) {
           dump_chord_latched = true;
           SaveDebugDump(rom_name, frameCtr);
+          lastFrameStart = 0;
         }
         HandleCommand(event.jbutton.button, true);
         break;
@@ -551,8 +569,15 @@ int main(int argc, char** argv) {
       }
     }
 
-    if (BottomScreen_ConsumeDumpRequest())
+    /* aptMainLoop has requested shutdown. Do not submit another frame after
+     * SDL has delivered SDL_QUIT, especially during HOME/POWER transitions. */
+    if (!running)
+      break;
+
+    if (BottomScreen_ConsumeDumpRequest()) {
       SaveDebugDump(rom_name, frameCtr);
+      lastFrameStart = 0;
+    }
 
     if (g_paused != audiopaused) {
       audiopaused = g_paused;
@@ -561,10 +586,15 @@ int main(int argc, char** argv) {
     }
 
     if (g_paused) {
+      lastFrameStart = 0;
       SDL_Delay(16);
       continue;
     }
 
+    uint64_t frameStart = SDL_GetPerformanceCounter();
+    uint32_t intervalTicks = lastFrameStart ?
+        PerformanceTicksBetween(lastFrameStart, frameStart) : 0;
+    lastFrameStart = frameStart;
     int inputs = g_input1_state |
         ((g_input1_state & 0xf0) ? 0 : g_gamepad_buttons);
     WideConfig frameViewport = WideConfig_Create(
@@ -574,6 +604,8 @@ int main(int argc, char** argv) {
     RtlSetSpriteViewportMargin(frameViewport.origin_x);
     PpuGpuSetWideConfig(frameViewport);
     uint8 is_replay = RtlRunFrame(inputs);
+    uint64_t afterGame = SDL_GetPerformanceCounter();
+    bool pica_frame = PpuGpuOutputActive();
 
     frameCtr++;
 #ifdef SM3DS_PROFILE
@@ -586,8 +618,10 @@ int main(int argc, char** argv) {
       gpu_frame = GpuPresenter_DrawTop(g_pixels);
     else if (!g_snes->disableRender)
       DrawPpuFrame();
+    uint64_t afterTop = SDL_GetPerformanceCounter();
 
     bool bottom_updated = BottomScreen_Draw();
+    uint64_t afterBottom = SDL_GetPerformanceCounter();
 
     if (gpu_frame) {
       GpuPresenter_DrawBottom(BottomScreen_Pixels(), bottom_updated);
@@ -597,6 +631,36 @@ int main(int argc, char** argv) {
       gfxFlushBuffers();
       gfxSwapBuffers();
     }
+    uint64_t afterPresent = SDL_GetPerformanceCounter();
+#ifdef SM3DS_PHASE_DIAG
+    uint32_t logicTicks = g_diag_logic_ticks;
+    uint32_t ppuTicks = g_diag_ppu_ticks;
+#else
+    uint32_t logicTicks = 0;
+    uint32_t ppuTicks = 0;
+#endif
+    FrameDiagnostics_Record(
+        frameCtr, intervalTicks,
+        PerformanceTicksBetween(frameStart, afterGame),
+        logicTicks, ppuTicks,
+        PerformanceTicksBetween(afterGame, afterTop),
+        PerformanceTicksBetween(afterTop, afterBottom),
+        PerformanceTicksBetween(afterBottom, afterPresent),
+        frameViewport.enabled, pica_frame, gpu_frame,
+#ifdef SM3DS_PHASE_DIAG
+        g_diag_phase_valid
+#else
+        false
+#endif
+        );
+#ifdef SM3DS_PHASE_DIAG
+    if (pica_frame) {
+      PpuGpuTiming timing = PpuGpuGetTiming();
+      FrameDiagnostics_RecordPpuDetail(
+          timing.bg_main, timing.obj_main, timing.bg_sub, timing.obj_sub,
+          timing.compose, timing.upload);
+    }
+#endif
 
 #ifdef SM3DS_PROFILE
     uint32 profileNow = SDL_GetTicks();
@@ -730,15 +794,35 @@ int main(int argc, char** argv) {
   }
 
   // Cleanup
-  SDL_PauseAudioDevice(g_audio_device, 1);
-  SDL_CloseAudioDevice(g_audio_device);
+#ifdef SM3DS_PHASE_DIAG
+  FILE *exit_trace = fopen(SM3DS_DUMP_DIR "/last-exit.txt", "w");
+  TraceExit(exit_trace, "quit received");
+#endif
+  if (g_audio_device) {
+    SDL_PauseAudioDevice(g_audio_device, 1);
+#ifdef SM3DS_PHASE_DIAG
+    TraceExit(exit_trace, "audio paused");
+#endif
+    SDL_CloseAudioDevice(g_audio_device);
+  }
+#ifdef SM3DS_PHASE_DIAG
+  TraceExit(exit_trace, "audio closed");
+#endif
   SDL_DestroyMutex(g_audio_mutex);
   free(g_audiobuffer);
   GpuPresenter_Fini();
+#ifdef SM3DS_PHASE_DIAG
+  TraceExit(exit_trace, "gpu closed");
+#endif
   BottomScreen_Fini();
   linearFree(g_pixels);
   SDL_DestroyWindow(window);
   SDL_Quit();
+#ifdef SM3DS_PHASE_DIAG
+  TraceExit(exit_trace, "sdl closed");
+  if (exit_trace)
+    fclose(exit_trace);
+#endif
 #ifdef SM3DS_PROFILE
   if (profile)
     fclose(profile);

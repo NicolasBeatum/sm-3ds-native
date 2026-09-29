@@ -3,6 +3,10 @@
 
 #include <stddef.h>
 #include <string.h>
+#ifdef SM3DS_PHASE_DIAG
+#include "SDL2/SDL.h"
+PicaBuildTiming g_pica_build_timing;
+#endif
 
 static const uint8_t kMorton[64] = {
     0,1,4,5,16,17,20,21,2,3,6,7,18,19,22,23,
@@ -259,10 +263,10 @@ static bool TileQuad(PicaFrame *f, unsigned group, unsigned slot,
 }
 
 static unsigned EqualRun(const PicaFrame *f, unsigned y,
-                         size_t offset, size_t size) {
+                         size_t offset, size_t size, unsigned maxRun) {
   unsigned end = y + 1;
   const uint8_t *base = (const uint8_t *)&f->lines[y] + offset;
-  while (end < f->height &&
+  while (end < f->height && end - y < maxRun &&
          !memcmp(base, (const uint8_t *)&f->lines[end] + offset, size))
     end++;
   return end - y;
@@ -338,16 +342,35 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
   }
 
   for (unsigned layer = 0; layer < 3; layer++) {
-    if (!HasLayer(f, sub, 1u << layer)) continue;
+    unsigned layerBit = 1u << layer;
+    if (!HasLayer(f, sub, layerBit)) continue;
     for (unsigned y = 0; y < f->height;) {
       const PicaLine *p = &f->lines[y];
+      /* Disabled lines cannot emit tiles. Skip the whole inactive stretch
+       * before comparing BG registers and looking up tile rows. */
+      if (p->forcedBlank || !(p->screenEnabled[sub] & layerBit) ||
+          (sub && !p->addSubscreen)) {
+        do {
+          y++;
+          if (y == f->height) break;
+          p = &f->lines[y];
+        } while (p->forcedBlank || !(p->screenEnabled[sub] & layerBit) ||
+                 (sub && !p->addSubscreen));
+        continue;
+      }
       const BgLayer *bg = &p->bg[layer];
       unsigned wy = (y + 1 + bg->vScroll) & (bg->tilemapHigher ? 511 : 255);
+      /* A tile-height chunk cannot cross either 8-pixel row boundary.
+       * Bound the state comparison now instead of scanning the remaining
+       * frame and discarding that result afterward. */
+      unsigned maxRun = 8 - (wy & 7);
+      if (layer < 2 && f->wideRoom[layer].blocks)
+        maxRun = Min(maxRun,
+                     8 - ((f->wideRoom[layer].cameraY + (int)y + 1) & 7));
       unsigned h = EqualRun(f, y, offsetof(PicaLine, bg) + layer * sizeof(BgLayer),
-                            sizeof(BgLayer));
+                            sizeof(BgLayer), maxRun);
       for (unsigned run = 1; run < h; run++) {
         const PicaLine *next = &f->lines[y + run];
-        unsigned layerBit = 1u << layer;
         bool windowed = (p->screenWindowed[sub] & layerBit) != 0;
         bool beamWindowTiles = f->extendEyeBeam && sub == 1 && layer == 2 &&
                                windowed;
@@ -369,11 +392,6 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
           break;
         }
       }
-      h = Min(h, 8 - (wy & 7));
-      if (layer < 2 && f->wideRoom[layer].blocks)
-        h = Min(h, 8 - ((f->wideRoom[layer].cameraY + (int)y + 1) & 7));
-      if (p->forcedBlank || !(p->screenEnabled[sub] & (1u << layer)) ||
-          (sub && !p->addSubscreen)) { y += h; continue; }
       WindowSpans win;
       int spanLeft = 0, spanRight = f->width;
       bool hudLine = IsHudLine(f, y);
@@ -478,6 +496,30 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
       for (unsigned i = 0; i < win.nr; i++) {
         if (win.bits & (1u << i)) continue;
         int x = win.edges[i], end = win.edges[i + 1];
+        /* In the original 256-pixel viewport every tile comes from VRAM.
+         * Keep the side-band room lookup and boundary splits out of this
+         * common path, which runs for thousands of background tiles. */
+        if (f->width == kSnesWidth) {
+          unsigned scrollMask = bg->tilemapWider ? 511 : 255;
+          while (x < end) {
+            unsigned wx = (x + bg->hScroll) & scrollMask;
+            unsigned pixelX = wx & 7;
+            unsigned w = Min(8 - pixelX, end - x);
+            unsigned map = (mapRow + ((wx >> 3) & 31) +
+                            (wx >= 256 ? 0x400 : 0)) & 0x7fff;
+            uint16_t tile = f->memory->vram[map];
+            int slot = Tile(f, (bg->tileAdr + (tile & 1023) * tileWords) &
+                               0x7fff, (tile & 0x1c00) >> paletteShift, bpp);
+            if (slot == -1) return false;
+            if (slot >= 0 &&
+                !TileQuad(f, group, slot, x, y, w, h, pixelX, wy & 7,
+                          tile & 0x4000, tile & 0x8000,
+                          (tile & 0x2000) ? zHigh : zLow, tileAlpha))
+              return false;
+            x += w;
+          }
+          continue;
+        }
         while (x < end) {
           bool side = roomSides &&
               (x < (int)f->originX || x >= (int)f->originX + kSnesWidth);
@@ -685,6 +727,7 @@ static void ExtendEyeBeam(const PicaFrame *f, int16_t *left, int16_t *right) {
 static bool Compose(PicaFrame *f) {
   WindowSpans windows[PICA_MAX_LINES];
   uint8_t spanFlags[PICA_MAX_LINES][5];
+  uint16_t usedFlags = 0;
   for (unsigned y = 0; y < f->height;) {
     const PicaLine *p = &f->lines[y];
     unsigned h = 1;
@@ -723,6 +766,7 @@ static bool Compose(PicaFrame *f) {
       unsigned flags = (p->subtractColor ? 1 : 0) | (p->halfColor ? 2 : 0) |
                        (clip ? 4 : 0) | (prevent ? 8 : 0);
       spanFlags[y][i] = p->forcedBlank ? 12 : flags;
+      usedFlags |= 1u << spanFlags[y][i];
     }
     y += h;
   }
@@ -730,6 +774,7 @@ static bool Compose(PicaFrame *f) {
   /* Each TEV configuration is one contiguous vertex range. HDMA can change
    * state every scanline, so compute its spans once before grouping vertices. */
   for (unsigned wanted = 0; wanted < 16; wanted++) {
+    if (!(usedFlags & (1u << wanted))) continue;
     for (unsigned y = 0; y < f->height; y = f->bandEnd[y]) {
       const WindowSpans *win = &windows[y];
       for (unsigned i = 0; i < win->nr; i++) {
@@ -759,6 +804,9 @@ static bool Compose(PicaFrame *f) {
 }
 
 bool PicaBuildFrame(PicaFrame *f) {
+#ifdef SM3DS_PHASE_DIAG
+  memset(&g_pica_build_timing, 0, sizeof(g_pica_build_timing));
+#endif
   memset(f->quads, 0, sizeof(f->quads));
   f->failure = NULL;
   if (!((f->width == kSnesWidth && f->originX == 0) ||
@@ -782,6 +830,25 @@ bool PicaBuildFrame(PicaFrame *f) {
   }
   if (f->extendEyeBeam)
     ExtendEyeBeam(f, f->beamLeft, f->beamRight);
+#ifdef SM3DS_PHASE_DIAG
+  uint64_t before = SDL_GetPerformanceCounter();
+  if (!Backgrounds(f, 0)) return false;
+  uint64_t after = SDL_GetPerformanceCounter();
+  g_pica_build_timing.bg_main = after - before;
+  if (!Objects(f, 0)) return false;
+  before = SDL_GetPerformanceCounter();
+  g_pica_build_timing.obj_main = before - after;
+  if (!Backgrounds(f, 1)) return false;
+  after = SDL_GetPerformanceCounter();
+  g_pica_build_timing.bg_sub = after - before;
+  if (!Objects(f, 1)) return false;
+  before = SDL_GetPerformanceCounter();
+  g_pica_build_timing.obj_sub = before - after;
+  if (!Compose(f)) return false;
+  g_pica_build_timing.compose = SDL_GetPerformanceCounter() - before;
+  return true;
+#else
   return Backgrounds(f, 0) && Objects(f, 0) && Backgrounds(f, 1) &&
          Objects(f, 1) && Compose(f);
+#endif
 }

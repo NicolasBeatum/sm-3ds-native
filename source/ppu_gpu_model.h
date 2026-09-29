@@ -15,6 +15,13 @@ enum {
   PICA_GROUPS = 21,
 };
 
+#ifdef SM3DS_PHASE_DIAG
+typedef struct PicaBuildTiming {
+  uint64_t bg_main, obj_main, bg_sub, obj_sub, compose;
+} PicaBuildTiming;
+extern PicaBuildTiming g_pica_build_timing;
+#endif
+
 /* Only state that can affect a Mode 1 scanline is copied here.  VRAM,
  * CGRAM and OAM are retained once in PicaFrame::memory. */
 typedef struct PicaLine {

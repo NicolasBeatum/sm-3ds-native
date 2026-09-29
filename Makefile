@@ -265,9 +265,14 @@ OUTPUT_FILE := $(OUTPUT_DIR)/$(OUTPUT_NAME)
 APP_ICON := $(TOPDIR)/$(ICON)
 APP_ROMFS := $(TOPDIR)/$(ROMFS)
 
+# Match the 80% system-core limit requested at runtime. The old 0x9E
+# descriptor capped installed CIAs at 30%, while 3DSX ran at 80%.
+APP_MAX_CPU ?= 0xD0
+
 COMMON_MAKEROM_PARAMS := -rsf $(RSF) -target t -exefslogo -elf $(OUTPUT_FILE).elf -icon icon.icn -banner banner.bnr \
 	-DAPP_TITLE="$(APP_TITLE)" -DAPP_PRODUCT_CODE="$(APP_PRODUCT_CODE)" -DAPP_UNIQUE_ID="$(APP_UNIQUE_ID)" \
-	-DAPP_ROMFS="$(APP_ROMFS)" -DAPP_SYSTEM_MODE="64MB" -DAPP_SYSTEM_MODE_EXT="Legacy" -major "$(APP_VER_MAJOR)" \
+	-DAPP_ROMFS="$(APP_ROMFS)" -DAPP_SYSTEM_MODE="64MB" -DAPP_SYSTEM_MODE_EXT="Legacy" \
+	-DAPP_MAX_CPU="$(APP_MAX_CPU)" -major "$(APP_VER_MAJOR)" \
 	-minor "$(APP_VER_MINOR)" -micro "$(APP_VER_MICRO)"
 
 ifeq ($(OS),Windows_NT)

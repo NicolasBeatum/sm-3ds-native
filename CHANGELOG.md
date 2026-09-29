@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.1 - 2026-09-29
+
+Hardware performance and diagnostics update. Both release packages remain
+ROM-free and use the same native game engine.
+
+- Reduced background tile comparisons in normal-width and inactive spans,
+  and skipped color-math work when a scanline does not use it.
+- Matched the installed CIA's system-core CPU-time limit to the 3DSX limit,
+  removing a packaging-specific performance penalty on Old 3DS.
+- Added recent frame timings and display-buffer captures to debug dumps so
+  hardware performance can be compared across builds.
+- Made shutdown complete promptly when HOME or POWER requests it.
+- Replaced the large HOME-menu banner with a cartridge design based on the
+  existing Samus helmet art. The small HOME icon is unchanged.
+
+The widescreen renderer and gameplay remain unchanged by the release
+packaging. User testing found the current build playable on original hardware;
+performance still varies by room and effect.
+
 ## 0.1.0 - 2026-09-28
 
 First public ROM-free release. The startup ROM selector now shows the game
