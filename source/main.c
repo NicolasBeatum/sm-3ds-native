@@ -359,6 +359,15 @@ static uint32_t PerformanceTicksBetween(uint64_t begin, uint64_t end) {
   return ticks > UINT32_MAX ? UINT32_MAX : (uint32_t)ticks;
 }
 
+#ifdef SM3DS_PHASE_DIAG
+static void TraceExit(FILE *trace, const char *stage) {
+  if (trace) {
+    fprintf(trace, "%llu %s\n", (unsigned long long)osGetTime(), stage);
+    fflush(trace);
+  }
+}
+#endif
+
 enum {
   kDefaultFullscreen = 0,
   kMaxWindowScale = 10,
@@ -522,7 +531,7 @@ int main(int argc, char** argv) {
   while (running) {
     SDL_Event event;
 
-    while (SDL_PollEvent(&event)) {
+    while (running && SDL_PollEvent(&event)) {
       switch (event.type) {
       case SDL_JOYBUTTONDOWN:
         if (event.jbutton.button == BTN_A) dump_buttons |= 1;
@@ -559,6 +568,11 @@ int main(int argc, char** argv) {
         break;
       }
     }
+
+    /* aptMainLoop has requested shutdown. Do not submit another frame after
+     * SDL has delivered SDL_QUIT, especially during HOME/POWER transitions. */
+    if (!running)
+      break;
 
     if (BottomScreen_ConsumeDumpRequest()) {
       SaveDebugDump(rom_name, frameCtr);
@@ -780,15 +794,35 @@ int main(int argc, char** argv) {
   }
 
   // Cleanup
-  SDL_PauseAudioDevice(g_audio_device, 1);
-  SDL_CloseAudioDevice(g_audio_device);
+#ifdef SM3DS_PHASE_DIAG
+  FILE *exit_trace = fopen(SM3DS_DUMP_DIR "/last-exit.txt", "w");
+  TraceExit(exit_trace, "quit received");
+#endif
+  if (g_audio_device) {
+    SDL_PauseAudioDevice(g_audio_device, 1);
+#ifdef SM3DS_PHASE_DIAG
+    TraceExit(exit_trace, "audio paused");
+#endif
+    SDL_CloseAudioDevice(g_audio_device);
+  }
+#ifdef SM3DS_PHASE_DIAG
+  TraceExit(exit_trace, "audio closed");
+#endif
   SDL_DestroyMutex(g_audio_mutex);
   free(g_audiobuffer);
   GpuPresenter_Fini();
+#ifdef SM3DS_PHASE_DIAG
+  TraceExit(exit_trace, "gpu closed");
+#endif
   BottomScreen_Fini();
   linearFree(g_pixels);
   SDL_DestroyWindow(window);
   SDL_Quit();
+#ifdef SM3DS_PHASE_DIAG
+  TraceExit(exit_trace, "sdl closed");
+  if (exit_trace)
+    fclose(exit_trace);
+#endif
 #ifdef SM3DS_PROFILE
   if (profile)
     fclose(profile);

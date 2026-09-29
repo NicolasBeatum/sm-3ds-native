@@ -291,7 +291,8 @@ void GpuPresenter_Fini(void) {
   if (!g_initialized)
     return;
   GpuPresenter_EndFrame();
-  C3D_FrameSync();
+  /* Render-target deletion and C3D_Fini already drain the GPU queue. The
+   * extra VBlank wait can stall indefinitely while HOME closes the app. */
   PpuGpuShutdown();
   C3D_RenderTargetDelete(g_bottom_target);
   C3D_TexDelete(&g_bottom_texture);
