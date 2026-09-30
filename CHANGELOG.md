@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Resolve repeated background tile/palette descriptors once per GPU frame,
+  sharing the result between main and sub layers. Layers with changing
+  graphics banks retain the original lookup path. VRAM and palette changes
+  are revalidated on the next frame; geometry, HDMA and gameplay are unchanged.
+- Identify this renderer revision and LTO setting in diagnostic dumps for
+  hardware comparison. Old/New 3DS model detection and automatic New 3DS
+  CPU/L2 acceleration remain enabled in both package formats.
+
 ## 0.1.1 - 2026-09-29
 
 Hardware performance and diagnostics update. Both release packages remain

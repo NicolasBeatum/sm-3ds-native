@@ -54,6 +54,11 @@ typedef struct PicaAtlas {
   uint32_t frame, cursor, hits, decodes, live;
   uint32_t dirty[PICA_SLOTS / 32];
   uint8_t objectColumns[128][PICA_MAX_LINES];
+  /* Resolve each BG tile/palette descriptor once per frame. Priority and
+   * flips affect the quad, but not the decoded texture. */
+  uint16_t bgSlots[3][8192];
+  uint16_t bgBase[3];
+  uint32_t bgFrame[3];
 } PicaAtlas;
 
 typedef struct PicaQuad {

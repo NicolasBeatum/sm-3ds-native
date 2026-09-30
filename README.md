@@ -137,6 +137,12 @@ automatically if absent. Different ROM filenames use different save files
 when a local `romfs/sm.smc` exists in the source checkout.
 The native game engine is selected by the release build. The `SM3DS_OLD3DS`
 optimization is also fixed at build time and cannot be changed in the ROM selector.
+The same packages run on Old and New 3DS. At startup the port requests the
+New 3DS faster CPU clock and L2 cache through libctru; Old 3DS keeps its
+normal clock. `SM3DS_OLD3DS` selects economical rendering code, not an Old
+3DS CPU limit. Dumps identify the detected model in `hardware`. New 3DS
+should therefore improve CPU-bound scenes, but its actual frame rate still
+depends on the scene and needs to be measured on hardware.
 For `sm.smc`, an existing `saves/sm.srm` is copied to the new SD save location
 the first time, leaving the original file intact.
 The public repository does not include game ROM data. The selector currently

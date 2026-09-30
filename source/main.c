@@ -394,8 +394,8 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // Use the faster New 3DS CPU clock when available. This is harmless on
-  // original 3DS models and mirrors the setup used by the reference port.
+  // Enable both the faster CPU clock and L2 cache on New 3DS. libctru
+  // handles the model-specific request; Old 3DS keeps its normal clock.
   osSetSpeedupEnable(true);
   EnableSystemCoreTime();
 

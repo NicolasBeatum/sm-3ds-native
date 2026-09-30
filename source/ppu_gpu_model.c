@@ -45,6 +45,7 @@ void PicaAtlasInit(PicaAtlas *a, uint32_t *pixels) {
 void PicaAtlasBegin(PicaAtlas *a) {
   if (++a->frame == 0) {
     a->frame = 1;
+    memset(a->bgFrame, 0, sizeof(a->bgFrame));
     for (unsigned i = 1; i < PICA_SLOTS; i++)
       a->tile[i].used = a->tile[i].checked = 0;
   }
@@ -130,6 +131,37 @@ static int Tile(PicaFrame *f, unsigned address, unsigned palette, unsigned bpp) 
     }
   }
   return t->opaque ? (int)slot : -2;
+}
+
+static uint16_t *BackgroundSlots(PicaAtlas *a, unsigned layer,
+                                 unsigned base) {
+  /* VRAM/CGRAM are frozen for a GPU frame, but HDMA/IRQ can select another
+   * tile bank between scanlines. Main and sub share a bank when possible. */
+  if (a->bgFrame[layer] != a->frame || a->bgBase[layer] != base) {
+    memset(a->bgSlots[layer], 0, sizeof(a->bgSlots[layer]));
+    a->bgFrame[layer] = a->frame;
+    a->bgBase[layer] = base;
+  }
+  return a->bgSlots[layer];
+}
+
+static inline int BackgroundTile(PicaFrame *f, uint16_t *slots,
+                                 unsigned tile, unsigned base,
+                                 unsigned words, unsigned paletteShift,
+                                 unsigned bpp) {
+  unsigned descriptor = tile & 0x1fff;
+  unsigned cached = slots ? slots[descriptor] : 0;
+  if (cached) {
+    f->atlas->hits++;
+    return (int)cached - 3;
+  }
+  int slot = Tile(f, base + (tile & 1023) * words,
+                  (tile & 0x1c00) >> paletteShift, bpp);
+  /* Zero means unresolved, one is transparent. Never cache a failure.
+   * Tile() pins every resolved slot until PicaAtlasBegin(), so eviction
+   * cannot invalidate this shortcut while drawing the remaining layers. */
+  if (slots && slot != -1) slots[descriptor] = slot + 3;
+  return slot;
 }
 
 void PicaCaptureLine(PicaLine *out, const Ppu *p) {
@@ -344,6 +376,17 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
   for (unsigned layer = 0; layer < 3; layer++) {
     unsigned layerBit = 1u << layer;
     if (!HasLayer(f, sub, layerBit)) continue;
+    /* A layer whose graphics bank changes within the frame keeps the
+     * original lookup path. Repeated bank invalidation would cost more
+     * than it saves, especially for the HUD's short IRQ bands. */
+    unsigned base = f->lines[0].bg[layer].tileAdr;
+    bool stableBase = true;
+    for (unsigned line = 1; line < f->height; line++)
+      if (f->lines[line].bg[layer].tileAdr != base) {
+        stableBase = false;
+        break;
+      }
+    uint16_t *slots = stableBase ? BackgroundSlots(f->atlas, layer, base) : NULL;
     for (unsigned y = 0; y < f->height;) {
       const PicaLine *p = &f->lines[y];
       /* Disabled lines cannot emit tiles. Skip the whole inactive stretch
@@ -451,8 +494,8 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
           unsigned map = (mapRow + ((wx >> 3) & 31) +
                           (wx >= 256 ? 0x400 : 0)) & 0x7fff;
           uint16_t tile = f->memory->vram[map];
-          int slot = Tile(f, (bg->tileAdr + (tile & 1023) * tileWords) & 0x7fff,
-                          (tile & 0x1c00) >> paletteShift, bpp);
+          int slot = BackgroundTile(f, slots, tile, bg->tileAdr, tileWords,
+                                    paletteShift, bpp);
           if (slot == -1) return false;
           if (slot >= 0) {
             unsigned z = (tile & 0x2000) ? zHigh : zLow;
@@ -508,8 +551,8 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
             unsigned map = (mapRow + ((wx >> 3) & 31) +
                             (wx >= 256 ? 0x400 : 0)) & 0x7fff;
             uint16_t tile = f->memory->vram[map];
-            int slot = Tile(f, (bg->tileAdr + (tile & 1023) * tileWords) &
-                               0x7fff, (tile & 0x1c00) >> paletteShift, bpp);
+            int slot = BackgroundTile(f, slots, tile, bg->tileAdr, tileWords,
+                                      paletteShift, bpp);
             if (slot == -1) return false;
             if (slot >= 0 &&
                 !TileQuad(f, group, slot, x, y, w, h, pixelX, wy & 7,
@@ -543,8 +586,8 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
                             (wx >= 256 ? 0x400 : 0)) & 0x7fff;
             tile = f->memory->vram[map];
           }
-          int slot = Tile(f, (bg->tileAdr + (tile & 1023) * tileWords) & 0x7fff,
-                          (tile & 0x1c00) >> paletteShift, bpp);
+          int slot = BackgroundTile(f, slots, tile, bg->tileAdr, tileWords,
+                                    paletteShift, bpp);
           if (slot == -1) return false;
           if (side) w = Min(w, 8 - pixelX);
           unsigned z = (tile & 0x2000) ? zHigh : zLow;
