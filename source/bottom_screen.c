@@ -80,6 +80,7 @@ static bool g_widescreen = true;
 static bool g_status_bar_visible[3] = {true, true, false};
 static bool g_clear_markers_armed;
 static bool g_setup_build_info;
+static const char *g_console_model = "UNKNOWN";
 static bool g_dump_requested;
 static char g_settings_path[256];
 static Thread g_settings_thread;
@@ -1059,6 +1060,9 @@ static void DrawSetupTab(uint8_t *fb, int top) {
   FillRect(fb, 293, info_y + 8, 3, info_height - 11, kWhite);
 
   if (g_setup_build_info) {
+    char model[24];
+    snprintf(model, sizeof(model), "MODEL: %s", g_console_model);
+    DrawText(fb, 96, top + (compact ? 7 : 13), model, 1, kAccent);
     FillRect(fb, 185, info_y, 88, info_height, kSlot);
     StrokeRect(fb, 185, info_y, 88, info_height, 2, kAccent);
     DrawText(fb, 202, info_y + (compact ? 4 : 6), "SAVE DUMP", 1, kWhite);
@@ -1275,6 +1279,9 @@ void BottomScreen_ShowNotice(const char *message, uint64_t until_ms) {
 }
 
 bool BottomScreen_Init(void) {
+  bool new3ds = false;
+  g_console_model = R_SUCCEEDED(APT_CheckNew3DS(&new3ds)) ?
+      (new3ds ? "NEW 3DS" : "OLD 3DS") : "UNKNOWN";
   g_bottom_cache = linearMemAlign(
       kBottomTextureWidth * kBottomTextureHeight * 4, 0x80);
   if (!g_bottom_cache)

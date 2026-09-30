@@ -31,7 +31,8 @@ Highlights:
   its `S` button centers Samus and `N` toggles area names. SETUP can hide the
   floating map buttons. World zoom has seven levels and keeps the current map
   center in place. SETUP also has separate status-bar switches for MAP, ITEMS
-  and SETUP, widescreen and main-HUD controls. Its small `i` tab shows build
+  and SETUP, widescreen and main-HUD controls. Its small `i` tab shows the
+  detected Old/New 3DS hardware family and build
   information (`BUILD_FLAGS`, port-specific defines, `FULL_NATIVE` and `LTO`).
 - Correct HDMA rain, fog, windows and colour math without scanline filtering.
 - ROM selector on startup. Put `.smc` or `.sfc` files in

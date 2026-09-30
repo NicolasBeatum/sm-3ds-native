@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Show the detected Old/New 3DS hardware family in SETUP's information tab,
+  independently of the build flags.
 - Cache decoded lower-screen map tiles and colors, and rebuild the map texture
   only when visible state changes. Queue configuration writes on a worker so
   map controls do not wait for microSD writes; flush pending settings on exit.
