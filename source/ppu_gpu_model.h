@@ -75,6 +75,8 @@ typedef bool PicaEmit(void *context, unsigned group, const PicaQuad *quad);
 typedef struct PicaWideRoomLayer {
   const uint16_t *blocks;
   int cameraX, cameraY;
+  uint16_t scrollX, scrollY;
+  bool followScroll;
 } PicaWideRoomLayer;
 
 typedef struct PicaFrame {
@@ -106,3 +108,4 @@ void PicaAtlasBegin(PicaAtlas *atlas);
 void PicaCaptureLine(PicaLine *out, const Ppu *ppu);
 unsigned PicaHudLineCount(const PicaFrame *frame);
 bool PicaBuildFrame(PicaFrame *frame);
+int PicaScrollOffset(unsigned scroll, unsigned base, bool wider);

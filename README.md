@@ -40,8 +40,9 @@ Highlights:
   upper selector screen displays the game title, version and project credits,
   with NicolasBeatum prominently credited for project direction and testing.
 - Hold L + R + A to write a debug report and WRAM/SRAM snapshots into
-  `sdmc:/3ds/sm3dsnative/dump/`. Each new dump also includes up to 120 recent
-  frame timings (measured FPS, game/render/presentation work and widescreen/GPU
+  `sdmc:/3ds/sm3dsnative/dump/`. Each new dump also includes session timing
+  totals and up to 120 recent frame timings (measured FPS,
+  game/render/presentation work and widescreen/GPU
   state) and attempts BMP and raw captures of both LCDs; `info.txt` records
   whether each capture succeeded. The diagnostic layout was
   inspired by [zelda-alttp-3ds](https://github.com/EstebanPdN/zelda-alttp-3ds).
@@ -171,10 +172,17 @@ Stay in a slow scene for about ten seconds, then use **SETUP → i → SAVE
 DUMP** or hold **L + R + A**. The newest folder under
 `sdmc:/3ds/sm3dsnative/dump/` contains `info.txt`, `frame-times.csv`, WRAM,
 SRAM and (when the display capture succeeds) `top.bmp`, `bottom.bmp` and their
-raw framebuffers. `measured_fps` is calculated from recent real frame
-intervals; the phase timings identify game, upper-screen, lower-screen and
-presentation work. Capturing the same scene once with widescreen on and once
-off makes the difference measurable. Older v2 dumps contain no FPS data.
+raw framebuffers. `measured_fps` covers only the last 120 rendered frames.
+Timing schema v4 also has `session_measured_fps` since launch and separate
+`gameplay_standard_measured_fps` / `gameplay_widescreen_measured_fps` totals.
+Paused, suspended and dump-writing gaps are excluded from frame intervals.
+Session summaries use fixed memory and perform no SD writes during gameplay;
+the CSV remains a recent sample rather than a complete session trace.
+The phase timings identify game, upper-screen, lower-screen and presentation
+work. Sector and scroll-block change counters, their work times, and the
+recent CSV's location columns help investigate hitches while traversing a
+room. Compare equivalent routes from a fresh launch in each build. Older v2
+dumps contain no FPS data; v3 contains only recent timing data.
 Diagnostic builds with `SM3DS_PHASE_DIAG` also split the game phase into native
 logic and PPU preparation (`avg_logic_us` and `avg_ppu_us`). This adds only a few
 clock reads per frame and helps locate slow scenes on the original 3DS.

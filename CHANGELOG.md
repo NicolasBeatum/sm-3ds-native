@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Cache decoded lower-screen map tiles and colors, and rebuild the map texture
+  only when visible state changes. Queue configuration writes on a worker so
+  map controls do not wait for microSD writes; flush pending settings on exit.
+- Select sprite pieces by scanline membership, preserving OAM order, wrapping
+  and the original sprite/tile limits. This reduces repeated selection work
+  for multipart enemies.
+- Apply captured background scroll offsets to the widescreen side bands and
+  room bounds so camera shakes continue across the extended viewport.
+- Add whole-session timing totals, separate gameplay statistics for standard
+  and widescreen modes, and sector/scroll-change events to diagnostic dumps.
+  Keep the last 120 frames as a separate detailed sample.
+- Use the approved pixel-art 3DS and Samus ship artwork for the large CIA
+  HOME-menu banner. The small HOME icon is unchanged.
 - Resolve repeated background tile/palette descriptors once per GPU frame,
   sharing the result between main and sub layers. Layers with changing
   graphics banks retain the original lookup path. VRAM and palette changes

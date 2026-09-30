@@ -387,11 +387,18 @@ bool PpuGpuFinish(Ppu *p) {
                      .extendEyeBeam=g.width == kWideWidth &&
                                     enemy_data[1].enemy_ptr == 0xe6bf &&
                                     kraid_unk9000 != 0,
-                     .wideRoom={{level_data, (int16_t)layer1_x_pos,
-                                 (int16_t)layer1_y_pos},
-                                {(const uint16_t *)(g_ram + 0x19602),
-                                 (int16_t)layer2_x_pos,
-                                 (int16_t)layer2_y_pos}},
+                     .wideRoom={{.blocks=level_data,
+                                 .cameraX=(int16_t)layer1_x_pos,
+                                 .cameraY=(int16_t)layer1_y_pos,
+                                 .scrollX=layer1_x_pos + bg1_x_offset,
+                                 .scrollY=layer1_y_pos + bg1_y_offset,
+                                 .followScroll=true},
+                                {.blocks=(const uint16_t *)(g_ram + 0x19602),
+                                 .cameraX=(int16_t)layer2_x_pos,
+                                 .cameraY=(int16_t)layer2_y_pos,
+                                 .scrollX=layer2_x_pos + bg2_x_scroll,
+                                 .scrollY=layer2_y_pos + bg2_y_scroll,
+                                 .followScroll=true}},
                      .wideTileTable=(const uint16_t *)(g_ram + 0xA000),
                      .wideRoomWidth=room_width_in_blocks,
                      .wideRoomHeight=room_height_in_blocks,
@@ -409,8 +416,14 @@ bool PpuGpuFinish(Ppu *p) {
     frame.wideRoom[1].blocks = NULL;
   if (ok) g.hudLines = PicaHudLineCount(&frame);
   if (ok && g.width == kWideWidth) {
+    unsigned playfield = g.hudLines < g.height ? g.hudLines : 0;
+    const BgLayer *bg = &g.lines[playfield].bg[0];
+    int shakeX = PicaScrollOffset(bg->hScroll, frame.wideRoom[0].scrollX,
+                                  bg->tilemapWider);
+    int shakeY = PicaScrollOffset(bg->vScroll, frame.wideRoom[0].scrollY,
+                                  bg->tilemapHigher);
     WideWorldSpan span = WideBounds_Compute(
-        (int16_t)layer1_x_pos, (int16_t)layer1_y_pos,
+        (int16_t)layer1_x_pos + shakeX, (int16_t)layer1_y_pos + shakeY,
         room_width_in_blocks, room_width_in_scrolls,
         room_height_in_scrolls, scrolls);
     frame.worldLeft = span.left;

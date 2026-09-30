@@ -82,6 +82,11 @@ static bool g_clear_markers_armed;
 static bool g_setup_build_info;
 static bool g_dump_requested;
 static char g_settings_path[256];
+static Thread g_settings_thread;
+static LightLock g_settings_lock;
+static LightEvent g_settings_event;
+static bool g_settings_pending, g_settings_stopping;
+static char g_settings_text[512], g_settings_write_path[256];
 static char g_notice[48];
 static uint64_t g_notice_until_ms;
 typedef struct MapMarker { uint8_t area, x, y; } MapMarker;
@@ -104,11 +109,14 @@ static inline void PutPixel(uint8_t *fb, int x, int y, UiColor color) {
   if (x < g_clip_left || x >= g_clip_right ||
       y < g_clip_top || y >= g_clip_bottom)
     return;
-  const int i = (y * kBottomTextureWidth + x) * 4;
-  fb[i + 0] = color.b;
-  fb[i + 1] = color.g;
-  fb[i + 2] = color.r;
-  fb[i + 3] = 0xff;
+  ((uint32_t *)fb)[y * kBottomTextureWidth + x] =
+      0xff000000u | ((uint32_t)color.r << 16) | (color.g << 8) | color.b;
+}
+
+static inline void PutMapPixel(uint8_t *fb, int x, int y, uint32_t color) {
+  if (x >= g_clip_left && x < g_clip_right &&
+      y >= g_clip_top && y < g_clip_bottom)
+    ((uint32_t *)fb)[y * kBottomTextureWidth + x] = color;
 }
 
 static void FillRect(uint8_t *fb, int x, int y, int w, int h, UiColor color) {
@@ -118,14 +126,11 @@ static void FillRect(uint8_t *fb, int x, int y, int w, int h, UiColor color) {
   if (y + h > g_clip_bottom) h = g_clip_bottom - y;
   if (w <= 0 || h <= 0)
     return;
+  uint32_t packed = 0xff000000u | ((uint32_t)color.r << 16) |
+                    (color.g << 8) | color.b;
   for (int py = y; py < y + h; py++) {
-    uint8_t *p = fb + (py * kBottomTextureWidth + x) * 4;
-    for (int px = 0; px < w; px++, p += 4) {
-      p[0] = color.b;
-      p[1] = color.g;
-      p[2] = color.r;
-      p[3] = 0xff;
-    }
+    uint32_t *p = (uint32_t *)fb + py * kBottomTextureWidth + x;
+    for (int px = 0; px < w; px++) p[px] = packed;
   }
 }
 
@@ -212,16 +217,42 @@ static const uint16_t *AreaTilemap(unsigned area) {
   return (const uint16_t *)RomPtr(address);
 }
 
-static UiColor AreaMapPixel(const uint8_t *tiles, const uint16_t *palette,
+static uint32_t AreaMapPixel(const uint8_t *tiles, const uint16_t *palette,
                             unsigned area, uint16_t entry, int px, int py,
                             bool dim) {
   unsigned tile_index = entry & 0x3ff;
   unsigned palette_row = (entry >> 10) & 7;
+  /* Map graphics and palettes are ROM data. Decode a used tile once and
+   * precompute its area tints, keeping the original integer rounding. */
+  static const uint8_t *last_tiles;
+  static const uint16_t *last_palette;
+  static uint8_t indices[1024][64], decoded[1024];
+  static uint32_t colors[6][2][128];
+  if (last_tiles != tiles) {
+    memset(decoded, 0, sizeof(decoded));
+    last_tiles = tiles;
+  }
+  if (last_palette != palette) {
+    for (unsigned a = 0; a < 6; a++)
+      for (unsigned d = 0; d < 2; d++)
+        for (unsigned i = 0; i < 128; i++) {
+          UiColor c = TintColor(Snes15ToColor(palette[i]), a, d);
+          colors[a][d][i] = 0xff000000u | ((uint32_t)c.r << 16) |
+                            (c.g << 8) | c.b;
+        }
+    last_palette = palette;
+  }
+  if (!decoded[tile_index]) {
+    const uint8_t *tile = tiles + tile_index * 32;
+    for (unsigned y = 0; y < 8; y++)
+      for (unsigned x = 0; x < 8; x++)
+        indices[tile_index][y * 8 + x] = Snes4bppColorIndex(tile, x, y);
+    decoded[tile_index] = true;
+  }
   if (entry & 0x4000) px = 7 - px;
   if (entry & 0x8000) py = 7 - py;
-  const uint8_t *tile = tiles + tile_index * 32;
-  int ci = Snes4bppColorIndex(tile, px, py);
-  return TintColor(Snes15ToColor(palette[palette_row * 16 + ci]), area, dim);
+  unsigned ci = indices[tile_index][py * 8 + px];
+  return colors[area < 6 ? area : 0][dim][palette_row * 16 + ci];
 }
 
 /* Same hand-drawn 5x7 pixel font used by the reference project. */
@@ -563,7 +594,7 @@ static void DrawRoomMap(uint8_t *fb, int top, int bottom) {
         for (int x = x0 < clip_x0 ? clip_x0 : x0;
              x < x1 && x < clip_x1; x++) {
           int px = (x - x0) * 8 / (x1 - x0);
-          PutPixel(fb, x, y, AreaMapPixel(tiles, palette, area_index,
+          PutMapPixel(fb, x, y, AreaMapPixel(tiles, palette, area_index,
                                           entry, px, py, station_only));
         }
       }
@@ -788,7 +819,7 @@ static void DrawWorldMap(uint8_t *fb, int top, int bottom) {
         uint16_t entry = tilemap[index];
         for (int py = 0; py < tile_scale; py++)
           for (int px = 0; px < tile_scale; px++)
-            PutPixel(fb, dx0 + px, dy0 + py,
+            PutMapPixel(fb, dx0 + px, dy0 + py,
                      AreaMapPixel(tiles, palette, area, entry,
                                   px * 8 / tile_scale,
                                   py * 8 / tile_scale, station_only));
@@ -1170,33 +1201,70 @@ void BottomScreen_LoadSettings(const char *path) {
   g_bottom_dirty = true;
 }
 
-bool BottomScreen_SaveSettings(void) {
-  if (!g_settings_path[0]) return false;
+static bool WriteSettings(const char *path, const char *text) {
   char temporary[sizeof(g_settings_path) + 5];
   char backup[sizeof(g_settings_path) + 5];
-  snprintf(temporary, sizeof(temporary), "%s.tmp", g_settings_path);
-  snprintf(backup, sizeof(backup), "%s.bak", g_settings_path);
+  snprintf(temporary, sizeof(temporary), "%s.tmp", path);
+  snprintf(backup, sizeof(backup), "%s.bak", path);
   FILE *f = fopen(temporary, "w");
   if (!f) return false;
-  int written = fprintf(f, "widescreen=%d\nhide_main_hud=%d\nstatus_map=%d\n"
-                           "status_items=%d\nstatus_setup=%d\nroom_zoom=%d\nworld_zoom=%d\n"
-                           "world_labels=%d\nmap_buttons=%d\n",
-                        g_widescreen, g_hide_main_hud, g_status_bar_visible[0],
-                        g_status_bar_visible[1], g_status_bar_visible[2],
-                        g_room_zoom, g_world_zoom, g_world_labels,
-                        g_map_buttons_visible);
-  bool okay = written > 0 && fflush(f) == 0;
+  int written = fputs(text, f);
+  bool okay = written >= 0 && fflush(f) == 0;
   if (fclose(f) != 0) okay = false;
   if (!okay) { remove(temporary); return false; }
-  if (rename(temporary, g_settings_path) != 0) {
+  if (rename(temporary, path) != 0) {
     remove(backup);
-    if (rename(g_settings_path, backup) != 0 ||
-        rename(temporary, g_settings_path) != 0) {
-      rename(backup, g_settings_path);
+    if (rename(path, backup) != 0 ||
+        rename(temporary, path) != 0) {
+      rename(backup, path);
       remove(temporary);
       return false;
     }
   }
+  return true;
+}
+
+static void SettingsWorker(void *unused) {
+  (void)unused;
+  for (;;) {
+    LightEvent_Wait(&g_settings_event);
+    for (;;) {
+      char path[256], text[512];
+      LightLock_Lock(&g_settings_lock);
+      bool pending = g_settings_pending, stopping = g_settings_stopping;
+      if (pending) {
+        memcpy(path, g_settings_write_path, sizeof(path));
+        memcpy(text, g_settings_text, sizeof(text));
+        g_settings_pending = false;
+      }
+      LightLock_Unlock(&g_settings_lock);
+      if (pending) WriteSettings(path, text);
+      else if (stopping) return;
+      else break;
+    }
+  }
+}
+
+bool BottomScreen_SaveSettings(void) {
+  if (!g_settings_path[0]) return false;
+  char text[512];
+  int written = snprintf(text, sizeof(text),
+      "widescreen=%d\nhide_main_hud=%d\nstatus_map=%d\n"
+      "status_items=%d\nstatus_setup=%d\nroom_zoom=%d\nworld_zoom=%d\n"
+      "world_labels=%d\nmap_buttons=%d\n",
+      g_widescreen, g_hide_main_hud, g_status_bar_visible[0],
+      g_status_bar_visible[1], g_status_bar_visible[2],
+      g_room_zoom, g_world_zoom, g_world_labels, g_map_buttons_visible);
+  if (written <= 0 || written >= sizeof(text)) return false;
+  if (!g_settings_thread) return WriteSettings(g_settings_path, text);
+  /* The worker only sees an immutable snapshot. Rapid zoom taps coalesce
+   * into the latest pending state without SD I/O on the game thread. */
+  LightLock_Lock(&g_settings_lock);
+  strcpy(g_settings_write_path, g_settings_path);
+  strcpy(g_settings_text, text);
+  g_settings_pending = true;
+  LightLock_Unlock(&g_settings_lock);
+  LightEvent_Signal(&g_settings_event);
   return true;
 }
 
@@ -1212,19 +1280,68 @@ bool BottomScreen_Init(void) {
   if (!g_bottom_cache)
     return false;
   memset(g_bottom_cache, 0, kBottomTextureWidth * kBottomTextureHeight * 4);
+  LightLock_Init(&g_settings_lock);
+  LightEvent_Init(&g_settings_event, RESET_ONESHOT);
+  g_settings_pending = g_settings_stopping = false;
+  g_settings_thread = threadCreate(SettingsWorker, NULL, 0x4000, 0x3f, 1, false);
+  if (!g_settings_thread)
+    g_settings_thread = threadCreate(SettingsWorker, NULL, 0x4000, 0x3f, -1, false);
   return true;
+}
+
+static bool BottomStateChanged(void) {
+  typedef struct State {
+    bool live, notice;
+    uint16_t status[9], items[7], map[3];
+    uint8_t explored[6][256], station[8];
+  } State;
+  static State previous;
+  State current;
+  memset(&current, 0, sizeof(current));
+  current.live = IsLiveGameplay();
+  current.notice = g_notice[0] && osGetTime() < g_notice_until_ms;
+  if (current.live && g_status_bar_visible[g_bottom_tab]) {
+    uint16_t status[] = {samus_health, samus_max_health, samus_missiles,
+      samus_max_missiles, samus_super_missiles, samus_max_super_missiles,
+      samus_power_bombs, samus_max_power_bombs, hud_item_index};
+    memcpy(current.status, status, sizeof(status));
+  }
+  if (current.live && g_bottom_tab == kBottomTab_Items) {
+    uint16_t items[] = {collected_items, equipped_items, collected_beams,
+      equipped_beams, game_time_hours, game_time_minutes, game_time_seconds};
+    memcpy(current.items, items, sizeof(items));
+    /* The percentage also includes ammo/health capacity. */
+    current.map[0] = ItemPercent();
+  }
+  if (current.live && g_bottom_tab == kBottomTab_Map) {
+    current.map[0] = area_index;
+    current.map[1] = room_x_coordinate_on_map + (samus_x_pos >> 8);
+    current.map[2] = room_y_coordinate_on_map + (samus_y_pos >> 8) + 1;
+    if (g_world_view) {
+      for (unsigned area = 0; area < 6; area++)
+        memcpy(current.explored[area], ExploredBitsForArea(area), 256);
+    } else {
+      memcpy(current.explored[0], ExploredBitsForArea(area_index), 256);
+    }
+    memcpy(current.station, map_station_byte_array, sizeof(current.station));
+  }
+  bool changed = memcmp(&previous, &current, sizeof(current)) != 0;
+  previous = current;
+  return changed;
 }
 
 bool BottomScreen_Draw(void) {
   if (!g_bottom_cache)
     return false;
 
-  /* The UI data changes slowly, so rebuild its texture at 7.5 Hz. The GPU
-   * still presents the cached texture every frame to keep both LCD buffers
-   * synchronized. */
-  bool redraw = g_bottom_dirty || ((g_bottom_frame++ & 7) == 0);
-  if (!redraw)
+  /* Check live UI data at 7.5 Hz, but rebuild only on a visible change.
+   * Touch changes redraw immediately. The GPU presents the cached texture
+   * every frame to keep both LCD buffers synchronized. */
+  bool check = ((g_bottom_frame++ & 7) == 0);
+  if (!g_bottom_dirty && !check)
     return false;
+  bool changed = BottomStateChanged();
+  if (!g_bottom_dirty && !changed) return false;
 
   g_bottom_dirty = false;
   if (!IsLiveGameplay()) {
@@ -1274,6 +1391,15 @@ void BottomScreen_CopyToFramebuffer(void) {
 }
 
 void BottomScreen_Fini(void) {
+  if (g_settings_thread) {
+    LightLock_Lock(&g_settings_lock);
+    g_settings_stopping = true;
+    LightLock_Unlock(&g_settings_lock);
+    LightEvent_Signal(&g_settings_event);
+    threadJoin(g_settings_thread, UINT64_MAX);
+    threadFree(g_settings_thread);
+    g_settings_thread = NULL;
+  }
   if (g_bottom_cache)
     linearFree(g_bottom_cache);
   g_bottom_cache = NULL;
