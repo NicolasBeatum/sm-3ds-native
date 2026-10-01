@@ -15,8 +15,10 @@
 - Add whole-session timing totals, separate gameplay statistics for standard
   and widescreen modes, and sector/scroll-change events to diagnostic dumps.
   Keep the last 120 frames as a separate detailed sample.
-- Use the approved pixel-art 3DS and Samus ship artwork for the large CIA
-  HOME-menu banner. The small HOME icon is unchanged.
+- Use the chosen eight-frame Samus and gunship GIF as a flat animated CIA
+  HOME-menu banner, with a three-second opening music cue rendered by the
+  native SPC player. Keep the previous pixel-art composition as an alternate
+  asset and retain the small HOME icon.
 - Resolve repeated background tile/palette descriptors once per GPU frame,
   sharing the result between main and sub layers. Layers with changing
   graphics banks retain the original lookup path. VRAM and palette changes

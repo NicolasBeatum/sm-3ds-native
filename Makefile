@@ -243,6 +243,7 @@ APP_VER_MICRO := $(shell echo $(APP_VER_MICRO) | cut -c1-3)
 ifneq ("$(wildcard $(TOPDIR)/$(BANNER_IMAGE).cgfx)","")
 	BANNER_IMAGE_FILE := $(TOPDIR)/$(BANNER_IMAGE).cgfx
 	BANNER_IMAGE_ARG := -ci $(BANNER_IMAGE_FILE)
+	BANNER_SMDH_FLAGS := -f visible,allow3d,recordusage,extendedbanner
 else
 	BANNER_IMAGE_FILE := $(TOPDIR)/$(BANNER_IMAGE).png
 	BANNER_IMAGE_ARG := -i $(BANNER_IMAGE_FILE)
@@ -298,8 +299,8 @@ banner.bnr: $(BANNER_IMAGE_FILE) $(BANNER_AUDIO_FILE)
 	@echo $(BANNER_IMAGE_FILE)
 	@$(BANNERTOOL) makebanner $(BANNER_IMAGE_ARG) $(BANNER_AUDIO_ARG) -o banner.bnr > /dev/null
 
-icon.icn: $(TOPDIR)/$(ICON)
-	@$(BANNERTOOL) makesmdh -s "$(APP_TITLE)" -l "$(APP_TITLE)" -p "$(APP_AUTHOR)" -i $(TOPDIR)/$(ICON) -o icon.icn > /dev/null
+icon.icn: $(TOPDIR)/$(ICON) $(TOPDIR)/Makefile $(BANNER_IMAGE_FILE)
+	@$(BANNERTOOL) makesmdh -s "$(APP_TITLE)" -l "$(APP_TITLE)" -p "$(APP_AUTHOR)" $(BANNER_SMDH_FLAGS) -i $(TOPDIR)/$(ICON) -o icon.icn > /dev/null
 
 $(OUTPUT_FILE).elf: $(OFILES) $(TOPDIR)/$(SDL)/build/libSDL2.a
 
