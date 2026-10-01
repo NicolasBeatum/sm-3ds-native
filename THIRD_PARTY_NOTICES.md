@@ -40,3 +40,10 @@ respective owners. This project is unofficial and non-commercial.
 The custom integration and documentation were produced with extensive OpenAI
 Codex assistance under human direction and testing. This disclosure does not
 change any upstream license.
+
+## CIA HOME Menu animation and music
+
+- Animation source: [Alpha Coders GIF 12420](https://gifs.alphacoders.com/gifs/view/12420), shared by robokoboto. The page labels it for private, personal use. The source GIF is retained in `resources/banner-animated/source.gif`; conversion preserves its eight-frame timing and pixel colors in RGB8 textures.
+- Game graphics and music: Super Metroid, Nintendo. The three-second banner excerpt is from “Opening / Destruction of the Space Colony”, credited to Minako Hamano, rendered using the native SPC/DSP player from a user-supplied ROM.
+- Conversion tool: [skyfloogle/pycgfx](https://github.com/skyfloogle/pycgfx), used as a build-time dependency; not bundled into the application. Hardware compatibility adjustments reference [ClouDS Music FA's converter](https://github.com/Epic0522/ClouDS-Music-FA/blob/clouds-music-fa/tools/banner/convert_banner_cgfx.py).
+- See `resources/banner-animated/README.md` for conversion details and attribution. The game itself is not bundled as a ROM.

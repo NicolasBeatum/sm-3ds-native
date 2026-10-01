@@ -20,6 +20,9 @@
 #ifndef SM3DS_BUILD_FLAGS
 #define SM3DS_BUILD_FLAGS ""
 #endif
+#ifndef SM3DS_BUILD_LTO
+#define SM3DS_BUILD_LTO 0
+#endif
 
 static bool DumpPath(char *path, size_t capacity, const char *directory,
                      const char *filename) {
@@ -76,9 +79,11 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
   u32 cpu_limit = 0;
   APT_GetAppCpuTimeLimit(&cpu_limit);
   int result = fprintf(f,
-      "sm3dsnative debug dump v3\n"
+      "sm3dsnative debug dump v4\n"
       "dump_id=%s\nrom=%s\nframe=%lu\n"
       "app_version=%s\nbuild_flags=%s\nfull_native=%u\n"
+      "build_lto=%u\nppu_bg_lookup=descriptor-cache-v1\n"
+      "ppu_obj_lookup=row-membership-v1\nbottom_ui=map-cache-event-state-v1\n"
       "hardware=%s\ncpu_time_limit_percent=%lu\nlinear_free_bytes=%lu\n"
       "last_ppu_reason=%s\n"
       "screen_imported=%u\ntop_bmp=%u\nbottom_bmp=%u\n"
@@ -96,6 +101,7 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
 #else
       0u,
 #endif
+      (unsigned)SM3DS_BUILD_LTO,
       !model_known ? "unknown" : new3ds ? "new3ds" : "old3ds",
       (unsigned long)cpu_limit,
       (unsigned long)linearSpaceFree(),

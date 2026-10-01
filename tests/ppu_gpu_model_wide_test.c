@@ -384,6 +384,28 @@ int main(void) {
   assert(sidePixel != centerPixel);
   assert(Sample(wide, wideAtlas, kWideWidth - 8, 33) == sidePixel);
 
+  /* A quake changes SNES scroll registers without moving the logical
+   * camera. Both reconstructed side bands must shift by the same pixels. */
+  unsigned leftBefore = Sample(wide, wideAtlas, 8, 8);
+  unsigned rightBefore = Sample(wide, wideAtlas, kWideWidth - 8, 8);
+  unsigned centerBefore = Sample(wide, wideAtlas, kWideExtraX + 40, 8);
+  frame.wideRoom[0].followScroll = true;
+  for (unsigned y = 0; y < frame.height; y++) {
+    lines[y].bg[0].hScroll = 3;
+    lines[y].bg[0].vScroll = 2;
+  }
+  Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
+  assert(Sample(wide, wideAtlas, 5, 6) == leftBefore);
+  assert(Sample(wide, wideAtlas, kWideWidth - 11, 6) == rightBefore);
+  assert(Sample(wide, wideAtlas, kWideExtraX + 37, 6) == centerBefore);
+  assert(PicaScrollOffset(0, 511, true) == 1);
+  assert(PicaScrollOffset(511, 0, true) == -1);
+  for (unsigned y = 0; y < frame.height; y++) {
+    lines[y].bg[0].hScroll = 0;
+    lines[y].bg[0].vScroll = 0;
+  }
+  frame.wideRoom[0].followScroll = false;
+
   /* Gameplay BG3 must stop at the physical room edge as well. Otherwise
    * its wrapped 256-pixel tilemap repeats past a doorway. */
   for (unsigned y = 32; y < 40; y++) {

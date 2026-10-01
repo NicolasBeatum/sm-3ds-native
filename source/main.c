@@ -394,8 +394,8 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // Use the faster New 3DS CPU clock when available. This is harmless on
-  // original 3DS models and mirrors the setup used by the reference port.
+  // Enable both the faster CPU clock and L2 cache on New 3DS. libctru
+  // handles the model-specific request; Old 3DS keeps its normal clock.
   osSetSpeedupEnable(true);
   EnableSystemCoreTime();
 
@@ -648,11 +648,17 @@ int main(int argc, char** argv) {
         PerformanceTicksBetween(afterBottom, afterPresent),
         frameViewport.enabled, pica_frame, gpu_frame,
 #ifdef SM3DS_PHASE_DIAG
-        g_diag_phase_valid
+        g_diag_phase_valid,
 #else
-        false
+        false,
 #endif
+        game_state >= kGameState_7_MainGameplayFadeIn &&
+          game_state <= kGameState_11_LoadingNextRoom
         );
+    FrameDiagnostics_RecordScene(game_state, room_ptr,
+        room_x_coordinate_on_map + (samus_x_pos >> 8),
+        room_y_coordinate_on_map + (samus_y_pos >> 8) + 1,
+        layer1_x_block, layer1_y_block, bottom_updated);
 #ifdef SM3DS_PHASE_DIAG
     if (pica_frame) {
       PpuGpuTiming timing = PpuGpuGetTiming();

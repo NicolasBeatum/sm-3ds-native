@@ -45,6 +45,7 @@ void PicaAtlasInit(PicaAtlas *a, uint32_t *pixels) {
 void PicaAtlasBegin(PicaAtlas *a) {
   if (++a->frame == 0) {
     a->frame = 1;
+    memset(a->bgFrame, 0, sizeof(a->bgFrame));
     for (unsigned i = 1; i < PICA_SLOTS; i++)
       a->tile[i].used = a->tile[i].checked = 0;
   }
@@ -130,6 +131,37 @@ static int Tile(PicaFrame *f, unsigned address, unsigned palette, unsigned bpp) 
     }
   }
   return t->opaque ? (int)slot : -2;
+}
+
+static uint16_t *BackgroundSlots(PicaAtlas *a, unsigned layer,
+                                 unsigned base) {
+  /* VRAM/CGRAM are frozen for a GPU frame, but HDMA/IRQ can select another
+   * tile bank between scanlines. Main and sub share a bank when possible. */
+  if (a->bgFrame[layer] != a->frame || a->bgBase[layer] != base) {
+    memset(a->bgSlots[layer], 0, sizeof(a->bgSlots[layer]));
+    a->bgFrame[layer] = a->frame;
+    a->bgBase[layer] = base;
+  }
+  return a->bgSlots[layer];
+}
+
+static inline int BackgroundTile(PicaFrame *f, uint16_t *slots,
+                                 unsigned tile, unsigned base,
+                                 unsigned words, unsigned paletteShift,
+                                 unsigned bpp) {
+  unsigned descriptor = tile & 0x1fff;
+  unsigned cached = slots ? slots[descriptor] : 0;
+  if (cached) {
+    f->atlas->hits++;
+    return (int)cached - 3;
+  }
+  int slot = Tile(f, base + (tile & 1023) * words,
+                  (tile & 0x1c00) >> paletteShift, bpp);
+  /* Zero means unresolved, one is transparent. Never cache a failure.
+   * Tile() pins every resolved slot until PicaAtlasBegin(), so eviction
+   * cannot invalidate this shortcut while drawing the remaining layers. */
+  if (slots && slot != -1) slots[descriptor] = slot + 3;
+  return slot;
 }
 
 void PicaCaptureLine(PicaLine *out, const Ppu *p) {
@@ -288,19 +320,30 @@ typedef struct WideTileRow {
 
 static WideTileRow WideRoomRow(const PicaFrame *f, unsigned layer, int y) {
   const PicaWideRoomLayer *room = &f->wideRoom[layer];
-  int worldY = room->cameraY + y;
+  const BgLayer *bg = &f->lines[y - 1].bg[layer];
+  int dx = room->followScroll ?
+      PicaScrollOffset(bg->hScroll, room->scrollX, bg->tilemapWider) : 0;
+  int dy = room->followScroll ?
+      PicaScrollOffset(bg->vScroll, room->scrollY, bg->tilemapHigher) : 0;
+  int worldY = room->cameraY + y + dy;
   WideTileRow row = {0};
   if (!room->blocks || !f->wideTileTable || !f->wideRoomWidth ||
       !f->wideRoomHeight || worldY < 0 ||
       worldY / 16 >= (int)f->wideRoomHeight) return row;
   row.blocks = room->blocks;
   row.tileTable = f->wideTileTable;
-  row.cameraX = room->cameraX;
+  row.cameraX = room->cameraX + dx;
   row.blockRow = (worldY / 16) * f->wideRoomWidth;
   row.quadrantY = (worldY & 8) ? 2 : 0;
   row.pixelY = worldY & 7;
   row.valid = true;
   return row;
+}
+
+int PicaScrollOffset(unsigned scroll, unsigned base, bool wider) {
+  unsigned mask = wider ? 511 : 255;
+  unsigned delta = (scroll - base) & mask;
+  return delta > mask / 2 ? (int)delta - (int)(mask + 1) : (int)delta;
 }
 
 static bool WideRoomTile(const PicaFrame *f, const WideTileRow *row, int x,
@@ -344,6 +387,17 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
   for (unsigned layer = 0; layer < 3; layer++) {
     unsigned layerBit = 1u << layer;
     if (!HasLayer(f, sub, layerBit)) continue;
+    /* A layer whose graphics bank changes within the frame keeps the
+     * original lookup path. Repeated bank invalidation would cost more
+     * than it saves, especially for the HUD's short IRQ bands. */
+    unsigned base = f->lines[0].bg[layer].tileAdr;
+    bool stableBase = true;
+    for (unsigned line = 1; line < f->height; line++)
+      if (f->lines[line].bg[layer].tileAdr != base) {
+        stableBase = false;
+        break;
+      }
+    uint16_t *slots = stableBase ? BackgroundSlots(f->atlas, layer, base) : NULL;
     for (unsigned y = 0; y < f->height;) {
       const PicaLine *p = &f->lines[y];
       /* Disabled lines cannot emit tiles. Skip the whole inactive stretch
@@ -359,6 +413,9 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
         continue;
       }
       const BgLayer *bg = &p->bg[layer];
+      WideTileRow roomRow = {0};
+      if (layer < 2 && f->wideRoom[layer].blocks)
+        roomRow = WideRoomRow(f, layer, y + 1);
       unsigned wy = (y + 1 + bg->vScroll) & (bg->tilemapHigher ? 511 : 255);
       /* A tile-height chunk cannot cross either 8-pixel row boundary.
        * Bound the state comparison now instead of scanning the remaining
@@ -366,7 +423,7 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
       unsigned maxRun = 8 - (wy & 7);
       if (layer < 2 && f->wideRoom[layer].blocks)
         maxRun = Min(maxRun,
-                     8 - ((f->wideRoom[layer].cameraY + (int)y + 1) & 7));
+                     8 - roomRow.pixelY);
       unsigned h = EqualRun(f, y, offsetof(PicaLine, bg) + layer * sizeof(BgLayer),
                             sizeof(BgLayer), maxRun);
       for (unsigned run = 1; run < h; run++) {
@@ -419,8 +476,6 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
         Windows(f, p, layer, windowed, spanLeft, spanRight, &win);
       bool roomSides = f->width == kWideWidth && layer < 2 && !hudLine &&
                        f->wideRoom[layer].blocks;
-      WideTileRow roomRow = {0};
-      if (roomSides) roomRow = WideRoomRow(f, layer, y + 1);
       unsigned mapRow = bg->tilemapAdr + ((wy >> 3) & 31) * 32 +
                         (wy >= 256 ? (bg->tilemapWider ? 0x800 : 0x400) : 0);
       unsigned bpp = layer == 2 ? 2 : 4;
@@ -451,8 +506,8 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
           unsigned map = (mapRow + ((wx >> 3) & 31) +
                           (wx >= 256 ? 0x400 : 0)) & 0x7fff;
           uint16_t tile = f->memory->vram[map];
-          int slot = Tile(f, (bg->tileAdr + (tile & 1023) * tileWords) & 0x7fff,
-                          (tile & 0x1c00) >> paletteShift, bpp);
+          int slot = BackgroundTile(f, slots, tile, bg->tileAdr, tileWords,
+                                    paletteShift, bpp);
           if (slot == -1) return false;
           if (slot >= 0) {
             unsigned z = (tile & 0x2000) ? zHigh : zLow;
@@ -508,8 +563,8 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
             unsigned map = (mapRow + ((wx >> 3) & 31) +
                             (wx >= 256 ? 0x400 : 0)) & 0x7fff;
             uint16_t tile = f->memory->vram[map];
-            int slot = Tile(f, (bg->tileAdr + (tile & 1023) * tileWords) &
-                               0x7fff, (tile & 0x1c00) >> paletteShift, bpp);
+            int slot = BackgroundTile(f, slots, tile, bg->tileAdr, tileWords,
+                                      paletteShift, bpp);
             if (slot == -1) return false;
             if (slot >= 0 &&
                 !TileQuad(f, group, slot, x, y, w, h, pixelX, wy & 7,
@@ -543,8 +598,8 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
                             (wx >= 256 ? 0x400 : 0)) & 0x7fff;
             tile = f->memory->vram[map];
           }
-          int slot = Tile(f, (bg->tileAdr + (tile & 1023) * tileWords) & 0x7fff,
-                          (tile & 0x1c00) >> paletteShift, bpp);
+          int slot = BackgroundTile(f, slots, tile, bg->tileAdr, tileWords,
+                                    paletteShift, bpp);
           if (slot == -1) return false;
           if (side) w = Min(w, 8 - pixelX);
           unsigned z = (tile & 0x2000) ? zHigh : zLow;
@@ -590,30 +645,78 @@ static bool Objects(PicaFrame *f, unsigned sub) {
   }
   uint8_t (*columns)[PICA_MAX_LINES] = f->atlas->objectColumns;
   memset(columns, 0, sizeof(f->atlas->objectColumns));
+  unsigned fixedSize = f->lines[0].objSize;
+  bool stableSize = fixedSize < 8;
+  for (unsigned y = 1; y < f->height; y++)
+    if (f->lines[y].objSize != fixedSize) { stableSize = false; break; }
+  uint32_t visible[PICA_MAX_LINES][4] = {{0}};
+  int16_t fixedX[128];
+  uint8_t fixedWidth[128];
+  for (unsigned item = 0; item < activeCount; item++) {
+    unsigned index = active[item];
+    if (!stableSize) continue;
+    unsigned high = HighOam(f->memory, index);
+    unsigned size = kSpriteSizes[fixedSize][(high >> 1) & 1];
+    int x = ObjectX(f, index, high, size);
+    fixedX[item] = x;
+    fixedWidth[item] = size;
+    if (x + (int)size <= -(int)f->originX ||
+        x >= (int)f->width - (int)f->originX) continue;
+    unsigned yy = f->memory->oam[index] >> 8;
+    /* Build ordered row membership once. A multipart sprite must not cost
+     * an OAM scan on rows which it does not intersect. Wrapped Y positions
+     * and the original per-line sprite/tile limits are still respected. */
+    for (unsigned row = 0; row < size; row++) {
+      unsigned y = (yy + row) & 255;
+      if (y < f->height) visible[y][item >> 5] |= 1u << (item & 31);
+    }
+  }
   for (unsigned y = 0; y < f->height; y++) {
     const PicaLine *p = &f->lines[y];
     if (p->forcedBlank || !(p->screenEnabled[sub] & 16) ||
         (sub && !p->addSubscreen)) continue;
     int sprites = 33, tiles = 35;
     bool stop = false;
-    for (unsigned item = 0; item < activeCount && !stop; item++) {
-      unsigned index = active[item];
-      unsigned yy = f->memory->oam[index] >> 8;
-      unsigned row = (y - yy) & 255;
-      unsigned high = HighOam(f->memory, index);
-      unsigned size = kSpriteSizes[p->objSize][(high >> 1) & 1];
-      if (row >= size) continue;
-      int x = ObjectX(f, index, high, size);
-      if (x + (int)size <= -(int)f->originX ||
-          x >= (int)f->width - (int)f->originX) continue;
-      if (--sprites == 0) break;
-      for (unsigned col = 0; col < size; col += 8) {
-        int left = x + col + f->originX;
-        if (left <= -8 || left >= (int)f->width) continue;
-        if (--tiles == 0) { stop = true; break; }
-        columns[index / 2][y] |= 1u << (col / 8);
-        if (first[index / 2] > y) first[index / 2] = y;
-        last[index / 2] = y + 1;
+    if (!stableSize) {
+      /* Scanline OBJ-size changes keep the original selection loop. */
+      for (unsigned item = 0; item < activeCount && !stop; item++) {
+        unsigned index = active[item];
+        unsigned row = (y - (f->memory->oam[index] >> 8)) & 255;
+        unsigned high = HighOam(f->memory, index);
+        unsigned size = kSpriteSizes[p->objSize][(high >> 1) & 1];
+        if (row >= size) continue;
+        int x = ObjectX(f, index, high, size);
+        if (x + (int)size <= -(int)f->originX ||
+            x >= (int)f->width - (int)f->originX) continue;
+        if (--sprites == 0) break;
+        for (unsigned col = 0; col < size; col += 8) {
+          int left = x + col + f->originX;
+          if (left <= -8 || left >= (int)f->width) continue;
+          if (--tiles == 0) { stop = true; break; }
+          columns[index / 2][y] |= 1u << (col / 8);
+          if (first[index / 2] > y) first[index / 2] = y;
+          last[index / 2] = y + 1;
+        }
+      }
+      continue;
+    }
+    for (unsigned word = 0; word < 4 && !stop; word++) {
+      uint32_t members = visible[y][word];
+      while (members && !stop) {
+        unsigned item = word * 32 + __builtin_ctz(members);
+        members &= members - 1;
+        unsigned index = active[item];
+        unsigned size = fixedWidth[item];
+        int x = fixedX[item];
+        if (--sprites == 0) { stop = true; break; }
+        for (unsigned col = 0; col < size; col += 8) {
+          int left = x + col + f->originX;
+          if (left <= -8 || left >= (int)f->width) continue;
+          if (--tiles == 0) { stop = true; break; }
+          columns[index / 2][y] |= 1u << (col / 8);
+          if (first[index / 2] > y) first[index / 2] = y;
+          last[index / 2] = y + 1;
+        }
       }
     }
   }

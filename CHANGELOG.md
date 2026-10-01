@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.1.3 - 2026-09-30
+
+Performance, map responsiveness, diagnostics and HOME Menu presentation update. Both packages use the same native engine and contain no game ROM or IPS patch.
+
+The port is playable, but a full playthrough and 100% completion have not been verified. Completion from beginning to end is not yet confirmed, and performance varies by scene and hardware. HOME Menu animation and sound require verification on a real console.
+
+- Show the detected Old/New 3DS hardware family in SETUP's information tab,
+  independently of the build flags.
+- Cache decoded lower-screen map tiles and colors, and rebuild the map texture
+  only when visible state changes. Queue configuration writes on a worker so
+  map controls do not wait for microSD writes; flush pending settings on exit.
+- Select sprite pieces by scanline membership, preserving OAM order, wrapping
+  and the original sprite/tile limits. This reduces repeated selection work
+  for multipart enemies.
+- Apply captured background scroll offsets to the widescreen side bands and
+  room bounds so camera shakes continue across the extended viewport.
+- Add whole-session timing totals, separate gameplay statistics for standard
+  and widescreen modes, and sector/scroll-change events to diagnostic dumps.
+  Keep the last 120 frames as a separate detailed sample.
+- Use the chosen eight-frame Samus and gunship GIF as a flat animated CIA
+  HOME-menu banner, with a three-second opening music cue rendered by the
+  native SPC player. Keep the previous pixel-art composition as an alternate
+  asset and retain the small HOME icon.
+- Resolve repeated background tile/palette descriptors once per GPU frame,
+  sharing the result between main and sub layers. Layers with changing
+  graphics banks retain the original lookup path. VRAM and palette changes
+  are revalidated on the next frame; geometry, HDMA and gameplay are unchanged.
+- Identify this renderer revision and LTO setting in diagnostic dumps for
+  hardware comparison. Old/New 3DS model detection and automatic New 3DS
+  CPU/L2 acceleration remain enabled in both package formats.
+
+- Add five Azahar screenshots, an English/Spanish README pair, an explicit and respectful AI disclosure, and installation links to Releases. Use NicolasBeatum consistently for project attribution.
+
 ## 0.1.1 - 2026-09-29
 
 Hardware performance and diagnostics update. Both release packages remain
