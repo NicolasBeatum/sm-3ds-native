@@ -7,7 +7,12 @@ Branch: `codex/hud-grapple-room-performance`, based on the pending
 
 - HUD ITEMS cycles through ONLY AMMO, AMMO + HOOK and ALL ITEMS.
 - Health stays large and closer to the energy tanks. Ammo counts are centered
-  below the original ROM icons; the four/five-slot layouts use smaller counts.
+  below the original ROM icons in VERTICAL mode (the default); the four/five-slot
+  layouts use smaller counts. HUD NUMBERS can switch to HORIZONTAL, with compact
+  counts beside each ammo icon. Both orientations support all three item modes.
+  Unowned items leave their slots empty and reserved in either orientation;
+  acquiring an item does not move the other slots. Touch uses the same slot
+  boundaries as the drawing, including narrower utility slots in HORIZONTAL.
 - Grapple and X-Ray select/deselect the original game HUD slots, just as the
   existing ammo shortcuts do. They appear only when equipped. The X-Ray map
   shortcut selects the scope; the normal game firing control still activates it.
@@ -21,7 +26,7 @@ Branch: `codex/hud-grapple-room-performance`, based on the pending
   and below; STRETCHED shows that full render at 400x240. FIT retains the
   previous centered crop. This affects presentation, not the game camera.
 - Preferences persist in the existing settings file. New keys are `hud_items`
-  (0/1/2), `xray_map_button` and `video_mode` (0/1/2).
+  (0/1/2), `hud_numbers_horizontal` (0/1), `xray_map_button` and `video_mode` (0/1/2).
 
 ## Dumps examined
 
@@ -72,7 +77,9 @@ screenshot dump is still needed. It is not a replacement HUD font or palette.
 
 - Host UI trial loaded the latest WRAM/Spanish ROM and checked acquired/missing
   item selection, X-Ray touch without dragging/markers, all compact Setup rows,
-  grouping, the three modes and settings round trips. Maximum ammo counts fit.
+  grouping, both number orientations in all three modes and settings round trips.
+  Maximum ammo counts fit. All six HUD settings remain reachable with the Setup
+  status bar enabled.
 - `tests/video_layout_test.c` checks all six sizing combinations, centering,
   and boundary bias without changing integer samples.
 - Existing widescreen and atlas invalidation regressions pass.

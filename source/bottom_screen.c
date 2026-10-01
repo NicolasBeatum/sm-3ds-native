@@ -82,6 +82,7 @@ static bool g_clear_markers_armed;
 static bool g_setup_build_info;
 enum HudItemsMode { kHudOnlyAmmo, kHudAmmoHook, kHudAllItems };
 static enum HudItemsMode g_hud_items_mode = kHudAllItems;
+static bool g_hud_numbers_horizontal;
 static bool g_xray_map_button = true;
 static bool g_map_item_touch;
 static enum BottomScreenVideoMode g_video_mode = kVideoMode_Fit;
@@ -449,6 +450,20 @@ static void DrawAmmoIcon(uint8_t *fb, int x, int y, int icon) {
 
 static int HudItemCount(void) { return 3 + g_hud_items_mode; }
 
+/* Reserve every slot, including unowned items. Drawing and touch selection
+ * share these boundaries so the narrower utility slots stay selectable. */
+static int HudItemBoundary(int index) {
+  int n = HudItemCount();
+  if (!g_hud_numbers_horizontal) return 134 + index * 175 / n;
+  static const int weights[] = {49, 41, 41, 22, 22};
+  int total = 0, offset = 0;
+  for (int i = 0; i < n; i++) {
+    total += weights[i];
+    if (i < index) offset += weights[i];
+  }
+  return 134 + offset * 175 / total;
+}
+
 static bool HudItemAvailable(int slot) {
   switch (slot) {
   case 1: return samus_max_missiles != 0;
@@ -490,18 +505,23 @@ static void DrawStatus(uint8_t *fb) {
   int n = HudItemCount();
   for (int i = 0; i < n; i++) {
     if (!HudItemAvailable(i + 1)) continue;
-    int left = 134 + i * 175 / n;
-    int right = 134 + (i + 1) * 175 / n;
+    int left = HudItemBoundary(i);
+    int right = HudItemBoundary(i + 1);
     int center = (left + right) / 2;
     if (hud_item_index == i + 1) {
       FillRect(fb, left + 2, 6, right - left - 4, 32, kSamus);
       StrokeRect(fb, left + 2, 6, right - left - 4, 32, 1, kWhite);
     }
-    DrawAmmoIcon(fb, center - (i == 0 ? 12 : 8), 8, i);
+    int icon_width = i == 0 ? 24 : 16;
+    int icon_x = g_hud_numbers_horizontal && i < 3 ? left + 3 : center - icon_width / 2;
+    DrawAmmoIcon(fb, icon_x, g_hud_numbers_horizontal ? 14 : 8, i);
     if (i < 3) {
       snprintf(text, sizeof(text), "%u", counts[i]);
-      DrawTextCentered(fb, center, n == 3 ? 25 : 28, text,
-                       n == 3 ? 2 : 1, kWhite);
+      if (g_hud_numbers_horizontal)
+        DrawText(fb, icon_x + icon_width + 2, 18, text, 1, kWhite);
+      else
+        DrawTextCentered(fb, center, n == 3 ? 25 : 28, text,
+                         n == 3 ? 2 : 1, kWhite);
     }
   }
 }
@@ -1090,6 +1110,14 @@ static void DrawBuildSetting(uint8_t *fb, int x, int y, const char *name,
            enabled ? kAccent : kDim);
 }
 
+static int SetupRowStep(bool compact) {
+  return g_setup_group == kSetupHud ? (compact ? 19 : 24) : (compact ? 22 : 29);
+}
+
+static int SetupRowHeight(bool compact) {
+  return SetupRowStep(compact) - (compact ? 3 : 5);
+}
+
 static void DrawSetupTab(uint8_t *fb, int top) {
   bool compact = top == 44;
   Panel(fb, 5, top, 310, 207 - top);
@@ -1160,18 +1188,20 @@ static void DrawSetupTab(uint8_t *fb, int top) {
     DrawTextCentered(fb, x + 48, y + 5, groups[i], 1, kWhite);
   }
   int y = top + (compact ? 47 : 53);
-  int step = compact ? 22 : 29;
-  int height = compact ? 19 : 24;
+  int step = SetupRowStep(compact);
+  int height = SetupRowHeight(compact);
   if (g_setup_group == kSetupHud) {
     static const char *modes[] = {"ONLY AMMO", "AMMO + HOOK", "ALL ITEMS"};
     DrawSetupRow(fb, y, height, "HUD ITEMS", modes[g_hud_items_mode], true);
-    DrawSetupRow(fb, y + step, height, "STATUS BAR MAP",
+    DrawSetupRow(fb, y + step, height, "HUD NUMBERS",
+                 g_hud_numbers_horizontal ? "HORIZONTAL" : "VERTICAL", true);
+    DrawSetupRow(fb, y + 2 * step, height, "STATUS BAR MAP",
                  g_status_bar_visible[0] ? "ON" : "OFF", g_status_bar_visible[0]);
-    DrawSetupRow(fb, y + 2 * step, height, "STATUS BAR ITEMS",
+    DrawSetupRow(fb, y + 3 * step, height, "STATUS BAR ITEMS",
                  g_status_bar_visible[1] ? "ON" : "OFF", g_status_bar_visible[1]);
-    DrawSetupRow(fb, y + 3 * step, height, "STATUS BAR SETUP",
+    DrawSetupRow(fb, y + 4 * step, height, "STATUS BAR SETUP",
                  g_status_bar_visible[2] ? "ON" : "OFF", g_status_bar_visible[2]);
-    DrawSetupRow(fb, y + 4 * step, height, "HIDE MAIN HUD",
+    DrawSetupRow(fb, y + 5 * step, height, "HIDE MAIN HUD",
                  g_hide_main_hud ? "ON" : "OFF", g_hide_main_hud);
   } else if (g_setup_group == kSetupMap) {
     DrawSetupRow(fb, y, height, "FLOATING MAP BUTTONS",
@@ -1259,6 +1289,7 @@ void BottomScreen_LoadSettings(const char *path) {
     else if (strcmp(key, "world_labels") == 0) g_world_labels = value != 0;
     else if (strcmp(key, "map_buttons") == 0) g_map_buttons_visible = value != 0;
     else if (strcmp(key, "hud_items") == 0 && value >= 0 && value <= 2) g_hud_items_mode = value;
+    else if (strcmp(key, "hud_numbers_horizontal") == 0) g_hud_numbers_horizontal = value != 0;
     else if (strcmp(key, "xray_map_button") == 0) g_xray_map_button = value != 0;
     else if (strcmp(key, "video_mode") == 0 && value >= 0 && value <= 2) g_video_mode = value;
   }
@@ -1316,11 +1347,11 @@ bool BottomScreen_SaveSettings(void) {
   int written = snprintf(text, sizeof(text),
       "widescreen=%d\nhide_main_hud=%d\nstatus_map=%d\n"
       "status_items=%d\nstatus_setup=%d\nroom_zoom=%d\nworld_zoom=%d\n"
-      "world_labels=%d\nmap_buttons=%d\nhud_items=%d\nxray_map_button=%d\nvideo_mode=%d\n",
+      "world_labels=%d\nmap_buttons=%d\nhud_items=%d\nhud_numbers_horizontal=%d\nxray_map_button=%d\nvideo_mode=%d\n",
       g_widescreen, g_hide_main_hud, g_status_bar_visible[0],
       g_status_bar_visible[1], g_status_bar_visible[2],
       g_room_zoom, g_world_zoom, g_world_labels, g_map_buttons_visible,
-      g_hud_items_mode, g_xray_map_button, g_video_mode);
+      g_hud_items_mode, g_hud_numbers_horizontal, g_xray_map_button, g_video_mode);
   if (written <= 0 || written >= sizeof(text)) return false;
   if (!g_settings_thread) return WriteSettings(g_settings_path, text);
   /* The worker only sees an immutable snapshot. Rapid zoom taps coalesce
@@ -1480,7 +1511,7 @@ static void HandleStatusTouch(int x) {
   if (x < 134 || x >= 309) return;
   int n = HudItemCount();
   for (int i = 0; i < n; i++)
-    if (x >= 134 + i * 175 / n && x < 134 + (i + 1) * 175 / n) {
+    if (x >= HudItemBoundary(i) && x < HudItemBoundary(i + 1)) {
       SelectHudItem(i + 1);
       return;
     }
@@ -1602,15 +1633,16 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
       return;
     }
     int row_y = top + (compact ? 47 : 53);
-    int step = compact ? 22 : 29;
-    int height = compact ? 19 : 24;
-    int rows = g_setup_group == kSetupHud ? 5 : g_setup_group == kSetupMap ? 4 : 2;
+    int step = SetupRowStep(compact);
+    int height = SetupRowHeight(compact);
+    int rows = g_setup_group == kSetupHud ? 6 : g_setup_group == kSetupMap ? 4 : 2;
     if (x >= 13 && x < 307 && y >= row_y) {
       int row = (y - row_y) / step;
       if (row < rows && y < row_y + row * step + height) {
         if (g_setup_group == kSetupHud) {
           if (!row) g_hud_items_mode = (g_hud_items_mode + 1) % 3;
-          else if (row < 4) g_status_bar_visible[row - 1] = !g_status_bar_visible[row - 1];
+          else if (row == 1) g_hud_numbers_horizontal = !g_hud_numbers_horizontal;
+          else if (row < 5) g_status_bar_visible[row - 2] = !g_status_bar_visible[row - 2];
           else g_hide_main_hud = !g_hide_main_hud;
         } else if (g_setup_group == kSetupMap) {
           if (!row) g_map_buttons_visible = !g_map_buttons_visible;
