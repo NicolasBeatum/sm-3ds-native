@@ -15,6 +15,7 @@
 #include "ppu_gpu.h"
 #include "screen_capture.h"
 #include "storage_paths.h"
+#include "app_lifecycle.h"
 #include "version.h"
 
 #ifndef SM3DS_BUILD_FLAGS
@@ -113,7 +114,8 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
       game_state, area_index, room_ptr,
       samus_x_pos, samus_y_pos, samus_health,
       BottomScreen_WidescreenEnabled(), BottomScreen_HideMainHud());
-  bool okay = result > 0 && FrameDiagnostics_WriteSummary(f) && fflush(f) == 0;
+  bool okay = result > 0 && AppLifecycle_WriteDiagnostics(f) &&
+      FrameDiagnostics_WriteSummary(f) && fflush(f) == 0;
   if (fclose(f) != 0) okay = false;
   if (okay) okay = WriteFrameTimes(directory);
   if (okay) okay = WriteBinary(directory, "memory.wram", g_ram, sizeof(g_ram));
