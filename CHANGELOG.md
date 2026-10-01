@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.1.3 - 2026-09-30
+
+Performance, map responsiveness, diagnostics and HOME Menu presentation update. Both packages use the same native engine and contain no game ROM or IPS patch.
+
+The port is playable, but a full playthrough and 100% completion have not been verified. Completion from beginning to end is not yet confirmed, and performance varies by scene and hardware. HOME Menu animation and sound require verification on a real console.
 
 - Show the detected Old/New 3DS hardware family in SETUP's information tab,
   independently of the build flags.
@@ -26,6 +30,8 @@
 - Identify this renderer revision and LTO setting in diagnostic dumps for
   hardware comparison. Old/New 3DS model detection and automatic New 3DS
   CPU/L2 acceleration remain enabled in both package formats.
+
+- Add five Azahar screenshots, an English/Spanish README pair, an explicit and respectful AI disclosure, and installation links to Releases. Use NicolasBeatum consistently for project attribution.
 
 ## 0.1.1 - 2026-09-29
 

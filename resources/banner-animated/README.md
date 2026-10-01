@@ -3,8 +3,7 @@
 Source GIF: [Alpha Coders 12420](https://gifs.alphacoders.com/gifs/view/12420),
 shared there by robokoboto, featuring Samus and the Super Metroid gunship.
 `source.gif` retains all eight source frames and their 130 ms timing.
-The source page labels the image for private, personal use. These assets are
-prepared for this local build; this change does not publish a release.
+The source page labels the image for private, personal use. Attribution identifies the source; it does not transfer ownership of the original game artwork.
 
 `resources/banner.cgfx` has eight ordinary rigid mesh nodes named `Frame0` to
 `Frame7`, with one visible at a time via STEP translation animation. It uses

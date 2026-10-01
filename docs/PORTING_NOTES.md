@@ -163,7 +163,7 @@ Do not enable diagnostic defines in deliverable builds.
 
 This custom integration was developed with extensive OpenAI Codex assistance,
 including source analysis, implementation, profiling, debugging, automated
-emulator testing and documentation. Nicolás Andrés Hernández Vargas provided
+emulator testing and documentation. NicolasBeatum provided
 the project direction and acceptance testing. This disclosure is informational
 and does not replace or alter any upstream license or attribution.
 
