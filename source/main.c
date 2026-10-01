@@ -27,6 +27,7 @@
 #include "frame_diagnostics.h"
 #include "storage_paths.h"
 #include "app_lifecycle.h"
+#include "video_layout.h"
 
 enum Button {
   BTN_A = 0,
@@ -102,22 +103,21 @@ static void DrawPpuFrame(void) {
     const int fb_w  = 400;
     const int fb_h  = 240;
 
-    const int dst_w = 274;
-    const int dst_h = fb_h;                            // 240
-
-    const int x_off = (fb_w - dst_w) / 2;
-    const int y_off = 0;
-
-    static uint8_t xmap[274];
+    TopVideoLayout layout = TopVideoLayout_Get(BottomScreen_VideoMode(), false);
+    const int dst_w = layout.width, dst_h = layout.height;
+    const int x_off = layout.x, y_off = layout.y;
+    static uint8_t xmap[400];
     static uint8_t ymap[240];
-    static bool maps_ready;
-    if (!maps_ready) {
+    static int cached_w, cached_h;
+    if (cached_w != dst_w || cached_h != dst_h) {
         for (int x = 0; x < dst_w; x++)
             xmap[x] = (x * src_w) / dst_w;
         for (int y = 0; y < dst_h; y++)
             ymap[y] = (y * src_h) / dst_h;
-        maps_ready = true;
+        cached_w = dst_w; cached_h = dst_h;
     }
+
+    memset(fb, 0, fb_w * fb_h * 4);
 
     for (int dy = 0; dy < dst_h; dy++) {
         const uint8_t *src_row = &src[ymap[dy] * src_w * 4];

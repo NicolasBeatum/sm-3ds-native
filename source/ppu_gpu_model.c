@@ -387,9 +387,8 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
   for (unsigned layer = 0; layer < 3; layer++) {
     unsigned layerBit = 1u << layer;
     if (!HasLayer(f, sub, layerBit)) continue;
-    /* A layer whose graphics bank changes within the frame keeps the
-     * original lookup path. Repeated bank invalidation would cost more
-     * than it saves, especially for the HUD's short IRQ bands. */
+    /* Inactive IRQ/HDMA states cannot use a graphics bank. Only bank
+     * changes on visible lines need the general descriptor lookup path. */
     unsigned base = f->lines[0].bg[layer].tileAdr;
     bool stableBase = true;
     for (unsigned line = 1; line < f->height; line++)
@@ -397,6 +396,22 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
         stableBase = false;
         break;
       }
+    if (!stableBase) {
+      bool haveBase = false;
+      stableBase = true;
+      for (unsigned line = 0; line < f->height; line++) {
+        const PicaLine *active = &f->lines[line];
+        if (active->forcedBlank || !(active->screenEnabled[sub] & layerBit) ||
+            (sub && !active->addSubscreen)) continue;
+        if (!haveBase) {
+          base = active->bg[layer].tileAdr;
+          haveBase = true;
+        } else if (active->bg[layer].tileAdr != base) {
+          stableBase = false;
+          break;
+        }
+      }
+    }
     uint16_t *slots = stableBase ? BackgroundSlots(f->atlas, layer, base) : NULL;
     for (unsigned y = 0; y < f->height;) {
       const PicaLine *p = &f->lines[y];
@@ -481,6 +496,9 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
       unsigned bpp = layer == 2 ? 2 : 4;
       unsigned tileWords = bpp == 4 ? 16 : 8;
       unsigned paletteShift = bpp == 4 ? 6 : 8;
+      unsigned tileBase = bg->tileAdr;
+      unsigned scrollMask = bg->tilemapWider ? 511 : 255;
+      int scrollX = (int)bg->hScroll - (int)f->originX;
       unsigned zLow = layer == 0 ? 0x8000 : layer == 1 ? 0x7100 : 0x1200;
       unsigned zHigh = layer == 0 ? 0xc000 : layer == 1 ? 0xb100 :
                        (p->bg3priority ? 0xf200 : 0x5200);
@@ -554,16 +572,15 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
         /* In the original 256-pixel viewport every tile comes from VRAM.
          * Keep the side-band room lookup and boundary splits out of this
          * common path, which runs for thousands of background tiles. */
-        if (f->width == kSnesWidth) {
-          unsigned scrollMask = bg->tilemapWider ? 511 : 255;
+        if (f->width == kSnesWidth || !roomSides) {
           while (x < end) {
-            unsigned wx = (x + bg->hScroll) & scrollMask;
+            unsigned wx = (x + scrollX) & scrollMask;
             unsigned pixelX = wx & 7;
             unsigned w = Min(8 - pixelX, end - x);
             unsigned map = (mapRow + ((wx >> 3) & 31) +
                             (wx >= 256 ? 0x400 : 0)) & 0x7fff;
             uint16_t tile = f->memory->vram[map];
-            int slot = BackgroundTile(f, slots, tile, bg->tileAdr, tileWords,
+            int slot = BackgroundTile(f, slots, tile, tileBase, tileWords,
                                       paletteShift, bpp);
             if (slot == -1) return false;
             if (slot >= 0 &&
@@ -576,6 +593,27 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
           continue;
         }
         while (x < end) {
+          if (x >= (int)f->originX && x < (int)f->originX + kSnesWidth) {
+            int centerEnd = IMin(end, f->originX + kSnesWidth);
+            do {
+              unsigned wx = (x + scrollX) & scrollMask;
+              unsigned pixelX = wx & 7;
+              unsigned w = Min(8 - pixelX, centerEnd - x);
+              unsigned map = (mapRow + ((wx >> 3) & 31) +
+                              (wx >= 256 ? 0x400 : 0)) & 0x7fff;
+              uint16_t tile = f->memory->vram[map];
+              int slot = BackgroundTile(f, slots, tile, tileBase, tileWords,
+                                        paletteShift, bpp);
+              if (slot == -1) return false;
+              if (slot >= 0 &&
+                  !TileQuad(f, group, slot, x, y, w, h, pixelX, wy & 7,
+                            tile & 0x4000, tile & 0x8000,
+                            (tile & 0x2000) ? zHigh : zLow, tileAlpha))
+                return false;
+              x += w;
+            } while (x < centerEnd);
+            continue;
+          }
           bool side = roomSides &&
               (x < (int)f->originX || x >= (int)f->originX + kSnesWidth);
           unsigned wx = (x - (int)f->originX + bg->hScroll) &
