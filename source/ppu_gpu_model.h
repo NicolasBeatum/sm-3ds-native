@@ -90,6 +90,10 @@ typedef struct PicaFrame {
   int bg2Left, bg2Right;
   bool boundBg2;
   bool extendEyeBeam;
+  bool xrayActive;
+  int16_t xrayLeft[PICA_MAX_LINES], xrayRight[PICA_MAX_LINES];
+  const uint16_t *xrayTiles[2];
+  int xrayStartX[2], xrayStartY;
   int16_t beamLeft[PICA_MAX_LINES], beamRight[PICA_MAX_LINES];
   const int16_t *objectX;
   const uint8_t *objectXValid;

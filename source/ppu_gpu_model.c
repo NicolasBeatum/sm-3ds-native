@@ -207,14 +207,17 @@ static void WindowsWithFirstEdges(const PicaFrame *f, const PicaLine *p,
   out->bits = 0;
   if (!enabled) return;
   unsigned flags = p->windowsel >> (layer * 4);
+  unsigned line = p - f->lines;
+  int window2left = f->xrayActive ? f->xrayLeft[line] : p->window2left;
+  int window2right = f->xrayActive ? f->xrayRight[line] : p->window2right;
   unsigned nr = 1;
   bool w1 = (flags & 2) && window1left <= window1right;
-  bool w2 = (flags & 8) && p->window2left <= p->window2right;
+  bool w2 = (flags & 8) && window2left <= window2right;
   int points[4], count = 0;
   if (w1) { points[count++] = window1left + f->originX;
             points[count++] = window1right + 1 + f->originX; }
-  if (w2) { points[count++] = p->window2left + f->originX;
-            points[count++] = p->window2right + 1 + f->originX; }
+  if (w2) { points[count++] = window2left + f->originX;
+            points[count++] = window2right + 1 + f->originX; }
   for (int n = 0; n < count; n++) {
     int value = points[n];
     if (value <= spanLeft || value >= spanRight) continue;
@@ -229,7 +232,7 @@ static void WindowsWithFirstEdges(const PicaFrame *f, const PicaLine *p,
   for (unsigned i = 0; i < nr; i++) {
     int x = out->edges[i] - (int)f->originX;
     bool a = w1 && x >= window1left && x <= window1right;
-    bool b = w2 && x >= p->window2left && x <= p->window2right;
+    bool b = w2 && x >= window2left && x <= window2right;
     if (w1 && (flags & 1)) a = !a;
     if (w2 && (flags & 4)) b = !b;
     bool masked;
@@ -347,10 +350,23 @@ int PicaScrollOffset(unsigned scroll, unsigned base, bool wider) {
 }
 
 static bool WideRoomTile(const PicaFrame *f, const WideTileRow *row, int x,
+                         unsigned layer,
                          uint16_t *tile, unsigned *tileX, unsigned *tileY) {
   int worldX = row->cameraX + x - (int)f->originX;
   if (!row->valid || worldX < 0 ||
       worldX / 16 >= (int)f->wideRoomWidth) return false;
+  if (layer == 1 && f->xrayTiles[0]) {
+    unsigned side = x < (int)f->originX ? 0 : 1;
+    int col = (worldX - f->xrayStartX[side]) / 8;
+    int worldY = (int)(row->blockRow / f->wideRoomWidth) * 16 +
+                  (row->quadrantY ? 8 : 0) + row->pixelY;
+    int y = (worldY - f->xrayStartY) / 8;
+    if (col < 0 || col >= 32 || y < 0 || y >= 32) return false;
+    *tile = f->xrayTiles[side][y * 32 + col];
+    *tileX = worldX & 7;
+    *tileY = row->pixelY;
+    return true;
+  }
   unsigned block = row->blocks[row->blockRow + worldX / 16];
   unsigned quadrant = row->quadrantY | ((worldX & 8) ? 1 : 0);
   if (block & 0x400) quadrant ^= 1;
@@ -463,8 +479,10 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
               (!beamWindowTiles &&
                (next->window1left != p->window1left ||
                 next->window1right != p->window1right ||
-                next->window2left != p->window2left ||
-                next->window2right != p->window2right)) ||
+                (f->xrayActive ? f->xrayLeft[y + run] != f->xrayLeft[y] :
+                                 next->window2left != p->window2left) ||
+                (f->xrayActive ? f->xrayRight[y + run] != f->xrayRight[y] :
+                                 next->window2right != p->window2right))) ||
               next->windowLogic[layer] != p->windowLogic[layer]))) {
           h = run;
           break;
@@ -631,7 +649,7 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
           else if (x < (int)f->originX + kSnesWidth)
             w = Min(w, (int)f->originX + kSnesWidth - x);
           if (side) {
-            if (!WideRoomTile(f, &roomRow, x, &tile,
+            if (!WideRoomTile(f, &roomRow, x, layer, &tile,
                               &pixelX, &pixelY)) {
               x += w;
               continue;
@@ -891,8 +909,10 @@ static bool Compose(PicaFrame *f) {
             (f->extendEyeBeam ? f->beamRight[y] != f->beamRight[y + h] :
                                 p->window1right != q->window1right))) ||
           ((colorWindows & 8) &&
-           (p->window2left != q->window2left ||
-            p->window2right != q->window2right))) break;
+           ((f->xrayActive ? f->xrayLeft[y] != f->xrayLeft[y + h] :
+                            p->window2left != q->window2left) ||
+            (f->xrayActive ? f->xrayRight[y] != f->xrayRight[y + h] :
+                            p->window2right != q->window2right)))) break;
       h++;
     }
     f->bandEnd[y] = y + h;
@@ -934,7 +954,7 @@ static bool Compose(PicaFrame *f) {
   }
   /* Color math can otherwise turn empty space beyond a room wall into a
    * solid spotlight color. Mask only the playfield, leaving the HUD intact. */
-  if (f->extendEyeBeam && f->hudEndY < f->height) {
+  if ((f->extendEyeBeam || f->xrayActive) && f->hudEndY < f->height) {
     if (f->worldLeft > 0) {
       PicaQuad black = {0, f->hudEndY, f->worldLeft, f->height,
                         0, 0, 0, 0, 1, 0, 0, 0, 255};

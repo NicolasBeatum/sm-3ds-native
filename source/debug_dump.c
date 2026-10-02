@@ -85,6 +85,7 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
       "app_version=%s\nbuild_flags=%s\nfull_native=%u\n"
       "build_lto=%u\nppu_bg_lookup=inline-band-v3\n"
       "ppu_geometry=indexed-quads-v1\n"
+      "xray_render=translated-native-window-v1\n"
       "ppu_obj_lookup=row-membership-v1\nbottom_ui=map-cache-event-state-v1\n"
       "hardware=%s\ncpu_time_limit_percent=%lu\nlinear_free_bytes=%lu\n"
       "last_ppu_reason=%s\n"

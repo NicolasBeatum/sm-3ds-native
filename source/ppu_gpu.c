@@ -2,6 +2,7 @@
 #include "ppu_gpu_model.h"
 #include "ppu_gpu_vertices.h"
 #include "wide_bounds.h"
+#include "wide_xray.h"
 #include "sm_pica_shbin.h"
 #include "src/ida_types.h"
 #include "src/sm_rtl.h"
@@ -439,6 +440,7 @@ bool PpuGpuFinish(Ppu *p) {
     frame.bg2Right = span.right;
     frame.boundBg2 = room_width_in_blocks != 0;
   }
+  if (ok) WideXray_Prepare(&frame);
   if (ok) ok = PicaBuildFrame(&frame);
   if (!ok) {
     g.reason = p->gpuInvalidWrite ? "live-vram-cgram-oam" :
