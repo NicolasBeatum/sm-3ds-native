@@ -2,6 +2,7 @@
 #include "ppu_gpu.h"
 #include "bottom_screen.h"
 #include "wide_config.h"
+#include "video_layout.h"
 #include "src/ida_types.h"
 #include "src/variables.h"
 
@@ -14,14 +15,6 @@ enum {
   kTextureHeight = 256,
   kSourceWidth = kSnesWidth,
   kSourceHeight = kSnesHeight,
-  kDrawWidth = 274,
-  kDrawHeight = 240,
-  /* Keep the 256-pixel native view at the same physical size in both modes.
-   * The 400-pixel render is cropped equally on both sides before display. */
-  kWideVisibleSourceWidth =
-      (kWideWidth * kSnesWidth + kDrawWidth / 2) / kDrawWidth,
-  kWideCropX = (kWideWidth - kWideVisibleSourceWidth) / 2,
-  kWideHudSide = (400 - kDrawWidth) / 2,
 };
 
 static C3D_RenderTarget *g_top_target;
@@ -226,20 +219,21 @@ bool GpuPresenter_DrawTop(const uint8_t *pixels) {
       .tex = gpu_ppu ? PpuGpuOutput() : &g_top_texture,
       .subtex = gpu_ppu ? &g_top_gpu_subtexture : &g_top_subtexture,
   };
-  if (gpu_ppu) {
-    g_top_gpu_subtexture.width = wide ? kWideVisibleSourceWidth : kSnesWidth;
-    g_top_gpu_subtexture.left =
-        wide ? (float)kWideCropX / 512.0f : 0.0f;
-    g_top_gpu_subtexture.right =
-        wide ? (float)(kWideCropX + kWideVisibleSourceWidth) / 512.0f :
-               (float)kSnesWidth / 512.0f;
-  }
+  TopVideoLayout layout = TopVideoLayout_Get(BottomScreen_VideoMode(), wide);
+  Tex3DS_SubTexture sampled = *image.subtex;
+  float textureWidth = gpu_ppu ? 512.0f : 256.0f;
+  sampled.width = layout.source_width;
+  sampled.left = (layout.source_x + TOP_SAMPLE_BIAS) / textureWidth;
+  sampled.right = (layout.source_x + layout.source_width + TOP_SAMPLE_BIAS) / textureWidth;
+  sampled.top -= TOP_SAMPLE_BIAS / 256.0f;
+  sampled.bottom -= TOP_SAMPLE_BIAS / 256.0f;
+  image.subtex = &sampled;
   C2D_DrawParams params = {
       .pos = {
-          .x = wide ? 0.0f : (400.0f - kDrawWidth) * 0.5f,
-          .y = 0.0f,
-          .w = wide ? 400.0f : kDrawWidth,
-          .h = kDrawHeight,
+          .x = layout.x,
+          .y = layout.y,
+          .w = layout.width,
+          .h = layout.height,
       },
       .center = {0.0f, 0.0f},
       .depth = 0.0f,
@@ -260,20 +254,23 @@ bool GpuPresenter_DrawTop(const uint8_t *pixels) {
       (game_state >= kGameState_7_MainGameplayFadeIn &&
        game_state <= kGameState_11_LoadingNextRoom ? kHudEndLine : 0);
   const float hudHeight =
-      (float)((hudLines * kDrawHeight + kSnesHeight - 1) / kSnesHeight);
+      (float)((hudLines * layout.height + kSnesHeight - 1) / kSnesHeight);
   const u32 black = C2D_Color32(0, 0, 0, 255);
   if (BottomScreen_HideMainHud() && hudLines) {
-    C2D_DrawRectSolid(wide ? 0.0f : (400.0f - kDrawWidth) * 0.5f,
-                      0.0f, 0.1f, wide ? 400.0f : kDrawWidth,
+    C2D_DrawRectSolid(layout.x, layout.y, 0.1f, layout.width,
                       hudHeight, black);
     C2D_Flush();
   } else if (wide && hudLines) {
     /* The rounded-up mask covers one row beyond the image's HUD boundary.
      * Leave the first widened playfield row visible at both sides. */
     const float sideHudHeight = hudHeight > 0.0f ? hudHeight - 1.0f : 0.0f;
-    C2D_DrawRectSolid(0.0f, 0.0f, 0.1f, kWideHudSide, sideHudHeight, black);
-    C2D_DrawRectSolid(kWideHudSide + kDrawWidth, 0.0f, 0.1f,
-                      kWideHudSide, sideHudHeight, black);
+    int left = layout.x + ((kWideExtraX - layout.source_x) * layout.width +
+                           layout.source_width / 2) / layout.source_width;
+    int right = layout.x + ((kWideExtraX + kSnesWidth - layout.source_x) * layout.width +
+                            layout.source_width / 2) / layout.source_width;
+    C2D_DrawRectSolid(layout.x, layout.y, 0.1f, left - layout.x, sideHudHeight, black);
+    C2D_DrawRectSolid(right, layout.y, 0.1f,
+                      layout.x + layout.width - right, sideHudHeight, black);
     C2D_Flush();
   }
   return true;

@@ -1,6 +1,8 @@
 #include "ppu_gpu.h"
 #include "ppu_gpu_model.h"
+#include "ppu_gpu_vertices.h"
 #include "wide_bounds.h"
+#include "wide_xray.h"
 #include "sm_pica_shbin.h"
 #include "src/ida_types.h"
 #include "src/sm_rtl.h"
@@ -14,11 +16,7 @@
 #include "SDL2/SDL.h"
 #endif
 
-typedef struct Vertex {
-  int16_t x, y, z, w, u, v;
-  uint8_t r, g, b, a;
-} Vertex;
-_Static_assert(sizeof(Vertex) == 16, "GPU vertex layout");
+typedef PicaVertex Vertex;
 
 typedef struct Range { unsigned first, count; } Range;
 
@@ -38,6 +36,7 @@ static struct {
   PicaLine lines[PICA_MAX_LINES];
   PicaAtlas *cachePool[2], *cache;
   Vertex *vertexPool[2], *vertices;
+  uint16_t *indices;
   C3D_Tex atlasPool[2], atlas, main, sub, result;
   C3D_RenderTarget *mainTarget, *subTarget, *resultTarget;
   DVLB_s *shader;
@@ -81,28 +80,27 @@ static void ResetRanges(unsigned width, unsigned height) {
 
 static bool Emit(void *context, unsigned group, const PicaQuad *q) {
   (void)context;
-  if (g.count + 6 > PICA_MAX_VERTICES) return false;
+  if (g.count + 4 > PICA_MAX_VERTICES) return false;
   Range *range = &g.ranges[group];
   if (!range->count) range->first = g.count;
   if (range->first + range->count != g.count) return false;
-  int16_t depth = q->depth >> 1;
-  if (!depth) depth = 1;
-  Vertex a = {q->x0,q->y0,depth,1,q->u0,q->v0,q->r,q->g,q->b,q->a};
-  Vertex b = a, c = a, d = a;
-  b.x = d.x = q->x1; b.u = d.u = q->u1;
-  c.y = d.y = q->y1; c.v = d.v = q->v1;
-  Vertex *v = &g.vertices[g.count];
-  v[0] = a; v[1] = b; v[2] = c; v[3] = c; v[4] = b; v[5] = d;
-  g.count += 6;
-  range->count += 6;
+  PicaQuadVertices(&g.vertices[g.count], q);
+  g.count += 4;
+  range->count += 4;
   return true;
 }
 
 static void DrawRange(unsigned group) {
   Range r = g.ranges[group];
   while (r.count) {
-    unsigned n = r.count > 32766 ? 32766 : r.count;
-    C3D_DrawArrays(GPU_TRIANGLES, r.first, n);
+    unsigned n = PicaDrawChunkVertices(r.count);
+    /* Indices are local to each draw. Rebase the vertex buffer at the start
+     * of the range/chunk, keeping both draw count and indices below limits. */
+    C3D_BufInfo buffers;
+    BufInfo_Init(&buffers);
+    BufInfo_Add(&buffers, g.vertices + r.first, sizeof(Vertex), 3, 0x210);
+    C3D_SetBufInfo(&buffers);
+    C3D_DrawElements(GPU_TRIANGLES, n / 4 * 6, C3D_UNSIGNED_SHORT, g.indices);
     r.first += n;
     r.count -= n;
   }
@@ -272,6 +270,13 @@ bool PpuGpuInit(void) {
   g.reason = "initialization";
   g.saved = calloc(1, sizeof(Ppu));
   if (!g.saved) { g.reason = "memory"; return false; }
+  g.indices = linearMemAlign(PICA_INDEX_COUNT * sizeof(uint16_t), 128);
+  if (!g.indices) { g.reason = "memory"; return false; }
+  PicaQuadIndices(g.indices);
+  if (!Clean(g.indices, PICA_INDEX_COUNT * sizeof(uint16_t))) {
+    g.reason = "index-cache-clean";
+    return false;
+  }
   for (unsigned slot = 0; slot < 2; slot++) {
     g.cachePool[slot] = calloc(1, sizeof(PicaAtlas));
     g.vertexPool[slot] = linearMemAlign(PICA_MAX_VERTICES * sizeof(Vertex), 128);
@@ -326,6 +331,7 @@ void PpuGpuShutdown(void) {
     free(g.cachePool[slot]);
   }
   free(g.saved);
+  if (g.indices) linearFree(g.indices);
   memset(&g, 0, sizeof(g));
 }
 
@@ -434,6 +440,7 @@ bool PpuGpuFinish(Ppu *p) {
     frame.bg2Right = span.right;
     frame.boundBg2 = room_width_in_blocks != 0;
   }
+  if (ok) WideXray_Prepare(&frame);
   if (ok) ok = PicaBuildFrame(&frame);
   if (!ok) {
     g.reason = p->gpuInvalidWrite ? "live-vram-cgram-oam" :

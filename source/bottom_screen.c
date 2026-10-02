@@ -80,6 +80,14 @@ static bool g_widescreen = true;
 static bool g_status_bar_visible[3] = {true, true, false};
 static bool g_clear_markers_armed;
 static bool g_setup_build_info;
+enum HudItemsMode { kHudOnlyAmmo, kHudAmmoHook, kHudAllItems };
+static enum HudItemsMode g_hud_items_mode = kHudAllItems;
+static bool g_hud_numbers_horizontal;
+static bool g_xray_map_button = true;
+static bool g_map_item_touch;
+static enum BottomScreenVideoMode g_video_mode = kVideoMode_Fit;
+enum SetupGroup { kSetupHud, kSetupMap, kSetupVideo };
+static enum SetupGroup g_setup_group;
 static const char *g_console_model = "UNKNOWN";
 static bool g_dump_requested;
 static char g_settings_path[256];
@@ -410,6 +418,8 @@ static const uint16_t kAmmoTilemap[] = {
   0x344b, 0x3449, 0x744b, 0x344c, 0x344a, 0x744c,
   0x3434, 0x7434, 0x3435, 0x7435,
   0x3436, 0x7436, 0x3437, 0x7437,
+  0x3438, 0x7438, 0x3439, 0x7439,
+  0x343a, 0x743a, 0x343b, 0x743b,
 };
 
 static void DrawHudTile(uint8_t *fb, int x, int y, uint16_t entry) {
@@ -430,7 +440,7 @@ static void DrawHudTile(uint8_t *fb, int x, int y, uint16_t entry) {
 }
 
 static void DrawAmmoIcon(uint8_t *fb, int x, int y, int icon) {
-  int offset = icon == 0 ? 0 : (icon == 1 ? 6 : 10);
+  int offset = icon == 0 ? 0 : 6 + (icon - 1) * 4;
   int width = icon == 0 ? 3 : 2;
   for (int ty = 0; ty < 2; ty++)
     for (int tx = 0; tx < width; tx++)
@@ -438,42 +448,95 @@ static void DrawAmmoIcon(uint8_t *fb, int x, int y, int icon) {
                   kAmmoTilemap[offset + ty * width + tx]);
 }
 
+static int HudItemCount(void) { return 3 + g_hud_items_mode; }
+
+/* Reserve every slot, including unowned items. Drawing and touch selection
+ * share these boundaries so the narrower utility slots stay selectable. */
+static int HudItemBoundary(int index) {
+  int n = HudItemCount();
+  if (!g_hud_numbers_horizontal) return 134 + index * 175 / n;
+  static const int weights[] = {49, 41, 41, 22, 22};
+  int total = 0, offset = 0;
+  for (int i = 0; i < n; i++) {
+    total += weights[i];
+    if (i < index) offset += weights[i];
+  }
+  return 134 + offset * 175 / total;
+}
+
+static bool HudItemAvailable(int slot) {
+  switch (slot) {
+  case 1: return samus_max_missiles != 0;
+  case 2: return samus_max_super_missiles != 0;
+  case 3: return samus_max_power_bombs != 0;
+  case 4: return (equipped_items & 0x4000) != 0;
+  case 5: return (equipped_items & 0x8000) != 0;
+  default: return false;
+  }
+}
+
+static void SelectHudItem(int slot) {
+  if (!HudItemAvailable(slot)) return;
+  hud_item_index = hud_item_index == slot ? 0 : slot;
+  samus_auto_cancel_hud_item_index = 0;
+  hud_auto_cancel_flag = 0;
+  g_bottom_dirty = true;
+}
+
 static void DrawStatus(uint8_t *fb) {
   Panel(fb, 5, 3, 310, 38);
-
   const int tanks = samus_max_health / 100;
   const int filled = samus_health / 100;
   for (int i = 0; i < 14; i++) {
-    int x = 17 + (i % 7) * 12;
-    int y = 9 + (i / 7) * 12;
+    int x = 14 + (i % 7) * 11;
+    int y = 10 + (i / 7) * 12;
     UiColor color = i < filled ? kEnergy : (i < tanks ? kBorderHi : kBorder);
-    FillRect(fb, x, y, 10, 9, color);
+    FillRect(fb, x, y, 9, 8, color);
     if (i < tanks) {
-      FillRect(fb, x, y, 10, 1, kWhite);
-      FillRect(fb, x, y, 1, 9, kWhite);
+      FillRect(fb, x, y, 9, 1, kWhite);
+      FillRect(fb, x, y, 1, 8, kWhite);
     }
   }
-
   char text[16];
   snprintf(text, sizeof(text), "%02u", samus_health % 100);
-  DrawText(fb, 111, 15, text, 2, kWhite);
+  DrawText(fb, 98, 15, text, 2, kWhite);
 
   const unsigned counts[3] = {samus_missiles, samus_super_missiles, samus_power_bombs};
-  const unsigned maximums[3] = {samus_max_missiles, samus_max_super_missiles, samus_max_power_bombs};
-  const int slots[3] = {1, 2, 3};
-  const int icon_x[3] = {151, 218, 269};
-  const int icon_w[3] = {24, 16, 16};
-  const int number_x[3] = {179, 239, 290};
-  for (int i = 0; i < 3; i++) {
-    if (!maximums[i]) continue;
-    if (hud_item_index == slots[i]) {
-      FillRect(fb, icon_x[i] - 2, 11, icon_w[i] + 4, 22, kSamus);
-      StrokeRect(fb, icon_x[i] - 2, 11, icon_w[i] + 4, 22, 1, kWhite);
+  int n = HudItemCount();
+  for (int i = 0; i < n; i++) {
+    if (!HudItemAvailable(i + 1)) continue;
+    int left = HudItemBoundary(i);
+    int right = HudItemBoundary(i + 1);
+    int center = (left + right) / 2;
+    if (hud_item_index == i + 1) {
+      FillRect(fb, left + 2, 6, right - left - 4, 32, kSamus);
+      StrokeRect(fb, left + 2, 6, right - left - 4, 32, 1, kWhite);
     }
-    DrawAmmoIcon(fb, icon_x[i], 14, i);
-    snprintf(text, sizeof(text), "%u", counts[i]);
-    DrawText(fb, number_x[i], 15, text, 2, kWhite);
+    int icon_width = i == 0 ? 24 : 16;
+    int icon_x = g_hud_numbers_horizontal && i < 3 ? left + 3 : center - icon_width / 2;
+    DrawAmmoIcon(fb, icon_x, g_hud_numbers_horizontal ? 14 : 8, i);
+    if (i < 3) {
+      snprintf(text, sizeof(text), "%u", counts[i]);
+      if (g_hud_numbers_horizontal)
+        DrawText(fb, icon_x + icon_width + 2, 18, text, 1, kWhite);
+      else
+        DrawTextCentered(fb, center, n == 3 ? 25 : 28, text,
+                         n == 3 ? 2 : 1, kWhite);
+    }
   }
+}
+
+static bool ShowXrayMapButton(void) {
+  return g_xray_map_button && HudItemAvailable(5);
+}
+
+static void DrawXrayMapButton(uint8_t *fb, int top) {
+  if (!ShowXrayMapButton()) return;
+  FillRect(fb, 15, top + 6, 26, 22,
+           hud_item_index == 5 ? kSamus : kPanel);
+  StrokeRect(fb, 15, top + 6, 26, 22, 1,
+             hud_item_index == 5 ? kWhite : kAccent);
+  DrawAmmoIcon(fb, 20, top + 9, 4);
 }
 
 static void DrawLine(uint8_t *fb, int x0, int y0, int x1, int y1, UiColor color) {
@@ -893,6 +956,7 @@ static void DrawMapTab(uint8_t *fb, int top) {
   if (g_world_view) DrawWorldMap(fb, top, 180);
   else DrawRoomMap(fb, top, 180);
   DrawMapControls(fb);
+  DrawXrayMapButton(fb, top);
 }
 
 static int ItemPercent(void) {
@@ -1046,6 +1110,14 @@ static void DrawBuildSetting(uint8_t *fb, int x, int y, const char *name,
            enabled ? kAccent : kDim);
 }
 
+static int SetupRowStep(bool compact) {
+  return g_setup_group == kSetupHud ? (compact ? 19 : 24) : (compact ? 22 : 29);
+}
+
+static int SetupRowHeight(bool compact) {
+  return SetupRowStep(compact) - (compact ? 3 : 5);
+}
+
 static void DrawSetupTab(uint8_t *fb, int top) {
   bool compact = top == 44;
   Panel(fb, 5, top, 310, 207 - top);
@@ -1108,27 +1180,43 @@ static void DrawSetupTab(uint8_t *fb, int top) {
     return;
   }
 
-  int y = top + (compact ? 22 : 32);
-  int step = compact ? 20 : 24;
-  int height = compact ? 18 : 21;
-  DrawSetupRow(fb, y, height, "STATUS BAR MAP",
-               g_status_bar_visible[kBottomTab_Map] ? "ON" : "OFF",
-               g_status_bar_visible[kBottomTab_Map]);
-  DrawSetupRow(fb, y + step, height, "STATUS BAR ITEMS",
-               g_status_bar_visible[kBottomTab_Items] ? "ON" : "OFF",
-               g_status_bar_visible[kBottomTab_Items]);
-  DrawSetupRow(fb, y + 2 * step, height, "STATUS BAR SETUP",
-               g_status_bar_visible[kBottomTab_Setup] ? "ON" : "OFF",
-               g_status_bar_visible[kBottomTab_Setup]);
-  DrawSetupRow(fb, y + 3 * step, height, "WIDESCREEN",
-               g_widescreen ? "ON" : "OFF", g_widescreen);
-  DrawSetupRow(fb, y + 4 * step, height, "HIDE MAIN HUD",
-               g_hide_main_hud ? "ON" : "OFF", g_hide_main_hud);
-  DrawSetupRow(fb, y + 5 * step, height, "FLOATING MAP BUTTONS",
-               g_map_buttons_visible ? "ON" : "OFF", g_map_buttons_visible);
-  DrawSetupRow(fb, y + 6 * step, height, "CLEAR MAP MARKERS",
-               g_clear_markers_armed ? "TAP AGAIN" : NULL,
-               g_clear_markers_armed);
+  static const char *groups[] = {"HUD", "MAP", "VIDEO"};
+  for (int i = 0; i < 3; i++) {
+    int x = 13 + i * 99, y = top + (compact ? 23 : 29);
+    FillRect(fb, x, y, 96, 18, g_setup_group == i ? kBorder : kSlot);
+    StrokeRect(fb, x, y, 96, 18, 1, g_setup_group == i ? kAccent : kBorder);
+    DrawTextCentered(fb, x + 48, y + 5, groups[i], 1, kWhite);
+  }
+  int y = top + (compact ? 47 : 53);
+  int step = SetupRowStep(compact);
+  int height = SetupRowHeight(compact);
+  if (g_setup_group == kSetupHud) {
+    static const char *modes[] = {"ONLY AMMO", "AMMO + HOOK", "ALL ITEMS"};
+    DrawSetupRow(fb, y, height, "HUD ITEMS", modes[g_hud_items_mode], true);
+    DrawSetupRow(fb, y + step, height, "HUD NUMBERS",
+                 g_hud_numbers_horizontal ? "HORIZONTAL" : "VERTICAL", true);
+    DrawSetupRow(fb, y + 2 * step, height, "STATUS BAR MAP",
+                 g_status_bar_visible[0] ? "ON" : "OFF", g_status_bar_visible[0]);
+    DrawSetupRow(fb, y + 3 * step, height, "STATUS BAR ITEMS",
+                 g_status_bar_visible[1] ? "ON" : "OFF", g_status_bar_visible[1]);
+    DrawSetupRow(fb, y + 4 * step, height, "STATUS BAR SETUP",
+                 g_status_bar_visible[2] ? "ON" : "OFF", g_status_bar_visible[2]);
+    DrawSetupRow(fb, y + 5 * step, height, "HIDE MAIN HUD",
+                 g_hide_main_hud ? "ON" : "OFF", g_hide_main_hud);
+  } else if (g_setup_group == kSetupMap) {
+    DrawSetupRow(fb, y, height, "FLOATING MAP BUTTONS",
+                 g_map_buttons_visible ? "ON" : "OFF", g_map_buttons_visible);
+    DrawSetupRow(fb, y + step, height, "X-RAY MAP BUTTON",
+                 g_xray_map_button ? "ON" : "OFF", g_xray_map_button);
+    DrawSetupRow(fb, y + 2 * step, height, "WORLD AREA NAMES",
+                 g_world_labels ? "ON" : "OFF", g_world_labels);
+    DrawSetupRow(fb, y + 3 * step, height, "CLEAR MAP MARKERS",
+                 g_clear_markers_armed ? "TAP AGAIN" : NULL, g_clear_markers_armed);
+  } else {
+    static const char *modes[] = {"FIT", "STRETCHED", "1:1"};
+    DrawSetupRow(fb, y, height, "WIDESCREEN", g_widescreen ? "ON" : "OFF", g_widescreen);
+    DrawSetupRow(fb, y + step, height, "SCREEN SIZE", modes[g_video_mode], true);
+  }
 }
 
 static void DrawTabs(uint8_t *fb) {
@@ -1200,6 +1288,10 @@ void BottomScreen_LoadSettings(const char *path) {
     else if (strcmp(key, "world_zoom") == 0 && value >= 0 && value <= kWorldZoomMax) g_world_zoom = value;
     else if (strcmp(key, "world_labels") == 0) g_world_labels = value != 0;
     else if (strcmp(key, "map_buttons") == 0) g_map_buttons_visible = value != 0;
+    else if (strcmp(key, "hud_items") == 0 && value >= 0 && value <= 2) g_hud_items_mode = value;
+    else if (strcmp(key, "hud_numbers_horizontal") == 0) g_hud_numbers_horizontal = value != 0;
+    else if (strcmp(key, "xray_map_button") == 0) g_xray_map_button = value != 0;
+    else if (strcmp(key, "video_mode") == 0 && value >= 0 && value <= 2) g_video_mode = value;
   }
   fclose(f);
   g_bottom_dirty = true;
@@ -1255,10 +1347,11 @@ bool BottomScreen_SaveSettings(void) {
   int written = snprintf(text, sizeof(text),
       "widescreen=%d\nhide_main_hud=%d\nstatus_map=%d\n"
       "status_items=%d\nstatus_setup=%d\nroom_zoom=%d\nworld_zoom=%d\n"
-      "world_labels=%d\nmap_buttons=%d\n",
+      "world_labels=%d\nmap_buttons=%d\nhud_items=%d\nhud_numbers_horizontal=%d\nxray_map_button=%d\nvideo_mode=%d\n",
       g_widescreen, g_hide_main_hud, g_status_bar_visible[0],
       g_status_bar_visible[1], g_status_bar_visible[2],
-      g_room_zoom, g_world_zoom, g_world_labels, g_map_buttons_visible);
+      g_room_zoom, g_world_zoom, g_world_labels, g_map_buttons_visible,
+      g_hud_items_mode, g_hud_numbers_horizontal, g_xray_map_button, g_video_mode);
   if (written <= 0 || written >= sizeof(text)) return false;
   if (!g_settings_thread) return WriteSettings(g_settings_path, text);
   /* The worker only sees an immutable snapshot. Rapid zoom taps coalesce
@@ -1299,7 +1392,7 @@ bool BottomScreen_Init(void) {
 static bool BottomStateChanged(void) {
   typedef struct State {
     bool live, notice;
-    uint16_t status[9], items[7], map[3];
+    uint16_t status[10], items[7], map[3], map_item[2];
     uint8_t explored[6][256], station[8];
   } State;
   static State previous;
@@ -1310,7 +1403,7 @@ static bool BottomStateChanged(void) {
   if (current.live && g_status_bar_visible[g_bottom_tab]) {
     uint16_t status[] = {samus_health, samus_max_health, samus_missiles,
       samus_max_missiles, samus_super_missiles, samus_max_super_missiles,
-      samus_power_bombs, samus_max_power_bombs, hud_item_index};
+      samus_power_bombs, samus_max_power_bombs, hud_item_index, equipped_items};
     memcpy(current.status, status, sizeof(status));
   }
   if (current.live && g_bottom_tab == kBottomTab_Items) {
@@ -1321,6 +1414,8 @@ static bool BottomStateChanged(void) {
     current.map[0] = ItemPercent();
   }
   if (current.live && g_bottom_tab == kBottomTab_Map) {
+    current.map_item[0] = equipped_items & 0x8000;
+    current.map_item[1] = ShowXrayMapButton() ? hud_item_index : 0;
     current.map[0] = area_index;
     current.map[1] = room_x_coordinate_on_map + (samus_x_pos >> 8);
     current.map[2] = room_y_coordinate_on_map + (samus_y_pos >> 8) + 1;
@@ -1413,21 +1508,19 @@ void BottomScreen_Fini(void) {
 }
 
 static void HandleStatusTouch(int x) {
-  int slot = 0;
-  if (x >= 148 && x < 216 && samus_max_missiles) slot = 1;
-  else if (x >= 216 && x < 266 && samus_max_super_missiles) slot = 2;
-  else if (x >= 266 && samus_max_power_bombs) slot = 3;
-  if (slot) {
-    hud_item_index = hud_item_index == slot ? 0 : slot;
-    samus_auto_cancel_hud_item_index = 0;
-    hud_auto_cancel_flag = 0;
-    g_bottom_dirty = true;
-  }
+  if (x < 134 || x >= 309) return;
+  int n = HudItemCount();
+  for (int i = 0; i < n; i++)
+    if (x >= HudItemBoundary(i) && x < HudItemBoundary(i + 1)) {
+      SelectHudItem(i + 1);
+      return;
+    }
 }
 
 void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
   int x = (int)(normalized_x * 320.0f);
   int y = (int)(normalized_y * 240.0f);
+  g_map_item_touch = false;
   g_world_touch_active = false;
   g_room_touch_active = false;
   g_room_button_touch = false;
@@ -1450,6 +1543,15 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
   if (g_status_bar_visible[g_bottom_tab] && y < 42) {
     HandleStatusTouch(x);
     return;
+  }
+
+  if (g_bottom_tab == kBottomTab_Map && ShowXrayMapButton()) {
+    int top = g_status_bar_visible[kBottomTab_Map] ? 44 : 3;
+    if (x >= 15 && x < 41 && y >= top + 6 && y < top + 28) {
+      SelectHudItem(5);
+      g_map_item_touch = true;
+      return;
+    }
   }
 
   if (g_bottom_tab == kBottomTab_Map && g_world_view &&
@@ -1524,23 +1626,37 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
         g_dump_requested = true;
       return;
     }
-    int row_y = top + (compact ? 22 : 32);
-    int step = compact ? 20 : 24;
-    int height = compact ? 18 : 21;
+    int group_y = top + (compact ? 23 : 29);
+    if (x >= 13 && x < 307 && y >= group_y && y < group_y + 18) {
+      g_setup_group = (x - 13) / 99;
+      g_bottom_dirty = true;
+      return;
+    }
+    int row_y = top + (compact ? 47 : 53);
+    int step = SetupRowStep(compact);
+    int height = SetupRowHeight(compact);
+    int rows = g_setup_group == kSetupHud ? 6 : g_setup_group == kSetupMap ? 4 : 2;
     if (x >= 13 && x < 307 && y >= row_y) {
       int row = (y - row_y) / step;
-      if (row < 7 && y < row_y + row * step + height) {
-        if (row < 3) g_status_bar_visible[row] = !g_status_bar_visible[row];
-        else if (row == 3) g_widescreen = !g_widescreen;
-        else if (row == 4) g_hide_main_hud = !g_hide_main_hud;
-        else if (row == 5) g_map_buttons_visible = !g_map_buttons_visible;
-        else if (g_clear_markers_armed) {
-          g_marker_count = 0;
-          g_clear_markers_armed = false;
+      if (row < rows && y < row_y + row * step + height) {
+        if (g_setup_group == kSetupHud) {
+          if (!row) g_hud_items_mode = (g_hud_items_mode + 1) % 3;
+          else if (row == 1) g_hud_numbers_horizontal = !g_hud_numbers_horizontal;
+          else if (row < 5) g_status_bar_visible[row - 2] = !g_status_bar_visible[row - 2];
+          else g_hide_main_hud = !g_hide_main_hud;
+        } else if (g_setup_group == kSetupMap) {
+          if (!row) g_map_buttons_visible = !g_map_buttons_visible;
+          else if (row == 1) g_xray_map_button = !g_xray_map_button;
+          else if (row == 2) g_world_labels = !g_world_labels;
+          else if (g_clear_markers_armed) {
+            g_marker_count = 0;
+            g_clear_markers_armed = false;
+          } else g_clear_markers_armed = true;
         } else {
-          g_clear_markers_armed = true;
+          if (!row) g_widescreen = !g_widescreen;
+          else g_video_mode = (g_video_mode + 1) % 3;
         }
-        if (row < 6) BottomScreen_SaveSettings();
+        BottomScreen_SaveSettings();
       }
     }
     g_bottom_dirty = true;
@@ -1588,6 +1704,10 @@ void BottomScreen_HandleTouchMotion(float normalized_x, float normalized_y) {
 void BottomScreen_HandleTouchUp(float normalized_x, float normalized_y) {
   int x = (int)(normalized_x * 320.0f);
   int y = (int)(normalized_y * 240.0f);
+  if (g_map_item_touch) {
+    g_map_item_touch = false;
+    return;
+  }
   if (g_room_button_touch) {
     g_room_button_touch = false;
     return;
@@ -1641,3 +1761,5 @@ bool BottomScreen_HideMainHud(void) {
 bool BottomScreen_WidescreenEnabled(void) {
   return g_widescreen;
 }
+
+enum BottomScreenVideoMode BottomScreen_VideoMode(void) { return g_video_mode; }

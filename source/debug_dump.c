@@ -15,6 +15,7 @@
 #include "ppu_gpu.h"
 #include "screen_capture.h"
 #include "storage_paths.h"
+#include "app_lifecycle.h"
 #include "version.h"
 
 #ifndef SM3DS_BUILD_FLAGS
@@ -82,7 +83,10 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
       "sm3dsnative debug dump v4\n"
       "dump_id=%s\nrom=%s\nframe=%lu\n"
       "app_version=%s\nbuild_flags=%s\nfull_native=%u\n"
-      "build_lto=%u\nppu_bg_lookup=descriptor-cache-v1\n"
+      "build_lto=%u\nppu_bg_lookup=inline-band-v3\n"
+      "ppu_geometry=indexed-quads-v1\n"
+      "xray_render=translated-native-window-v1\n"
+      "enemy_viewport=visible-spritemap-v1\npipe_movement=native-through-blocks\n"
       "ppu_obj_lookup=row-membership-v1\nbottom_ui=map-cache-event-state-v1\n"
       "hardware=%s\ncpu_time_limit_percent=%lu\nlinear_free_bytes=%lu\n"
       "last_ppu_reason=%s\n"
@@ -92,7 +96,8 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
       "top_stride=%lu\nbottom_stride=%lu\n"
       "game_state=%u\narea_index=%u\nroom_ptr=%04x\n"
       "samus_x=%u\nsamus_y=%u\nsamus_health=%u\n"
-      "widescreen=%u\nhide_main_hud=%u\n"
+      "widescreen=%u\nhide_main_hud=%u\nvideo_mode=%u\n"
+      "top_sampling=nearest-biased-v1\n"
       "wram_file=memory.wram\nsram_file=save.sram\n",
       dump_id, rom_name ? rom_name : "unknown", (unsigned long)frame_number,
       APP_VERSION, SM3DS_BUILD_FLAGS,
@@ -112,8 +117,10 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
       (unsigned long)screens.top_stride, (unsigned long)screens.bottom_stride,
       game_state, area_index, room_ptr,
       samus_x_pos, samus_y_pos, samus_health,
-      BottomScreen_WidescreenEnabled(), BottomScreen_HideMainHud());
-  bool okay = result > 0 && FrameDiagnostics_WriteSummary(f) && fflush(f) == 0;
+      BottomScreen_WidescreenEnabled(), BottomScreen_HideMainHud(),
+      (unsigned)BottomScreen_VideoMode());
+  bool okay = result > 0 && AppLifecycle_WriteDiagnostics(f) &&
+      FrameDiagnostics_WriteSummary(f) && fflush(f) == 0;
   if (fclose(f) != 0) okay = false;
   if (okay) okay = WriteFrameTimes(directory);
   if (okay) okay = WriteBinary(directory, "memory.wram", g_ram, sizeof(g_ram));

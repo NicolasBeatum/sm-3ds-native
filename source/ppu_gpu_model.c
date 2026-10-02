@@ -207,14 +207,17 @@ static void WindowsWithFirstEdges(const PicaFrame *f, const PicaLine *p,
   out->bits = 0;
   if (!enabled) return;
   unsigned flags = p->windowsel >> (layer * 4);
+  unsigned line = p - f->lines;
+  int window2left = f->xrayActive ? f->xrayLeft[line] : p->window2left;
+  int window2right = f->xrayActive ? f->xrayRight[line] : p->window2right;
   unsigned nr = 1;
   bool w1 = (flags & 2) && window1left <= window1right;
-  bool w2 = (flags & 8) && p->window2left <= p->window2right;
+  bool w2 = (flags & 8) && window2left <= window2right;
   int points[4], count = 0;
   if (w1) { points[count++] = window1left + f->originX;
             points[count++] = window1right + 1 + f->originX; }
-  if (w2) { points[count++] = p->window2left + f->originX;
-            points[count++] = p->window2right + 1 + f->originX; }
+  if (w2) { points[count++] = window2left + f->originX;
+            points[count++] = window2right + 1 + f->originX; }
   for (int n = 0; n < count; n++) {
     int value = points[n];
     if (value <= spanLeft || value >= spanRight) continue;
@@ -229,7 +232,7 @@ static void WindowsWithFirstEdges(const PicaFrame *f, const PicaLine *p,
   for (unsigned i = 0; i < nr; i++) {
     int x = out->edges[i] - (int)f->originX;
     bool a = w1 && x >= window1left && x <= window1right;
-    bool b = w2 && x >= p->window2left && x <= p->window2right;
+    bool b = w2 && x >= window2left && x <= window2right;
     if (w1 && (flags & 1)) a = !a;
     if (w2 && (flags & 4)) b = !b;
     bool masked;
@@ -347,10 +350,23 @@ int PicaScrollOffset(unsigned scroll, unsigned base, bool wider) {
 }
 
 static bool WideRoomTile(const PicaFrame *f, const WideTileRow *row, int x,
+                         unsigned layer,
                          uint16_t *tile, unsigned *tileX, unsigned *tileY) {
   int worldX = row->cameraX + x - (int)f->originX;
   if (!row->valid || worldX < 0 ||
       worldX / 16 >= (int)f->wideRoomWidth) return false;
+  if (layer == 1 && f->xrayTiles[0]) {
+    unsigned side = x < (int)f->originX ? 0 : 1;
+    int col = (worldX - f->xrayStartX[side]) / 8;
+    int worldY = (int)(row->blockRow / f->wideRoomWidth) * 16 +
+                  (row->quadrantY ? 8 : 0) + row->pixelY;
+    int y = (worldY - f->xrayStartY) / 8;
+    if (col < 0 || col >= 32 || y < 0 || y >= 32) return false;
+    *tile = f->xrayTiles[side][y * 32 + col];
+    *tileX = worldX & 7;
+    *tileY = row->pixelY;
+    return true;
+  }
   unsigned block = row->blocks[row->blockRow + worldX / 16];
   unsigned quadrant = row->quadrantY | ((worldX & 8) ? 1 : 0);
   if (block & 0x400) quadrant ^= 1;
@@ -387,9 +403,8 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
   for (unsigned layer = 0; layer < 3; layer++) {
     unsigned layerBit = 1u << layer;
     if (!HasLayer(f, sub, layerBit)) continue;
-    /* A layer whose graphics bank changes within the frame keeps the
-     * original lookup path. Repeated bank invalidation would cost more
-     * than it saves, especially for the HUD's short IRQ bands. */
+    /* Inactive IRQ/HDMA states cannot use a graphics bank. Only bank
+     * changes on visible lines need the general descriptor lookup path. */
     unsigned base = f->lines[0].bg[layer].tileAdr;
     bool stableBase = true;
     for (unsigned line = 1; line < f->height; line++)
@@ -397,6 +412,22 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
         stableBase = false;
         break;
       }
+    if (!stableBase) {
+      bool haveBase = false;
+      stableBase = true;
+      for (unsigned line = 0; line < f->height; line++) {
+        const PicaLine *active = &f->lines[line];
+        if (active->forcedBlank || !(active->screenEnabled[sub] & layerBit) ||
+            (sub && !active->addSubscreen)) continue;
+        if (!haveBase) {
+          base = active->bg[layer].tileAdr;
+          haveBase = true;
+        } else if (active->bg[layer].tileAdr != base) {
+          stableBase = false;
+          break;
+        }
+      }
+    }
     uint16_t *slots = stableBase ? BackgroundSlots(f->atlas, layer, base) : NULL;
     for (unsigned y = 0; y < f->height;) {
       const PicaLine *p = &f->lines[y];
@@ -424,14 +455,20 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
       if (layer < 2 && f->wideRoom[layer].blocks)
         maxRun = Min(maxRun,
                      8 - roomRow.pixelY);
-      unsigned h = EqualRun(f, y, offsetof(PicaLine, bg) + layer * sizeof(BgLayer),
-                            sizeof(BgLayer), maxRun);
+      unsigned h = Min(maxRun, f->height - y);
+      bool windowed = (p->screenWindowed[sub] & layerBit) != 0;
+      bool beamWindowTiles = f->extendEyeBeam && sub == 1 && layer == 2 && windowed;
+      /* Compare scroll first: a distorted background usually changes it on
+       * the next line. Inline the relevant registers and visibility in one
+       * pass instead of memcmp(BgLayer) followed by a second state pass. */
       for (unsigned run = 1; run < h; run++) {
         const PicaLine *next = &f->lines[y + run];
-        bool windowed = (p->screenWindowed[sub] & layerBit) != 0;
-        bool beamWindowTiles = f->extendEyeBeam && sub == 1 && layer == 2 &&
-                               windowed;
-        if (((next->screenEnabled[sub] ^ p->screenEnabled[sub]) & layerBit) ||
+        const BgLayer *nextBg = &next->bg[layer];
+        if (nextBg->hScroll != bg->hScroll || nextBg->vScroll != bg->vScroll ||
+            nextBg->tilemapAdr != bg->tilemapAdr || nextBg->tileAdr != bg->tileAdr ||
+            nextBg->tilemapWider != bg->tilemapWider ||
+            nextBg->tilemapHigher != bg->tilemapHigher ||
+            ((next->screenEnabled[sub] ^ p->screenEnabled[sub]) & layerBit) ||
             ((next->screenWindowed[sub] ^ p->screenWindowed[sub]) & layerBit) ||
             next->forcedBlank != p->forcedBlank ||
             next->addSubscreen != p->addSubscreen ||
@@ -442,8 +479,10 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
               (!beamWindowTiles &&
                (next->window1left != p->window1left ||
                 next->window1right != p->window1right ||
-                next->window2left != p->window2left ||
-                next->window2right != p->window2right)) ||
+                (f->xrayActive ? f->xrayLeft[y + run] != f->xrayLeft[y] :
+                                 next->window2left != p->window2left) ||
+                (f->xrayActive ? f->xrayRight[y + run] != f->xrayRight[y] :
+                                 next->window2right != p->window2right))) ||
               next->windowLogic[layer] != p->windowLogic[layer]))) {
           h = run;
           break;
@@ -468,7 +507,6 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
         spanRight = spanLeft + kSnesWidth;
       }
       if (spanLeft >= spanRight) { y += h; continue; }
-      bool windowed = (p->screenWindowed[sub] & (1u << layer)) != 0;
       if (f->extendEyeBeam)
         WindowsWithFirstEdges(f, p, layer, windowed, spanLeft, spanRight,
                               f->beamLeft[y], f->beamRight[y], &win);
@@ -481,6 +519,9 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
       unsigned bpp = layer == 2 ? 2 : 4;
       unsigned tileWords = bpp == 4 ? 16 : 8;
       unsigned paletteShift = bpp == 4 ? 6 : 8;
+      unsigned tileBase = bg->tileAdr;
+      unsigned scrollMask = bg->tilemapWider ? 511 : 255;
+      int scrollX = (int)bg->hScroll - (int)f->originX;
       unsigned zLow = layer == 0 ? 0x8000 : layer == 1 ? 0x7100 : 0x1200;
       unsigned zHigh = layer == 0 ? 0xc000 : layer == 1 ? 0xb100 :
                        (p->bg3priority ? 0xf200 : 0x5200);
@@ -554,16 +595,15 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
         /* In the original 256-pixel viewport every tile comes from VRAM.
          * Keep the side-band room lookup and boundary splits out of this
          * common path, which runs for thousands of background tiles. */
-        if (f->width == kSnesWidth) {
-          unsigned scrollMask = bg->tilemapWider ? 511 : 255;
+        if (f->width == kSnesWidth || !roomSides) {
           while (x < end) {
-            unsigned wx = (x + bg->hScroll) & scrollMask;
+            unsigned wx = (x + scrollX) & scrollMask;
             unsigned pixelX = wx & 7;
             unsigned w = Min(8 - pixelX, end - x);
             unsigned map = (mapRow + ((wx >> 3) & 31) +
                             (wx >= 256 ? 0x400 : 0)) & 0x7fff;
             uint16_t tile = f->memory->vram[map];
-            int slot = BackgroundTile(f, slots, tile, bg->tileAdr, tileWords,
+            int slot = BackgroundTile(f, slots, tile, tileBase, tileWords,
                                       paletteShift, bpp);
             if (slot == -1) return false;
             if (slot >= 0 &&
@@ -576,6 +616,27 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
           continue;
         }
         while (x < end) {
+          if (x >= (int)f->originX && x < (int)f->originX + kSnesWidth) {
+            int centerEnd = IMin(end, f->originX + kSnesWidth);
+            do {
+              unsigned wx = (x + scrollX) & scrollMask;
+              unsigned pixelX = wx & 7;
+              unsigned w = Min(8 - pixelX, centerEnd - x);
+              unsigned map = (mapRow + ((wx >> 3) & 31) +
+                              (wx >= 256 ? 0x400 : 0)) & 0x7fff;
+              uint16_t tile = f->memory->vram[map];
+              int slot = BackgroundTile(f, slots, tile, tileBase, tileWords,
+                                        paletteShift, bpp);
+              if (slot == -1) return false;
+              if (slot >= 0 &&
+                  !TileQuad(f, group, slot, x, y, w, h, pixelX, wy & 7,
+                            tile & 0x4000, tile & 0x8000,
+                            (tile & 0x2000) ? zHigh : zLow, tileAlpha))
+                return false;
+              x += w;
+            } while (x < centerEnd);
+            continue;
+          }
           bool side = roomSides &&
               (x < (int)f->originX || x >= (int)f->originX + kSnesWidth);
           unsigned wx = (x - (int)f->originX + bg->hScroll) &
@@ -588,7 +649,7 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
           else if (x < (int)f->originX + kSnesWidth)
             w = Min(w, (int)f->originX + kSnesWidth - x);
           if (side) {
-            if (!WideRoomTile(f, &roomRow, x, &tile,
+            if (!WideRoomTile(f, &roomRow, x, layer, &tile,
                               &pixelX, &pixelY)) {
               x += w;
               continue;
@@ -848,8 +909,10 @@ static bool Compose(PicaFrame *f) {
             (f->extendEyeBeam ? f->beamRight[y] != f->beamRight[y + h] :
                                 p->window1right != q->window1right))) ||
           ((colorWindows & 8) &&
-           (p->window2left != q->window2left ||
-            p->window2right != q->window2right))) break;
+           ((f->xrayActive ? f->xrayLeft[y] != f->xrayLeft[y + h] :
+                            p->window2left != q->window2left) ||
+            (f->xrayActive ? f->xrayRight[y] != f->xrayRight[y + h] :
+                            p->window2right != q->window2right)))) break;
       h++;
     }
     f->bandEnd[y] = y + h;
@@ -891,7 +954,7 @@ static bool Compose(PicaFrame *f) {
   }
   /* Color math can otherwise turn empty space beyond a room wall into a
    * solid spotlight color. Mask only the playfield, leaving the HUD intact. */
-  if (f->extendEyeBeam && f->hudEndY < f->height) {
+  if ((f->extendEyeBeam || f->xrayActive) && f->hudEndY < f->height) {
     if (f->worldLeft > 0) {
       PicaQuad black = {0, f->hudEndY, f->worldLeft, f->height,
                         0, 0, 0, 0, 1, 0, 0, 0, 255};

@@ -14,6 +14,7 @@ typedef struct Capture {
   unsigned objCount;
   bool colorWindowSide;
   bool blackMaskRight;
+  bool blackMaskLeft;
 } Capture;
 
 static bool CaptureQuad(void *context, unsigned group, const PicaQuad *quad) {
@@ -34,6 +35,9 @@ static bool CaptureQuad(void *context, unsigned group, const PicaQuad *quad) {
              quad->x0 == kWideExtraX + kSnesWidth &&
              quad->x1 == kWideWidth && quad->y0 == kHudEndLine) {
     capture->blackMaskRight = true;
+  } else if (group == 20 && quad->x0 == 0 &&
+             quad->x1 == kWideExtraX && quad->y0 == kHudEndLine) {
+    capture->blackMaskLeft = true;
   }
   return true;
 }
@@ -420,6 +424,52 @@ int main(void) {
   assert(Sample(wide, wideAtlas, 0, 33) == 0);
   assert(Sample(wide, wideAtlas, kWideExtraX + 40, 33) != 0);
   assert(Sample(wide, wideAtlas, kWideWidth - 1, 33) == 0);
+
+  /* X-Ray temporarily uses BG2 for scanned BG1 tiles. Its translated
+   * second window can change on each row even when native WH2 stays fixed. */
+  uint16_t scanned[2][1024];
+  for (unsigned i = 0; i < 1024; i++) {
+    ppu->vram[0x1800 + i] = 5;
+    scanned[0][i] = scanned[1][i] = 6;
+  }
+  frame.boundBg2 = false;
+  frame.wideRoom[1] = frame.wideRoom[0];
+  frame.xrayActive = true;
+  frame.xrayTiles[0] = scanned[0];
+  frame.xrayTiles[1] = scanned[1];
+  frame.xrayStartX[0] = 0;
+  frame.xrayStartX[1] = 328;
+  frame.xrayStartY = 0;
+  for (unsigned y = 32; y < 40; y++) {
+    lines[y].screenEnabled[0] = 2;
+    lines[y].bg[1].tilemapAdr = 0x1800;
+    lines[y].screenWindowed[0] = 2;
+    lines[y].windowsel = 12u << 4;
+    lines[y].window2left = 0;
+    lines[y].window2right = 50;
+    frame.xrayLeft[y] = -72 + (int)(y - 32) * 8;
+    frame.xrayRight[y] = 50;
+  }
+  Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
+  assert(Sample(wide, wideAtlas, 8, 33) == sidePixel);
+  assert(Sample(wide, wideAtlas, 8, 35) == 0);
+  assert(Sample(wide, wideAtlas, kWideExtraX + 40, 33) == centerPixel);
+  assert(Sample(wide, wideAtlas, kWideExtraX + 60, 33) == 0);
+  for (unsigned y = 32; y < 40; y++) {
+    lines[y].window2left = 230;
+    lines[y].window2right = 255;
+    frame.xrayLeft[y] = 230;
+    frame.xrayRight[y] = 327 - (int)(y - 32) * 8;
+  }
+  Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
+  assert(Sample(wide, wideAtlas, kWideWidth - 16, 33) == sidePixel);
+  assert(Sample(wide, wideAtlas, kWideWidth - 16, 35) == 0);
+  assert(Sample(wide, wideAtlas, kWideExtraX + 240, 33) == centerPixel);
+  /* Empty room margins remain black after X-Ray color math, below the HUD. */
+  frame.extendEyeBeam = false;
+  BuildWithBounds(&frame, wideAtlas, widePixels, wide, kWideWidth,
+                  kWideExtraX, kWideExtraX, kWideExtraX + kSnesWidth);
+  assert(wide->blackMaskLeft && wide->blackMaskRight);
   free(roomTiles);
   free(roomBlocks);
 

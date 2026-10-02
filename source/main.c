@@ -26,6 +26,8 @@
 #include "debug_dump.h"
 #include "frame_diagnostics.h"
 #include "storage_paths.h"
+#include "app_lifecycle.h"
+#include "video_layout.h"
 
 enum Button {
   BTN_A = 0,
@@ -101,22 +103,21 @@ static void DrawPpuFrame(void) {
     const int fb_w  = 400;
     const int fb_h  = 240;
 
-    const int dst_w = 274;
-    const int dst_h = fb_h;                            // 240
-
-    const int x_off = (fb_w - dst_w) / 2;
-    const int y_off = 0;
-
-    static uint8_t xmap[274];
+    TopVideoLayout layout = TopVideoLayout_Get(BottomScreen_VideoMode(), false);
+    const int dst_w = layout.width, dst_h = layout.height;
+    const int x_off = layout.x, y_off = layout.y;
+    static uint8_t xmap[400];
     static uint8_t ymap[240];
-    static bool maps_ready;
-    if (!maps_ready) {
+    static int cached_w, cached_h;
+    if (cached_w != dst_w || cached_h != dst_h) {
         for (int x = 0; x < dst_w; x++)
             xmap[x] = (x * src_w) / dst_w;
         for (int y = 0; y < dst_h; y++)
             ymap[y] = (y * src_h) / dst_h;
-        maps_ready = true;
+        cached_w = dst_w; cached_h = dst_h;
     }
+
+    memset(fb, 0, fb_w * fb_h * 4);
 
     for (int dy = 0; dy < dst_h; dy++) {
         const uint8_t *src_row = &src[ymap[dy] * src_w * 4];
@@ -398,6 +399,7 @@ int main(int argc, char** argv) {
   // handles the model-specific request; Old 3DS keeps its normal clock.
   osSetSpeedupEnable(true);
   EnableSystemCoreTime();
+  AppLifecycle_Init();
 
   SDL_JoystickEventState(SDL_ENABLE);
   SDL_GameControllerEventState(SDL_ENABLE);
@@ -417,6 +419,7 @@ int main(int argc, char** argv) {
   }
   if (!snes) {
     BottomScreen_Fini();
+    AppLifecycle_Fini();
     SDL_Quit();
     return 0;
   }
@@ -477,6 +480,7 @@ int main(int argc, char** argv) {
   }
 
   RtlReadSram();
+  AppLifecycle_SetAudioDevice(g_audio_device);
 
   PpuBeginDrawing(snes->snes_ppu, g_pixels, 256 * 4, 0);
   // PpuBeginDrawing(snes->my_ppu, g_my_pixels, 256 * 4, 0);
@@ -486,6 +490,7 @@ int main(int argc, char** argv) {
   uint32 frameCtr = 0;
   FrameDiagnostics_Init(SDL_GetPerformanceFrequency());
   uint64_t lastFrameStart = 0;
+  uint64_t lastFrameEnd = 0;
   uint8 audiopaused = true;
   unsigned dump_buttons = 0;
   bool dump_chord_latched = false;
@@ -574,6 +579,31 @@ int main(int argc, char** argv) {
     if (!running)
       break;
 
+    bool resumed = AppLifecycle_ConsumeResume();
+    uint64_t afterEvents = SDL_GetPerformanceCounter();
+    bool externalPause = lastFrameStart && lastFrameEnd &&
+        afterEvents - lastFrameEnd > SDL_GetPerformanceFrequency() / 4;
+    if (resumed || externalPause) {
+      if (externalPause && !resumed) AppLifecycle_RecordExternalGap();
+      /* Rosalina freezes the process without APT callbacks. Treat its long
+       * frame gap like a resume; never try to catch up the paused interval. */
+      lastTick = SDL_GetTicks();
+      lastFrameStart = 0;
+      g_input1_state = g_gamepad_buttons = 0;
+      g_circle_axis[0] = g_circle_axis[1] = 0;
+      dump_buttons = 0;
+      dump_chord_latched = false;
+      if (resumed) {
+        osSetSpeedupEnable(true);
+        audiopaused = true;
+        if (g_audio_device) {
+          SDL_LockAudioDevice(g_audio_device);
+          g_audiobuffer_cur = g_audiobuffer_end = g_audiobuffer;
+          SDL_UnlockAudioDevice(g_audio_device);
+        }
+      }
+    }
+
     if (BottomScreen_ConsumeDumpRequest()) {
       SaveDebugDump(rom_name, frameCtr);
       lastFrameStart = 0;
@@ -632,6 +662,7 @@ int main(int argc, char** argv) {
       gfxSwapBuffers();
     }
     uint64_t afterPresent = SDL_GetPerformanceCounter();
+    lastFrameEnd = afterPresent;
 #ifdef SM3DS_PHASE_DIAG
     uint32_t logicTicks = g_diag_logic_ticks;
     uint32_t ppuTicks = g_diag_ppu_ticks;
@@ -800,6 +831,7 @@ int main(int argc, char** argv) {
   }
 
   // Cleanup
+  AppLifecycle_Fini();
 #ifdef SM3DS_PHASE_DIAG
   FILE *exit_trace = fopen(SM3DS_DUMP_DIR "/last-exit.txt", "w");
   TraceExit(exit_trace, "quit received");

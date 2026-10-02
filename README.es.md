@@ -30,9 +30,9 @@ Tomadas en **Azahar**; estas imágenes no demuestran el rendimiento en una conso
 - Lógica nativa del juego y sonido estéreo a 32 kHz.
 - Renderizado mediante PICA200 en los cuadros compatibles con Mode 1, con una ruta exacta por CPU cuando el estado gráfico no es compatible o cambia dentro del cuadro.
 - Modo panorámico opcional con escenario ampliado, sprites, iluminación HDMA y temblores de cámara.
-- Energía y munición en tiempo real en la pantalla inferior, equipamiento, ilustración de Samus Redux, porcentaje de objetos y tiempo de partida.
+- HUD inferior configurable: ONLY AMMO, AMMO + HOOK o ALL ITEMS, números verticales/horizontales, espacios reservados para objetos no adquiridos y botón de X-Ray opcional en el mapa. También muestra equipamiento, ilustración Redux, porcentaje de objetos y tiempo de partida.
 - Mapas de área y del mundo con arrastre táctil, zoom, centrado y seguimiento de Samus, nombres de áreas y marcadores. Los botones flotantes se pueden ocultar desde SETUP.
-- Interruptores independientes de la barra de estado para MAP, ITEMS y SETUP. El modo panorámico y las opciones del HUD se guardan en la microSD.
+- SETUP agrupado en HUD/MAP/VIDEO, interruptores de barra de estado por pestaña y modos FIT/STRETCHED/1:1 para la pantalla superior. Las preferencias se guardan en la microSD.
 - Selector de ROM al iniciar, partidas guardadas independientes por ROM y comprobaciones de compatibilidad con la traducción española 1.0 de Klint/Pacochan. El selector todavía no aplica parches IPS.
 - **SETUP → i** muestra el modelo detectado (Old/New 3DS), información de compilación y el botón **SAVE DUMP**. También se pueden generar dumps con **L + R + A**, organizados en carpetas con fecha e identificador.
 - Dumps con estadísticas de toda la sesión y de los últimos cuadros, mediciones separadas del juego con y sin modo panorámico, WRAM/SRAM y capturas de las pantallas cuando están disponibles.
@@ -40,13 +40,13 @@ Tomadas en **Azahar**; estas imágenes no demuestran el rendimiento en una conso
 
 ## Building / descarga
 
-**Para jugar, descarga las compilaciones listas para instalar desde [Releases](https://github.com/NicolasBeatum/sm-3ds-native/releases/latest).** La versión [0.1.3](https://github.com/NicolasBeatum/sm-3ds-native/releases/tag/v0.1.3) incluye:
+**Para jugar, descarga las compilaciones listas para instalar desde [Releases](https://github.com/NicolasBeatum/sm-3ds-native/releases/latest).** La versión [0.1.5](https://github.com/NicolasBeatum/sm-3ds-native/releases/tag/v0.1.5) incluye:
 
 - `.3dsx` y `.smdh` para Homebrew Launcher.
 - `.cia` para instalar con FBI.
 - Código QR para **FBI → Remote Install → Scan QR Code**.
 
-![Código QR de FBI para el CIA v0.1.3](docs/assets/fbi-v0.1.3.png)
+![Código QR de FBI para el CIA v0.1.5](docs/assets/fbi-v0.1.5.png)
 
 Coloca tu propia ROM compatible `.smc` o `.sfc` en `sdmc:/3ds/sm3dsnative/` y selecciónala al iniciar. La carpeta se crea automáticamente. Dentro de ella, las partidas se guardan en `saves/`, la configuración en `settings.cfg` y los dumps en `dump/<fecha-id>/`. Ninguna compilación incluye una ROM del juego ni un parche de traducción. Las partidas y los ajustes guardados se mantienen al actualizar.
 
