@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.1.5 - 2026-10-02
+
+Configurable HUD and video layouts, widescreen rendering and enemy corrections,
+background performance work, and improved suspend/resume handling. CIA and 3DSX
+use the same native engine and contain no game ROM or translation patch.
+
+### Lower screen and video
+
+- Add ONLY AMMO, AMMO + HOOK and ALL ITEMS status-bar layouts. Reserve slots
+  for unowned items, keep health larger, and support touch selection of Grapple
+  and X-Ray when equipped.
+- Add persisted VERTICAL and HORIZONTAL ammo-number layouts and an independently
+  configurable floating X-Ray map shortcut. The shortcut selects the scope;
+  normal game controls activate it.
+- Group SETUP options into HUD, MAP and VIDEO, keeping all options accessible
+  when its status bar is enabled.
+- Add FIT, STRETCHED and 1:1 upper-screen presentation modes. Keep nearest
+  filtering and stabilize sampling at pixel boundaries to address inconsistent
+  black pixels on native HUD/text edges without replacing game graphics.
+
+### Rendering and performance
+
+- Reduce repeated widescreen background boundary checks and compare relevant
+  scanline state in a single pass. Preserve HDMA, palettes, color math and
+  layer priorities.
+- Share four GPU vertices per quad using an index buffer instead of writing
+  six duplicated vertices. Preserve triangle order, UVs and depth; reduce
+  vertex writes by one third and save about 2.6 MiB of linear buffer memory.
+- Extend X-Ray's native integer cone and scanned block/item reveal rules into
+  both side bands while preserving the captured center window. Keep empty
+  room margins black and cache scanned side tilemaps during a frozen view.
+- Restore native through-wall movement for the three pipe/wall-bug variants.
+  Keep their flight active in the extended viewport and their original
+  hide/reset cycle when they leave it.
+- Keep AI and animation active for partially visible normal and multipart
+  enemy sprites beyond their collision bounds. Extend Reo's activation range
+  only in the added side bands; retain Dessgeega's native jump/collision rules.
+- Add dump markers identifying the background, geometry, X-Ray and enemy
+  revisions for comparisons between builds.
+
+### HOME, sleep and audio
+
+- Pause audio for HOME/sleep transitions and defer audio resume until DSP
+  restoration has completed. Restore the foreground CPU budget and reset
+  timing/stale input after resume or a long external pause.
+- Update the NDSP backend to wait while suspended, wake on DSP transitions,
+  and bound audio shutdown waits.
+- Record suspend, sleep and external-pause counts in dumps. Rosalina entry
+  freezes cannot be guaranteed fixed by these changes and still need broader
+  hardware testing.
+
+The user confirmed the current trial works in gameplay. Performance still
+varies by room, effect, hardware and widescreen setting; 60 FPS is not
+guaranteed. A complete playthrough and 100% completion remain unverified.
+
 ## 0.1.3 - 2026-09-30
 
 Performance, map responsiveness, diagnostics and HOME Menu presentation update. Both packages use the same native engine and contain no game ROM or IPS patch.

@@ -30,9 +30,9 @@ Captured in **Azahar**; these screenshots do not establish performance on real h
 - Native game logic and stereo 32 kHz audio.
 - PICA200 rendering for supported Mode 1 frames, with an exact CPU fallback for unsupported state or mid-frame changes.
 - Optional widescreen with extended scenery, sprites, HDMA lighting and camera shake.
-- Live lower-screen energy/ammo status, equipment, Redux suit illustration, item percentage and play time.
+- Configurable lower-screen HUD: ONLY AMMO, AMMO + HOOK or ALL ITEMS, with vertical/horizontal counts, reserved unowned slots and an optional X-Ray map shortcut. Equipment, Redux suit illustration, item percentage and play time remain available.
 - Area and world maps with touch dragging, zoom, Samus centering/following, area-name toggling and map markers. SETUP can hide the floating buttons.
-- Separate status-bar switches for MAP, ITEMS and SETUP; widescreen and main-HUD preferences persist on the microSD card.
+- Grouped HUD/MAP/VIDEO setup, separate status-bar switches per tab, and FIT/STRETCHED/1:1 upper-screen sizing. Preferences persist on the microSD card.
 - Startup ROM selector, per-ROM saves and compatibility checks for the Klint/Pacochan Spanish 1.0 translation. The launcher does not apply IPS patches yet.
 - **SETUP → i** shows the detected Old/New 3DS hardware family and build information, and provides **SAVE DUMP**. Dumps also work with **L + R + A** and are grouped in timestamped folders.
 - Diagnostics include full-session and recent frame timings, separate standard/widescreen gameplay statistics, WRAM/SRAM and LCD captures when available.
@@ -40,13 +40,13 @@ Captured in **Azahar**; these screenshots do not establish performance on real h
 
 ## Building / download
 
-**To play, download the ready-to-install builds from [Releases](https://github.com/NicolasBeatum/sm-3ds-native/releases/latest).** Version [0.1.3](https://github.com/NicolasBeatum/sm-3ds-native/releases/tag/v0.1.3) includes:
+**To play, download the ready-to-install builds from [Releases](https://github.com/NicolasBeatum/sm-3ds-native/releases/latest).** Version [0.1.5](https://github.com/NicolasBeatum/sm-3ds-native/releases/tag/v0.1.5) includes:
 
 - `.3dsx` and `.smdh` for Homebrew Launcher.
 - `.cia` for installation with FBI.
 - A QR code for **FBI → Remote Install → Scan QR Code**.
 
-![FBI QR code for the v0.1.3 CIA](docs/assets/fbi-v0.1.3.png)
+![FBI QR code for the v0.1.5 CIA](docs/assets/fbi-v0.1.5.png)
 
 Supply your own compatible `.smc` or `.sfc` ROM in `sdmc:/3ds/sm3dsnative/` and select it at startup. The directory is created automatically; saves go in `saves/`, settings in `settings.cfg`, and diagnostic captures in `dump/<timestamp-id>/` under that same directory. Neither build contains a game ROM or translation patch. Previously saved games and settings remain usable when updating.
 
