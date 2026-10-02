@@ -439,14 +439,20 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
       if (layer < 2 && f->wideRoom[layer].blocks)
         maxRun = Min(maxRun,
                      8 - roomRow.pixelY);
-      unsigned h = EqualRun(f, y, offsetof(PicaLine, bg) + layer * sizeof(BgLayer),
-                            sizeof(BgLayer), maxRun);
+      unsigned h = Min(maxRun, f->height - y);
+      bool windowed = (p->screenWindowed[sub] & layerBit) != 0;
+      bool beamWindowTiles = f->extendEyeBeam && sub == 1 && layer == 2 && windowed;
+      /* Compare scroll first: a distorted background usually changes it on
+       * the next line. Inline the relevant registers and visibility in one
+       * pass instead of memcmp(BgLayer) followed by a second state pass. */
       for (unsigned run = 1; run < h; run++) {
         const PicaLine *next = &f->lines[y + run];
-        bool windowed = (p->screenWindowed[sub] & layerBit) != 0;
-        bool beamWindowTiles = f->extendEyeBeam && sub == 1 && layer == 2 &&
-                               windowed;
-        if (((next->screenEnabled[sub] ^ p->screenEnabled[sub]) & layerBit) ||
+        const BgLayer *nextBg = &next->bg[layer];
+        if (nextBg->hScroll != bg->hScroll || nextBg->vScroll != bg->vScroll ||
+            nextBg->tilemapAdr != bg->tilemapAdr || nextBg->tileAdr != bg->tileAdr ||
+            nextBg->tilemapWider != bg->tilemapWider ||
+            nextBg->tilemapHigher != bg->tilemapHigher ||
+            ((next->screenEnabled[sub] ^ p->screenEnabled[sub]) & layerBit) ||
             ((next->screenWindowed[sub] ^ p->screenWindowed[sub]) & layerBit) ||
             next->forcedBlank != p->forcedBlank ||
             next->addSubscreen != p->addSubscreen ||
@@ -483,7 +489,6 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
         spanRight = spanLeft + kSnesWidth;
       }
       if (spanLeft >= spanRight) { y += h; continue; }
-      bool windowed = (p->screenWindowed[sub] & (1u << layer)) != 0;
       if (f->extendEyeBeam)
         WindowsWithFirstEdges(f, p, layer, windowed, spanLeft, spanRight,
                               f->beamLeft[y], f->beamRight[y], &win);

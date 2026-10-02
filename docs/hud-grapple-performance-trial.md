@@ -88,10 +88,13 @@ screenshot dump is still needed. It is not a replacement HUD font or palette.
   256/400 output, flips, windows, per-line scroll, bank switches, transparency,
   palette/VRAM changes, sprite sizes, atlas counter rollover and room side blocks.
   Main/sub rasters and decoded atlas pixels match.
-- Desktop timings use a no-op quad consumer; they measure model preparation,
+- The original desktop timings used a no-op quad consumer; they measured model preparation,
   excluding real GPU vertex submission, GPU work and the rest of the game.
   Wide cases ran roughly 6–18% faster in the sampled runs. This does not predict
   a hardware FPS percentage. Standard cases remained close to the baseline.
+  The subsequent benchmark includes CPU vertex packing; see
+  [the background/indexed geometry trial](background-october-trial.md) for its
+  reference commit, later dumps and results.
 
 Run the differential check with the model from the parent commit:
 

@@ -11,7 +11,7 @@ enum {
   PICA_SLOTS = 8192,
   PICA_HASH = 16384,
   PICA_MAX_LINES = 240,
-  PICA_MAX_VERTICES = 262140,
+  PICA_MAX_VERTICES = 174760, /* Same 43,690 quads, four shared vertices each. */
   PICA_GROUPS = 21,
 };
 

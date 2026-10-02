@@ -2,6 +2,7 @@
  * functions renamed to Reference*; see docs/hud-grapple-performance-trial.md. */
 #define _POSIX_C_SOURCE 200809L
 #include "ppu_gpu_model.h"
+#include "ppu_gpu_vertices.h"
 #include "wide_config.h"
 #include <assert.h>
 #include <stdio.h>
@@ -44,8 +45,32 @@ static bool Capture(void *ctx, unsigned group, const PicaQuad *q) {
   }
   return true;
 }
-static bool Discard(void *ctx, unsigned group, const PicaQuad *q) {
-  (void)ctx; (void)group; (void)q; return true;
+typedef struct PackedOutput {
+  PicaVertex *vertices;
+  unsigned count;
+} PackedOutput;
+static bool PackLegacy(void *ctx, unsigned group, const PicaQuad *q) {
+  (void)group;
+  PackedOutput *out = ctx;
+  assert(out->count + 6 <= 150000 * 6);
+  int16_t depth = q->depth >> 1;
+  if (!depth) depth = 1;
+  PicaVertex a = {q->x0,q->y0,depth,1,q->u0,q->v0,q->r,q->g,q->b,q->a};
+  PicaVertex b = a, c = a, d = a;
+  b.x = d.x = q->x1; b.u = d.u = q->u1;
+  c.y = d.y = q->y1; c.v = d.v = q->v1;
+  PicaVertex *v = out->vertices + out->count;
+  v[0] = a; v[1] = b; v[2] = c; v[3] = c; v[4] = b; v[5] = d;
+  out->count += 6;
+  return true;
+}
+static bool PackIndexed(void *ctx, unsigned group, const PicaQuad *q) {
+  (void)group;
+  PackedOutput *out = ctx;
+  assert(out->count + 4 <= 150000 * 4);
+  PicaQuadVertices(out->vertices + out->count, q);
+  out->count += 4;
+  return true;
 }
 static double Now(void) {
   struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
@@ -109,10 +134,13 @@ int main(void) {
   PicaAtlas *a[2] = {calloc(1, sizeof(PicaAtlas)), calloc(1, sizeof(PicaAtlas))};
   uint32_t *pixels[2] = {calloc(PICA_ATLAS_W * PICA_ATLAS_H, 4), calloc(PICA_ATLAS_W * PICA_ATLAS_H, 4)};
   Output *out[2] = {calloc(1, sizeof(Output)), calloc(1, sizeof(Output))};
+  PackedOutput packed[2] = {{malloc(150000 * 6 * sizeof(PicaVertex)),0},
+                            {malloc(150000 * 4 * sizeof(PicaVertex)),0}};
   uint16_t blocks[64*64], table[4096];
   for(unsigned i=0;i<64*64;i++)blocks[i]=(i*37)%1024;
   for(unsigned i=0;i<4096;i++)table[i]=(i%800)|((i%8)<<10)|((i%7)<<13);
-  assert(p && a[0] && a[1] && pixels[0] && pixels[1] && out[0] && out[1]);
+  assert(p && a[0] && a[1] && pixels[0] && pixels[1] && out[0] && out[1] &&
+         packed[0].vertices && packed[1].vertices);
   for (unsigned widthMode = 0; widthMode < 2; ++widthMode) {
     unsigned width = widthMode ? kWideWidth : kSnesWidth;
     for (unsigned variation = 0; variation < 9; ++variation) {
@@ -144,18 +172,22 @@ int main(void) {
       double times[2] = {0};
       for (unsigned pass = 0; pass < 3; ++pass)
         for (unsigned i = 0; i < 2; ++i) {
-          f[i].emit=Discard;
+          f[i].emit=i ? PackIndexed : PackLegacy;
+          f[i].context=&packed[i];
           double before=Now();
           for (unsigned frame=0; frame<100; ++frame) {
+            packed[i].count=0;
             if (i) { PicaAtlasBegin(a[i]); assert(PicaBuildFrame(&f[i])); }
             else { ReferenceAtlasBegin(a[i]); assert(ReferenceBuildFrame(&f[i])); }
           }
           times[i] += Now()-before;
         }
-      printf("width=%u scenario=%u reference=%.3fms cache=%.3fms change=%.1f%% quads=%u->%u\n", width, variation,
-        times[0]*1000/300, times[1]*1000/300, (times[1]/times[0]-1)*100,out[0]->n,out[1]->n);
+      printf("width=%u scenario=%u reference=%.3fms indexed=%.3fms change=%.1f%% quads=%u->%u vertices=%u->%u\n", width, variation,
+        times[0]*1000/300, times[1]*1000/300, (times[1]/times[0]-1)*100,out[0]->n,out[1]->n,
+        packed[0].count,packed[1].count);
     }
   }
   puts("Main and sub color/alpha rasters match across 216 animated frames, including room block side bands.");
+  free(packed[0].vertices); free(packed[1].vertices);
   return 0;
 }
