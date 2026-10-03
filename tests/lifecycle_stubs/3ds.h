@@ -11,3 +11,4 @@ void aptHook(aptHookCookie *, aptHookFn, void *);
 void aptUnhook(aptHookCookie *);
 Result APT_GetAppCpuTimeLimit(u32 *);
 Result APT_SetAppCpuTimeLimit(u32);
+uint64_t osGetTime(void);

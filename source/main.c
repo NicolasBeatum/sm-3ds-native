@@ -28,6 +28,8 @@
 #include "storage_paths.h"
 #include "app_lifecycle.h"
 #include "video_layout.h"
+#include "session_log.h"
+#include "version.h"
 
 enum Button {
   BTN_A = 0,
@@ -75,10 +77,13 @@ static int g_curr_fps;
 static int g_ppu_render_flags = 0;
 static int g_snes_width = 256, g_snes_height = 240;
 static int g_sdl_audio_mixer_volume = SDL_MIX_MAXVOLUME;
+static bool g_session_clean_exit;
+static uint32_t g_session_frame;
 
 extern Snes *g_snes;
 
 void NORETURN Die(const char *error) {
+  SessionLog_Record(osGetTime(), "fatal_error", error);
   fprintf(stderr, "Error: %s\n", error);
   exit(1);
 }
@@ -350,9 +355,43 @@ static void HandleCirclePadAxis(unsigned axis, int16_t value) {
 }
 
 static void SaveDebugDump(const char *rom_name, uint32_t frame_number) {
+  SessionLog_Record(osGetTime(), "manual_dump_begin", rom_name);
   bool saved = DebugDump_Write(rom_name, frame_number);
+  SessionLog_Record(osGetTime(), "manual_dump_end", saved ? "saved=1" : "saved=0");
   BottomScreen_ShowNotice(saved ? "DEBUG DUMP SAVED" : "DEBUG DUMP FAILED",
                           osGetTime() + 3000);
+}
+
+static void LogPendingLifecycleEvents(void) {
+  AppLifecycleEvent event;
+  while (AppLifecycle_ReadEvent(&event)) {
+    char detail[96];
+    snprintf(detail, sizeof(detail), "background=%lu frame=%lu",
+             (unsigned long)event.background, (unsigned long)g_session_frame);
+    SessionLog_Record(event.time_ms, event.name, detail);
+  }
+}
+
+static void LogSessionState(const char *event) {
+  if (!SessionLog_Path()) return;
+  u32 cpu_limit = 0;
+  Result cpu_result = APT_GetAppCpuTimeLimit(&cpu_limit);
+  char detail[320];
+  snprintf(detail, sizeof(detail),
+      "frame=%lu game_state=%u room_ptr=%04x area=%u samus_x=%u samus_y=%u "
+      "wide=%u gpu=%u linear_free_bytes=%lu cpu_limit=%lu cpu_query=%08lx "
+      "ppu_reason=%s",
+      (unsigned long)g_session_frame, game_state, room_ptr, area_index,
+      samus_x_pos, samus_y_pos, BottomScreen_WidescreenEnabled(),
+      g_gpu_presenter, (unsigned long)linearSpaceFree(),
+      (unsigned long)cpu_limit, (unsigned long)(u32)cpu_result,
+      PpuGpuReason() ? PpuGpuReason() : "unknown");
+  SessionLog_Record(osGetTime(), event, detail);
+}
+
+static void LogProcessExit(void) {
+  SessionLog_Record(osGetTime(), "process_exit",
+      g_session_clean_exit ? "orderly_shutdown=1" : "orderly_shutdown=0");
 }
 
 static uint32_t PerformanceTicksBetween(uint64_t begin, uint64_t end) {
@@ -395,6 +434,16 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  mkdir("sdmc:/3ds", 0755);
+  mkdir(SM3DS_SD_ROOT, 0755);
+  if (SessionLog_Init(SM3DS_LOG_DIR, osGetTime(), APP_VERSION, SM3DS_BUILD_FLAGS)) {
+    atexit(LogProcessExit);
+    bool new3ds = false;
+    bool known = R_SUCCEEDED(APT_CheckNew3DS(&new3ds));
+    SessionLog_Record(osGetTime(), "hardware",
+        !known ? "model=unknown" : new3ds ? "model=new3ds" : "model=old3ds");
+  }
+
   // Enable both the faster CPU clock and L2 cache on New 3DS. libctru
   // handles the model-specific request; Old 3DS keeps its normal clock.
   osSetSpeedupEnable(true);
@@ -412,15 +461,26 @@ int main(int argc, char** argv) {
     Die("Unable to allocate bottom-screen framebuffer");
   char filename[256], rom_name[128], save_path[256];
   Snes *snes = NULL;
+  SessionLog_Record(osGetTime(), "rom_selector", "opened");
   while (RomMenu_Select(filename, sizeof(filename), rom_name, sizeof(rom_name))) {
+    LogPendingLifecycleEvents();
+    SessionLog_Record(osGetTime(), "rom_load_begin", rom_name);
     snes = SnesInit(filename);
-    if (snes) break;
+    if (snes) {
+      SessionLog_Record(osGetTime(), "rom_load_end", "loaded=1");
+      break;
+    }
+    SessionLog_Record(osGetTime(), "rom_load_end", SnesRomLoadError());
     BottomScreen_ShowNotice(SnesRomLoadError(), osGetTime() + 3000);
   }
   if (!snes) {
+    LogPendingLifecycleEvents();
+    SessionLog_Record(osGetTime(), "selector_exit", "no_rom_loaded");
     BottomScreen_Fini();
     AppLifecycle_Fini();
     SDL_Quit();
+    g_session_clean_exit = true;
+    SessionLog_Record(osGetTime(), "shutdown_complete", "selector");
     return 0;
   }
   if (snprintf(save_path, sizeof(save_path), "%s/%s.srm", SM3DS_SAVE_DIR, rom_name)
@@ -438,6 +498,7 @@ int main(int argc, char** argv) {
     SDL_WINDOW_SHOWN
   );
   if(window == NULL) {
+    SessionLog_Record(osGetTime(), "window_init_failed", SDL_GetError());
     printf("Failed to create window: %s\n", SDL_GetError());
     return 1;
   }
@@ -470,6 +531,7 @@ int main(int argc, char** argv) {
       g_audio_device = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
   }
   if (g_audio_device == 0) {
+    SessionLog_Record(osGetTime(), "audio_init_failed", SDL_GetError());
     printf("Failed to open audio device: %s\n", SDL_GetError());
     if (created_dsp_marker)
       remove("sdmc:/3ds/dspfirm.cdc");
@@ -494,6 +556,7 @@ int main(int argc, char** argv) {
   uint8 audiopaused = true;
   unsigned dump_buttons = 0;
   bool dump_chord_latched = false;
+  LogSessionState("game_loop_start");
 #ifdef SM3DS_PROFILE
   uint32 profileTick = lastTick;
   uint32 profileFrames = 0;
@@ -569,10 +632,14 @@ int main(int argc, char** argv) {
         BottomScreen_HandleTouchUp(event.tfinger.x, event.tfinger.y);
         break;
       case SDL_QUIT:
+        SessionLog_Record(osGetTime(), "sdl_quit_received", "event_pump");
         running = false;
         break;
       }
     }
+
+    uint64_t afterEvents = SDL_GetPerformanceCounter();
+    LogPendingLifecycleEvents();
 
     /* aptMainLoop has requested shutdown. Do not submit another frame after
      * SDL has delivered SDL_QUIT, especially during HOME/POWER transitions. */
@@ -580,10 +647,10 @@ int main(int argc, char** argv) {
       break;
 
     bool resumed = AppLifecycle_ConsumeResume();
-    uint64_t afterEvents = SDL_GetPerformanceCounter();
     bool externalPause = lastFrameStart && lastFrameEnd &&
         afterEvents - lastFrameEnd > SDL_GetPerformanceFrequency() / 4;
     if (resumed || externalPause) {
+      LogSessionState(resumed ? "resume_begin" : "external_pause_gap");
       if (externalPause && !resumed) AppLifecycle_RecordExternalGap();
       /* Rosalina freezes the process without APT callbacks. Treat its long
        * frame gap like a resume; never try to catch up the paused interval. */
@@ -597,11 +664,14 @@ int main(int argc, char** argv) {
         osSetSpeedupEnable(true);
         audiopaused = true;
         if (g_audio_device) {
+          SessionLog_Record(osGetTime(), "audio_reset_begin", "resume");
           SDL_LockAudioDevice(g_audio_device);
           g_audiobuffer_cur = g_audiobuffer_end = g_audiobuffer;
           SDL_UnlockAudioDevice(g_audio_device);
+          SessionLog_Record(osGetTime(), "audio_reset_end", "resume");
         }
       }
+      LogSessionState("resume_reset_complete");
     }
 
     if (BottomScreen_ConsumeDumpRequest()) {
@@ -613,6 +683,8 @@ int main(int argc, char** argv) {
       audiopaused = g_paused;
       if (g_audio_device)
         SDL_PauseAudioDevice(g_audio_device, audiopaused);
+      SessionLog_Record(osGetTime(), "audio_pause_state",
+          audiopaused ? "paused=1" : "paused=0");
     }
 
     if (g_paused) {
@@ -638,6 +710,7 @@ int main(int argc, char** argv) {
     bool pica_frame = PpuGpuOutputActive();
 
     frameCtr++;
+    g_session_frame = frameCtr;
 #ifdef SM3DS_PROFILE
     profileFrames++;
 #endif
@@ -663,6 +736,17 @@ int main(int argc, char** argv) {
     }
     uint64_t afterPresent = SDL_GetPerformanceCounter();
     lastFrameEnd = afterPresent;
+    uint64_t logNow = osGetTime();
+    if (SessionLog_CheckpointDue(logNow)) {
+      uint32 logTick = SDL_GetTicks();
+      LogSessionState("checkpoint_after_present");
+      SessionLog_MarkCheckpoint(logNow);
+      /* The occasional SD write is diagnostic work, not a gameplay interval
+       * or an external suspension. Keep it out of the next timing sample. */
+      lastFrameStart = 0;
+      lastFrameEnd = SDL_GetPerformanceCounter();
+      lastTick += SDL_GetTicks() - logTick;
+    }
 #ifdef SM3DS_PHASE_DIAG
     uint32_t logicTicks = g_diag_logic_ticks;
     uint32_t ppuTicks = g_diag_ppu_ticks;
@@ -831,6 +915,7 @@ int main(int argc, char** argv) {
   }
 
   // Cleanup
+  LogSessionState("shutdown_begin");
   AppLifecycle_Fini();
 #ifdef SM3DS_PHASE_DIAG
   FILE *exit_trace = fopen(SM3DS_DUMP_DIR "/last-exit.txt", "w");
@@ -838,10 +923,12 @@ int main(int argc, char** argv) {
 #endif
   if (g_audio_device) {
     SDL_PauseAudioDevice(g_audio_device, 1);
+    SessionLog_Record(osGetTime(), "shutdown_audio_paused", "");
 #ifdef SM3DS_PHASE_DIAG
     TraceExit(exit_trace, "audio paused");
 #endif
     SDL_CloseAudioDevice(g_audio_device);
+    SessionLog_Record(osGetTime(), "shutdown_audio_closed", "");
   }
 #ifdef SM3DS_PHASE_DIAG
   TraceExit(exit_trace, "audio closed");
@@ -849,13 +936,17 @@ int main(int argc, char** argv) {
   SDL_DestroyMutex(g_audio_mutex);
   free(g_audiobuffer);
   GpuPresenter_Fini();
+  SessionLog_Record(osGetTime(), "shutdown_gpu_closed", "");
 #ifdef SM3DS_PHASE_DIAG
   TraceExit(exit_trace, "gpu closed");
 #endif
   BottomScreen_Fini();
+  SessionLog_Record(osGetTime(), "shutdown_bottom_closed", "");
   linearFree(g_pixels);
   SDL_DestroyWindow(window);
   SDL_Quit();
+  SessionLog_Record(osGetTime(), "shutdown_complete", "game");
+  g_session_clean_exit = true;
 #ifdef SM3DS_PHASE_DIAG
   TraceExit(exit_trace, "sdl closed");
   if (exit_trace)

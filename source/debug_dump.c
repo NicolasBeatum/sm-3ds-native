@@ -16,6 +16,7 @@
 #include "screen_capture.h"
 #include "storage_paths.h"
 #include "app_lifecycle.h"
+#include "session_log.h"
 #include "version.h"
 
 #ifndef SM3DS_BUILD_FLAGS
@@ -83,6 +84,7 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
       "sm3dsnative debug dump v4\n"
       "dump_id=%s\nrom=%s\nframe=%lu\n"
       "app_version=%s\nbuild_flags=%s\nfull_native=%u\n"
+      "session_log_path=%s\n"
       "build_lto=%u\nppu_bg_lookup=inline-band-v3\n"
       "ppu_geometry=indexed-quads-v1\n"
       "xray_render=translated-native-window-v1\n"
@@ -106,6 +108,7 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
 #else
       0u,
 #endif
+      SessionLog_Path() ? SessionLog_Path() : "disabled",
       (unsigned)SM3DS_BUILD_LTO,
       !model_known ? "unknown" : new3ds ? "new3ds" : "old3ds",
       (unsigned long)cpu_limit,
