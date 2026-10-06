@@ -264,3 +264,39 @@ receiver depth/alpha, projection away from doors and lava, exclusion of own
 charge, and stronger bounded door/liquid sources. The 264-frame lights-off
 main/sub differential check and atlas/widescreen/vertex tests pass. GPU output
 and FPS for this revision still need interactive Azahar/3DS verification.
+
+## Comparisons by area and biome
+
+`output-lighting-biomes/biomas-vista-general.png` compares ten matched frames
+with lighting off/on at native 256x224, without contrast processing. Individual
+`*-comparacion.png` files enlarge each pair by two using nearest sampling.
+The selected scenes cover all six main areas, four Brinstar environments and
+two Maridia environments; they are samples, not an inspection of every room.
+
+The host-only preview also accepts `station:AREA:INDEX` (area 0..5, index 0..18).
+It reads the actual ROM load-station table, rejects invalid/cross-area entries,
+loads the normal native room/FX state with diagnostic suits and health, and
+verifies that gameplay reached the requested room. Original SRAM remains only
+an input. This tool change does not affect the compiled game.
+
+| Comparison | Native room | Diagnostic entry |
+| --- | --- | --- |
+| Crateria ship | 91f8 | Existing slot-2 capture |
+| Green Brinstar | 9ad9 | station:1:8 |
+| Blue Brinstar | 9e9f | station:1:9 |
+| Pink Brinstar | 9d19 | station:1:18 |
+| Red Brinstar | a322 | station:1:10 |
+| Norfair lava | ac83 | Existing lava capture, FX 2 / Y=198 |
+| Wrecked Ship | ca08 | station:3:16 |
+| Maridia caverns | d617 | station:4:18 |
+| Maridia sand | d1dd | station:4:16 |
+| Tourian | daae | station:5:8 |
+
+All native captures reached state 8 and both raster passes were accepted.
+Off/on HUD pixels match exactly in all ten pairs. New unlit frames differ from
+the native CPU reference by approximately 0.65..1.67 mean RGB channel levels
+out of 255, reflecting software color-math quantization; these are not direct
+Azahar screenshots. Logs and capture/comparison manifests are in the ignored
+output directory. Scenes without large emitting sources primarily show darker
+scenery and Samus silhouettes; this does not establish complete authored lamp
+coverage in every tileset.

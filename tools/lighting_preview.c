@@ -41,7 +41,7 @@ void RtlApuUnlock(void) {}
 void Die(const char *s) { fprintf(stderr, "%s\n", s); exit(1); }
 
 int main(int argc, char **argv) {
-  if (argc != 4 && argc != 5) { fprintf(stderr,"usage: %s ROM SRAM output-directory [fire|jump|move|slot1|slot1-move|acid|lava]\n",argv[0]); return 1; }
+  if (argc != 4 && argc != 5) { fprintf(stderr,"usage: %s ROM SRAM output-directory [fire|jump|move|slot1|slot1-move|acid|lava|station:AREA:INDEX]\n",argv[0]); return 1; }
   /* Never permit game SRAM writes to the source save. */
   char path[1024];
   snprintf(path,sizeof(path),"%s/preview-only.srm",argv[3]);
@@ -64,10 +64,26 @@ int main(int argc, char **argv) {
   selected_save_slot = slot;
   bool acid = argc==5 && !strcmp(argv[4],"acid");
   lavaFixture = argc==5 && !strcmp(argv[4],"lava");
-  if(acid || lavaFixture) {
-    /* Diagnostic spawn at the game's Norfair load station 10. Local SRAM
-     * remains the only write destination; source save is never changed. */
-    area_index=2; load_station_index=10;
+  bool stationFixture = argc==5 && !strncmp(argv[4],"station:",8);
+  unsigned fixtureArea=0, fixtureIndex=0, fixtureRoom=0;
+  if (stationFixture) {
+    char extra;
+    if (sscanf(argv[4],"station:%u:%u%c",&fixtureArea,&fixtureIndex,&extra)!=2 ||
+        fixtureArea>5 || fixtureIndex>18)
+      Die("Diagnostic station must be AREA 0..5 / INDEX 0..18");
+    const uint16 *lists=(const uint16 *)RomPtr(0x80c4b5);
+    const LoadStationList *entry=(const LoadStationList *)RomPtr_80(
+        lists[fixtureArea]+14*fixtureIndex);
+    fixtureRoom=entry->room_ptr_;
+    if (fixtureRoom<0x9000 || fixtureRoom>=0xe000 ||
+        get_RoomDefHeader(fixtureRoom)->area_index_!=fixtureArea)
+      Die("Diagnostic station does not point to a room in that area");
+  }
+  if(acid || lavaFixture || stationFixture) {
+    /* Host-only diagnostic spawn via a real ROM load station, or the lava
+     * wrapper. Only local preview SRAM is a write destination. */
+    area_index=stationFixture?fixtureArea:2;
+    load_station_index=stationFixture?fixtureIndex:10;
     equipped_items|=0x21;
     samus_health=samus_max_health=9999;
   }
@@ -77,8 +93,11 @@ int main(int argc, char **argv) {
   for (unsigned i = 0; i < 1200; i++) RtlRunFrame(0);
   printf("room=%04x state=%u samus=(%u,%u) camera=(%u,%u)\n",
           room_ptr,game_state,samus_x_pos,samus_y_pos,layer1_x_pos,layer1_y_pos);
-  if (game_state != 8 || (!acid && !lavaFixture && slot == 1 && room_ptr != 0x91f8)) Die("Preview did not reach expected gameplay");
-  if (argc == 5 && (slot == 1 || slot1Move) && !acid && !lavaFixture) {
+  if (game_state != 8 || (!acid && !lavaFixture && !stationFixture &&
+      slot == 1 && room_ptr != 0x91f8)) Die("Preview did not reach expected gameplay");
+  if (stationFixture && (room_ptr!=fixtureRoom || area_index!=fixtureArea))
+    Die("Diagnostic station did not reach the selected room and area");
+  if (argc == 5 && (slot == 1 || slot1Move) && !acid && !lavaFixture && !stationFixture) {
     unsigned input, frames;
     if (!strcmp(argv[4],"fire")) { input=button_config_shoot_x; frames=10; }
     else if (!strcmp(argv[4],"jump")) { input=button_config_jump_a; frames=12; }
