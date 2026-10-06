@@ -1,5 +1,6 @@
 #include "scene_lighting.h"
 #include <string.h>
+#include <stdlib.h>
 
 static int Clamp(int x, int low, int high) {
   return x < low ? low : x > high ? high : x;
@@ -16,7 +17,7 @@ void SceneLighting_Begin(SceneLighting *s, bool enabled, unsigned room,
                          unsigned state, int cameraX, int cameraY,
                          int samusX, int samusY, unsigned origin,
                          unsigned charge) {
-  s->count = s->shadowCount = 0;
+  s->count = s->shadowCount = s->environmentStart = 0;
   s->castShadow = false;
   s->liquidType = 0;
   s->enabled = enabled && state == 8;
@@ -35,10 +36,12 @@ void SceneLighting_Begin(SceneLighting *s, bool enabled, unsigned room,
                             72, 74, 52, 20);
   }
   SceneLighting_AddLight(s, s->samusX, s->samusY - 14,
-                          56, 26, 42, 38);
+                          56, s->ship ? 26 : 42, s->ship ? 42 : 54,
+                          s->ship ? 38 : 48);
   if (charge >= 16)
     SceneLighting_AddLight(s, s->samusX + 10, s->samusY - 8,
                             48 + Clamp(charge, 0, 60), 88, 100, 62);
+  s->environmentStart=s->count;
 }
 
 /* Low block IDs are the shared door-cap graphics from the game's bank-84
@@ -46,13 +49,15 @@ void SceneLighting_Begin(SceneLighting *s, bool enabled, unsigned room,
  * because closed blue doors need not have a running PLM object. */
 void SceneLighting_AddRoomSources(PicaFrame *f) {
   SceneLighting *s = f->lighting;
-  if (!s || !s->enabled || s->count==SCENE_MAX_LIGHTS) return;
+  if (!s || !s->enabled) return;
+  s->environmentStart=s->count;
+  if (s->count==SCENE_MAX_LIGHTS) return;
   if ((s->liquidType == 2 || s->liquidType == 4) &&
       s->liquidY < (int)f->height + 64) {
     unsigned n = f->width == 400 ? 3 : 2;
     int width = f->worldRight - f->worldLeft;
     int y = s->liquidY < (int)f->hudEndY ? (int)f->hudEndY + 48 : s->liquidY + 16;
-    unsigned r=116,g=54,b=18;
+    unsigned r=154,g=72,b=24;
     /* Lava and acid can share orange graphics. Read the liquid's BG3 palette
      * rather than assuming acid is green; custom palettes follow their art. */
     if(f->memory && f->lines) {
@@ -71,13 +76,13 @@ void SceneLighting_AddRoomSources(PicaFrame *f) {
         unsigned low=cr<cg?cr:cg;low=low<cb?low:cb;
         unsigned luma=cr*3+cg*6+cb;
         if(high-low>=4 && luma>best) {
-          best=luma; r=cr*116/31;g=cg*116/31;b=cb*116/31;
+          best=luma; r=cr*154/31;g=cg*154/31;b=cb*154/31;
         }
       }
     }
     for (unsigned i=0; i<n && width>0; i++)
       SceneLighting_AddLight(s, f->worldLeft + width*(2*i+1)/(2*n), y,
-          120,r,g,b);
+          160,r,g,b);
   }
   const PicaWideRoomLayer *room = &f->wideRoom[0];
   if (!room->blocks || !f->wideRoomWidth || !f->wideRoomHeight) return;
@@ -109,14 +114,14 @@ void SceneLighting_AddRoomSources(PicaFrame *f) {
       doors[j].x=(bounds[j][0]+bounds[j][1])/2;
       doors[j].y=(bounds[j][2]+bounds[j][3])/2;
     } else if(count<16) {
-      doors[count]=(SceneLight){sx,sy,68,color,0,0};
+      doors[count]=(SceneLight){sx,sy,88,color,0,0};
       bounds[count][0]=bounds[count][1]=sx;
       bounds[count][2]=bounds[count][3]=sy;
       count++;
     }
   }
   /* At most two nearby caps; keep room for moving lights and lamp cores. */
-  static const uint8_t rgb[4][3]={{38,112,42},{112,38,62},{112,96,24},{42,74,126}};
+  static const uint8_t rgb[4][3]={{48,156,58},{156,48,82},{156,132,32},{54,100,174}};
   for (unsigned n=0; n<2 && count; n++) {
     unsigned nearest=0; int best=0x7fffffff;
     for(unsigned j=0;j<count;j++) {
@@ -149,7 +154,7 @@ SceneEmission SceneLighting_Emission(PicaFrame *f, unsigned slot) {
   }
   *cached=(SceneEmission){.key=slot+1};
   if(bright>=3 && bright<=20 && dark>=32) {
-    cached->r=r/bright/2; cached->g=g/bright/2; cached->b=b/bright/2;
+    cached->r=r/bright*3/4; cached->g=g/bright*3/4; cached->b=b/bright*3/4;
   }
   return *cached;
 }
@@ -158,6 +163,25 @@ void SceneLighting_Prepare(PicaFrame *f) {
   SceneLighting *s = f->lighting;
   memset(s->field, 0, sizeof(s->field));
   memset(s->relief, 0, sizeof(s->relief));
+  /* One projection per frame: cast away from the nearest environmental
+   * source, never from Samus's own fill/charge. Keep a stable diagonal in
+   * unlit corridors. This remains a bounded sprite silhouette, not geometry. */
+  s->shadowX = s->ship && s->samusX <= s->lights[0].x ? -10 : 10;
+  s->shadowY = 9;
+  if (!s->ship) {
+    int best = 0x7fffffff;
+    for (unsigned i=s->environmentStart; i<s->count; i++) {
+      const SceneLight *l=&s->lights[i];
+      if (l->radius<64) continue;
+      int dx=s->samusX-l->x,dy=s->samusY-l->y;
+      int distance=dx*dx+dy*dy;
+      if (distance<best && distance<l->radius*l->radius && (dx || dy)) {
+        best=distance;
+        int span=abs(dx)>abs(dy)?abs(dx):abs(dy);
+        s->shadowX=dx*12/span; s->shadowY=dy*12/span;
+      }
+    }
+  }
   /* One shared 8-pixel field for main/sub and BG/OBJ. Compute only inside
    * each source's screen bounds; division is once per light, never per quad.
    * Cell centers align with 8x8 tiles; cropped/flipped tiles keep their UVs. */
@@ -206,14 +230,13 @@ void SceneLighting_Tile(PicaFrame *f, unsigned group, unsigned slot,
   if (!object && layer == 2) return;
   if (object && s->castShadow && s->shadowCount < SCENE_MAX_SHADOWS) {
     PicaQuad shadow = *q;
-    /* Offset away from the ship's hatch, or use a fixed relief elsewhere.
-     * Shadows sit between BG2-low and BG1-low, so foreground occludes them. */
-    int dx = s->ship && s->samusX <= s->lights[0].x ? -10 : 10;
-    shadow.x0 += dx; shadow.x1 += dx;
-    shadow.y0 += 9; shadow.y1 += 9;
-    shadow.depth = 0x7200;
+    /* Interior silhouettes also reach low-priority BG1 wall art; BG1-high
+     * foreground still occludes them. Landing Site keeps its original depth. */
+    shadow.x0 += s->shadowX; shadow.x1 += s->shadowX;
+    shadow.y0 += s->shadowY; shadow.y1 += s->shadowY;
+    shadow.depth = s->ship ? 0x7200 : 0x8100;
     shadow.r = shadow.g = shadow.b = 0;
-    shadow.a = 78;
+    shadow.a = s->ship ? 78 : 96;
     int x0 = Clamp(shadow.x0, f->worldLeft, f->worldRight);
     int x1 = Clamp(shadow.x1, f->worldLeft, f->worldRight);
     int y0 = Clamp(shadow.y0, f->hudEndY, f->height);
@@ -230,12 +253,15 @@ void SceneLighting_Tile(PicaFrame *f, unsigned group, unsigned slot,
     }
   }
   int x = (q->x0 + q->x1) / 2, y = (q->y0 + q->y1) / 2;
-  /* Other rooms keep their palette hue and more ambient light. This avoids
-   * tinting hot lava rooms blue or making already-dark rooms unreadable. */
+  /* Interior contrast matches Landing Site: darker distant scenery and
+   * readable foreground/objects. A mild cool ambient preserves palette hues;
+   * environmental sources locally restore brightness and warm hot rooms. */
   int r = s->ship ? (object ? 190 : layer == 0 ? 158 : 100) :
-                   (object ? 226 : layer == 0 ? 218 : 184);
-  int g = s->ship ? (object ? 198 : layer == 0 ? 176 : 126) : r;
-  int b = s->ship ? (object ? 210 : layer == 0 ? 202 : 161) : r;
+                   (object ? 188 : layer == 0 ? 150 : 88);
+  int g = s->ship ? (object ? 198 : layer == 0 ? 176 : 126) :
+                   (object ? 196 : layer == 0 ? 158 : 101);
+  int b = s->ship ? (object ? 210 : layer == 0 ? 202 : 161) :
+                   (object ? 208 : layer == 0 ? 170 : 121);
   /* A small luminance gradient gives tile surfaces directional relief.
    * Sample the actual flipped/cropped texture rather than screen tile edges.
    * This is an approximation, not an authored per-pixel normal map. */

@@ -1076,7 +1076,7 @@ static void CollectLampSources(PicaFrame *f) {
                           lamps[i].y-sy < -24 || lamps[i].y-sy > 24)) i++;
         if(i<count) {
           lamps[i].x=(lamps[i].x+sx)/2; lamps[i].y=(lamps[i].y+sy)/2;
-        } else if(count<16) lamps[count++]=(SceneLight){sx,sy,52,e.r,e.g,e.b};
+        } else if(count<16) lamps[count++]=(SceneLight){sx,sy,76,e.r,e.g,e.b};
       }
     }
   }

@@ -17,6 +17,19 @@ bool g_debug_flag, g_other_image, g_new_ppu = true;
 int g_got_mismatch_count;
 SpcPlayer *g_spc_player;
 static PicaLine captured[224];
+static bool lavaFixture;
+void __real_LoadFromLoadStation(void);
+void __wrap_LoadFromLoadStation(void) {
+  __real_LoadFromLoadStation();
+  if (!lavaFixture) return;
+  /* Host-only diagnostic entry into the real Norfair room AC83. Its ROM
+   * header selects FX type 2 with surface Y=198; do not synthesize the FX. */
+  room_ptr=0xac83; door_def_ptr=0x952e;
+  bg1_x_offset=layer1_x_pos=0;
+  bg1_y_offset=layer1_y_pos=0;
+  samus_x_pos=samus_prev_x_pos=128;
+  samus_y_pos=samus_prev_y_pos=152;
+}
 void __real_ppu_runLine(Ppu *, int);
 void __wrap_ppu_runLine(Ppu *p, int line) {
   if (line > 0 && line <= 224) PicaCaptureLine(&captured[line-1],p);
@@ -28,7 +41,7 @@ void RtlApuUnlock(void) {}
 void Die(const char *s) { fprintf(stderr, "%s\n", s); exit(1); }
 
 int main(int argc, char **argv) {
-  if (argc != 4 && argc != 5) { fprintf(stderr,"usage: %s ROM SRAM output-directory [fire|jump|move|slot1|acid]\n",argv[0]); return 1; }
+  if (argc != 4 && argc != 5) { fprintf(stderr,"usage: %s ROM SRAM output-directory [fire|jump|move|slot1|slot1-move|acid|lava]\n",argv[0]); return 1; }
   /* Never permit game SRAM writes to the source save. */
   char path[1024];
   snprintf(path,sizeof(path),"%s/preview-only.srm",argv[3]);
@@ -44,12 +57,14 @@ int main(int argc, char **argv) {
   FILE *file = fopen(argv[2], "rb");
   if (!file || fread(g_sram, 1, 8192, file) != 8192) Die("SRAM read failed");
   fclose(file);
-  unsigned slot = argc == 5 && !strcmp(argv[4],"slot1") ? 0 : 1;
+  bool slot1Move = argc==5 && !strcmp(argv[4],"slot1-move");
+  unsigned slot = argc == 5 && (!strcmp(argv[4],"slot1") || slot1Move) ? 0 : 1;
   if (LoadFromSram(slot)) Die("Save slot has an invalid checksum");
   printf("slot %u: area=%u station=%u health=%u\n",slot+1,area_index,load_station_index,samus_health);
   selected_save_slot = slot;
   bool acid = argc==5 && !strcmp(argv[4],"acid");
-  if(acid) {
+  lavaFixture = argc==5 && !strcmp(argv[4],"lava");
+  if(acid || lavaFixture) {
     /* Diagnostic spawn at the game's Norfair load station 10. Local SRAM
      * remains the only write destination; source save is never changed. */
     area_index=2; load_station_index=10;
@@ -62,15 +77,15 @@ int main(int argc, char **argv) {
   for (unsigned i = 0; i < 1200; i++) RtlRunFrame(0);
   printf("room=%04x state=%u samus=(%u,%u) camera=(%u,%u)\n",
           room_ptr,game_state,samus_x_pos,samus_y_pos,layer1_x_pos,layer1_y_pos);
-  if (game_state != 8 || (!acid && slot == 1 && room_ptr != 0x91f8)) Die("Slot 2 did not reach Landing Site gameplay");
-  if (argc == 5 && slot == 1 && !acid) {
+  if (game_state != 8 || (!acid && !lavaFixture && slot == 1 && room_ptr != 0x91f8)) Die("Preview did not reach expected gameplay");
+  if (argc == 5 && (slot == 1 || slot1Move) && !acid && !lavaFixture) {
     unsigned input, frames;
     if (!strcmp(argv[4],"fire")) { input=button_config_shoot_x; frames=10; }
     else if (!strcmp(argv[4],"jump")) { input=button_config_jump_a; frames=12; }
-    else if (!strcmp(argv[4],"move")) { input=button_config_right|button_config_run_b; frames=24; }
+    else if (!strcmp(argv[4],"move") || slot1Move) { input=button_config_right|button_config_run_b; frames=24; }
     else Die("Unknown action; choose fire, jump or move");
     /* Samus initially faces the screen on the ship; turn before firing/jumping. */
-    if (strcmp(argv[4],"move")) {
+    if (strcmp(argv[4],"move") && !slot1Move) {
       for (unsigned i=0;i<8;i++) RtlRunFrame(0x80);
       RtlRunFrame(0);
     }
@@ -84,11 +99,15 @@ int main(int argc, char **argv) {
            argv[4],samus_x_pos,samus_y_pos,flare_counter,projectiles);
     if (!strcmp(argv[4],"fire") && !projectiles) Die("Fire did not spawn a projectile");
     if (!strcmp(argv[4],"jump") && samus_y_pos>=initialY) Die("Jump did not move Samus upward");
-    if (!strcmp(argv[4],"move") && samus_x_pos<=initialX) Die("Right input did not move Samus");
-    if (game_state!=8 || room_ptr!=0x91f8) Die("Action left the trial scene");
+    if ((!strcmp(argv[4],"move") || slot1Move) && samus_x_pos<=initialX) Die("Right input did not move Samus");
+    if (game_state!=8 || room_ptr!=(slot1Move?0xa70b:0x91f8)) Die("Action left the trial scene");
   }
   printf("FX type=%u liquid_y=%u screen_y=%d\n",fx_type,lava_acid_y_pos,(int16_t)(lava_acid_y_pos-layer1_y_pos));
   if(acid && fx_type!=4) Die("Diagnostic spawn did not reach the acid scene");
+  if(lavaFixture && (room_ptr!=0xac83 || fx_type!=2 ||
+      (int16_t)(lava_acid_y_pos-layer1_y_pos)<32 ||
+      (int16_t)(lava_acid_y_pos-layer1_y_pos)>=224))
+    Die("Diagnostic spawn did not reach visible real lava");
   snprintf(path,sizeof(path),"%s/landing-wram.bin",argv[3]);
   file=fopen(path,"wb"); if(!file) Die("WRAM output failed");
   fwrite(g_ram,1,sizeof(g_ram),file); fclose(file);

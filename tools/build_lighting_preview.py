@@ -22,5 +22,6 @@ def compile_source(source):
     return str(obj)
 with ThreadPoolExecutor(max_workers=4) as pool:
     objects = list(pool.map(compile_source, sources))
-subprocess.run(['cc', *objects, '-Wl,--wrap=ppu_runLine', '-lm', '-o',
+subprocess.run(['cc', *objects, '-Wl,--wrap=ppu_runLine',
+                '-Wl,--wrap=LoadFromLoadStation', '-lm', '-o',
                 str(root / 'output-lighting-trial/lighting-preview')], check=True)

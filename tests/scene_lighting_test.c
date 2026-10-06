@@ -10,7 +10,8 @@ static unsigned Morton(unsigned x,unsigned y) {
 }
 static bool Capture(void *context, unsigned group, const PicaQuad *q) {
   (void)context;
-  assert(group == 21 && q->depth == 0x7200 && q->a == 78);
+  assert(group == 21 && ((q->depth == 0x7200 && q->a == 78) ||
+                        (q->depth == 0x8100 && q->a == 96)));
   assert(q->x0 >= 0 && q->x1 <= 256 && q->y0 >= 32 && q->y1 <= 224);
   emitted++;
   return true;
@@ -38,7 +39,8 @@ int main(void) {
   SceneLighting_Prepare(&f);
   q=original; q.x0=216; q.x1=224; q.y0=40; q.y1=48;
   SceneLighting_Tile(&f,0,1,&q);
-  assert(q.r==255 && q.g==255 && q.b<255 && q.a==original.a);
+  assert(q.r>220 && q.g>210 && q.b>190 && q.r>q.g && q.g>q.b &&
+         q.a==original.a);
   SceneLighting_Begin(&s,true,0x91f8,8,1024,1024,1152,1140,0,60);
   assert(s.count == 5 && s.samusX == 128 && s.samusY == 116);
   SceneLighting_Prepare(&f);
@@ -80,14 +82,37 @@ int main(void) {
   pixels[64+Morton(3,4)]=pixels[64+Morton(4,3)]=0xffffffff;
   SceneLighting_Prepare(&f);
   q=original; SceneLighting_Tile(&f,0,1,&q);
-  assert(q.r==204 && q.g==204 && q.b==204);
+  assert(q.r==136 && q.g==144 && q.b==156);
   q=original; q.u0=32; q.u1=0; q.v0=4032; q.v1=4096;
   SceneLighting_Tile(&f,0,1,&q);
-  assert(q.r==232 && q.g==232 && q.b==232);
+  assert(q.r==164 && q.g==172 && q.b==184);
   pixels[64+Morton(3,4)]=pixels[64+Morton(4,3)]=0;
   SceneLighting_Prepare(&f);
   q=original; SceneLighting_Tile(&f,0,1,&q);
-  assert(q.r==218);
+  assert(q.r==150 && q.g==158 && q.b==170);
+  /* Interiors separate distant scenery without dimming HUD or Samus as far
+   * as walls. Shadows reach BG1-low (8000), remain below BG1-high (c000),
+   * and point away from a real environmental source rather than charge. */
+  q=original; q.depth=0x7100; SceneLighting_Tile(&f,0,1,&q);
+  assert(q.r==88 && q.g==101 && q.b==121);
+  q=original; SceneLighting_Tile(&f,1,1,&q);
+  assert(q.r==188 && q.g==196 && q.b==208);
+  SceneLighting_Begin(&s,true,0xa70b,8,0,0,128,152,0,60);
+  SceneLighting_Prepare(&f);
+  assert(s.shadowX==10 && s.shadowY==9); /* Own charge does not steer it. */
+  SceneLighting_AddLight(&s,24,128,160,54,100,174);
+  SceneLighting_Prepare(&f);
+  assert(s.shadowX==12 && s.shadowY==2);
+  s.castShadow=true;
+  q=original; SceneLighting_Tile(&f,1,1,&q);
+  assert(s.shadowCount==1 && s.shadows[0].depth>0x8000 &&
+         s.shadows[0].depth<0xc000 && s.shadows[0].a==96);
+  assert(s.shadows[0].x0==112 && s.shadows[0].y0==102);
+  assert(SceneLighting_EmitShadows(&f,0) && emitted==2 && !s.shadowCount);
+  SceneLighting_Begin(&s,true,0xa70b,8,0,0,128,152,0,0);
+  SceneLighting_AddLight(&s,128,200,160,154,72,24);
+  SceneLighting_Prepare(&f);
+  assert(s.shadowX==0 && s.shadowY==-12); /* Lava illuminates from below. */
   /* A rejected frame must restore the caller's callback/context. */
   f.width=255; f.context=&s;
   assert(!PicaBuildFrame(&f) && f.emit==Capture && f.context==&s && f.lighting==&s);

@@ -26,6 +26,7 @@ int main(void) {
     SceneLighting_AddRoomSources(&f);
     assert(scene.count==2 && scene.lights[1].x==24 && scene.lights[1].y==112);
     SceneLight l=scene.lights[1];
+    assert(l.radius==88 && (l.r>=156 || l.g>=156 || l.b>=156));
     if(color==0) assert(l.g>l.r && l.g>l.b);
     if(color==1) assert(l.r>l.g && l.r>l.b);
     if(color==2) assert(l.r>l.b && l.g>l.b);
@@ -48,6 +49,7 @@ int main(void) {
     Begin(); scene.liquidType=type; scene.liquidY=180;
     SceneLighting_AddRoomSources(&f);
     assert(scene.count==(type==6?1u:3u)); /* Ordinary water is not emissive. */
+    if(type!=6) assert(scene.lights[1].radius==160 && scene.lights[1].r==154);
     if(type==2) assert(scene.lights[1].r>scene.lights[1].g);
     if(type==4) assert(scene.lights[1].r>scene.lights[1].g);
   }

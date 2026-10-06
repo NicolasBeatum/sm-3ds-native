@@ -18,10 +18,11 @@ typedef struct SceneEmission {
 typedef struct SceneLighting {
   bool enabled, castShadow;
   int samusX, samusY;
-  unsigned count, shadowCount;
+  unsigned count, shadowCount, environmentStart;
   SceneLight lights[SCENE_MAX_LIGHTS];
   PicaQuad shadows[SCENE_MAX_SHADOWS];
   bool ship;
+  int shadowX, shadowY;
   uint16_t field[SCENE_FIELD_H][SCENE_FIELD_W][3];
   SceneRelief relief[512];
   unsigned liquidType;

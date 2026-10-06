@@ -12,8 +12,8 @@ starts with it enabled unless an existing `scene_lighting` preference says
 otherwise. The setting is saved with the other video preferences. Lighting now
 runs in **every room during normal gameplay** (`game_state=8`), with Samus,
 charging and projectile lights. The three fixed ship lamps remain exclusive to
-Landing Site (`room=0x91f8`). Other rooms use a brighter, neutral ambient profile
-so their original palette determines their hue.
+Landing Site (`room=0x91f8`). Other rooms now use similarly dark ambient light,
+with a mild cool bias and a darker distant layer, so local sources stand out.
 
 Loading/fades, pause screens, frozen-time X-ray, the expanded eye beam and CPU
 fallback retain normal output. Thus the effect is global for compatible PICA
@@ -29,9 +29,12 @@ There are no individually authored lamp maps for every tileset.
 - Tile luminance gradients approximate directional surface relief. This is
   per-quad shading, not an authored normal map or per-pixel lighting shader.
 - Samus's palette-4 OAM tiles near her position project alpha silhouettes onto
-  low-priority BG2. Foreground depth hides them. The blend preserves the SNES
+  low-priority BG2 at the ship, and low-priority BG1/BG2 walls in interiors.
+  High-priority foreground depth hides them. The blend preserves the SNES
   math alpha and does not write depth/stencil. Weather and HUD do not cast
-  shadows. The fixed projection is approximate and is not physical ray tracing.
+  shadows. Interior projection points away from the nearest environmental
+  source in range; unlit corridors use a stable diagonal. This is approximate,
+  not physical ray tracing.
 - A reusable 64×64 radial texture provides a small additive glow clipped below
   the HUD and inside the image. It does not blur the pixel art.
 
@@ -91,9 +94,15 @@ make FULL_NATIVE=1 LTO=1 BUILD=build-lighting-trial OUTPUT=output-lighting-globa
 
 Optional fourth preview argument `fire`, `jump`, or `move` checks actual
 native inputs before capturing. `slot1` loads SRAM slot 1 to inspect another
-room. `acid` uses the game's Norfair load-station 10 in room `b236`, with
+room; `slot1-move` also walks Samus out of the save station before capturing.
+`acid` uses the game's Norfair load-station 10 in room `b236`, with
 explicit diagnostic suit/health in host RAM so it can survive capture. This
-option belongs only to the host tool and is not compiled into the game. Use a
+option belongs only to the host tool and is not compiled into the game.
+`lava` wraps the host's load-station entry to spawn in actual room `ac83`
+via door `952e`, with camera (0,0) and Samus (128,152). The normal ROM room
+header/FX loader selects type 2 and surface Y=198; the tool rejects a capture
+without visible real lava. It does not substitute lava graphics into acid.
+Use a
 separate output directory for each.
 The builder assumes the output folder exists. Run 3DSX/CIA targets sequentially
 because the root Makefile recurses into a shared build directory.
@@ -221,3 +230,37 @@ model/vertex preparation only, exclude GPU/glow cost, and are not console FPS.
 The earlier optimization table describes the ship/global build before this
 extension. Real-console performance and a campaign-wide visual pass remain
 pending. No original user SRAM is used as a preview write destination.
+
+## Stronger interior diorama trial
+
+Builds and comparisons: `output-lighting-diorama-trial/`. Ambient vertex RGB is
+now BG1 (150,158,170), BG2 (88,101,121), OBJ (188,196,208), compared with the
+previous neutral 218/184/226. Samus keeps a small local fill. Landing Site's
+existing appearance is unchanged in the matched standard stationary preview.
+Colored door radius increases from 68 to 88 pixels, with stronger colored light;
+liquid radius increases from 120 to 160 and its brightest palette channel from
+116 to 154. Decor lamp radius increases from 52 to 76 and emission from half
+to three quarters of the sampled core color. The eight-source budget remains.
+
+Interior silhouettes use depth 8100, above BG1-low (8000) and below BG1-high
+(c000), with alpha 96 instead of 78. The ship keeps depth 7200/alpha 78. Their
+offset is computed once per frame, up to 12 pixels away from the nearest room
+light; own fill, charge and projectiles do not steer it. The shadow quad limit
+and number of shadow passes are unchanged. Larger light radii visit more field
+cells and cover more glow pixels, so the fixed source count alone does not
+prove identical hardware cost.
+
+Visual QA includes Brinstar `a70b` both stationary and after moving to (160,161),
+Norfair acid `b236`, and actual lava room `ac83`. The standard lava sample has
+six sources and 22 sub-screen shadow quads, with 203 shadowed raster samples;
+moving Brinstar has four sources, 15 main shadow quads and 602 shadowed samples.
+Software raster statistics confirm depth-tested shadow contribution, not just
+generated quads. These counts are not perceptual or hardware measurements.
+Off/on and previous/new PNGs use identical captured frames and nearest
+enlargement without contrast adjustments. No original SRAM is a write target.
+
+Scene tests additionally verify interior ambient/layer separation, shadow
+receiver depth/alpha, projection away from doors and lava, exclusion of own
+charge, and stronger bounded door/liquid sources. The 264-frame lights-off
+main/sub differential check and atlas/widescreen/vertex tests pass. GPU output
+and FPS for this revision still need interactive Azahar/3DS verification.

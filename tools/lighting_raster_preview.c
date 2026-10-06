@@ -20,6 +20,7 @@ static uint16_t depth[2][400*224];
 static uint8_t stencil[2][400*224];
 static PicaQuad *quads[PICA_GROUPS];
 static unsigned count[PICA_GROUPS], capacity[PICA_GROUPS];
+static unsigned shadowPixels[2];
 static bool Capture(void *ctx, unsigned group, const PicaQuad *q) {
   (void)ctx;
   if (count[group] == capacity[group]) {
@@ -58,6 +59,7 @@ static void Draw(unsigned group, unsigned width) {
       if(!shadow && (group&1) && stencil[screen][pos]) continue;
       if(q->depth>depth[screen][pos]) {
         if(shadow) {
+          shadowPixels[screen]++;
           uint32_t c=color[screen][pos], result=c&255;
           for(unsigned shift=8;shift<=24;shift+=8)
             result|=((((c>>shift)&255)*(255-q->a)/255)<<shift);
@@ -139,5 +141,6 @@ int main(int argc,char **argv) {
   FILE *file=fopen(path,"wb");assert(file);
   fprintf(file,"P6\n%u 224\n255\n",width);
   fwrite(output,1,width*224*3,file);fclose(file);
-  printf("%s: lights=%u shadows=%u/%u\n",path,lighting.count,count[21],count[22]);
+  printf("%s: lights=%u shadows=%u/%u affected-shadow-pixels=%u/%u\n",
+         path,lighting.count,count[21],count[22],shadowPixels[0],shadowPixels[1]);
 }
