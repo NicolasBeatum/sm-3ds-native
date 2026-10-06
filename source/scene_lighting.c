@@ -18,9 +18,11 @@ void SceneLighting_Begin(SceneLighting *s, bool enabled, unsigned room,
                          unsigned charge) {
   s->count = s->shadowCount = 0;
   s->castShadow = false;
+  s->liquidType = 0;
   s->enabled = enabled && state == 8;
   s->ship = room == 0x91f8;
   if (!s->enabled) return;
+  memset(s->emission,0,sizeof(s->emission));
   s->samusX = samusX - cameraX + (int)origin;
   s->samusY = samusY - cameraY;
   /* Ship hatch and two side lamps, fixed to room coordinates. */
@@ -37,6 +39,119 @@ void SceneLighting_Begin(SceneLighting *s, bool enabled, unsigned room,
   if (charge >= 16)
     SceneLighting_AddLight(s, s->samusX + 10, s->samusY - 8,
                             48 + Clamp(charge, 0, 60), 88, 100, 62);
+}
+
+/* Low block IDs are the shared door-cap graphics from the game's bank-84
+ * draw definitions (A767/A827/A8E7/A9B3). Check the live block, not a PLM,
+ * because closed blue doors need not have a running PLM object. */
+void SceneLighting_AddRoomSources(PicaFrame *f) {
+  SceneLighting *s = f->lighting;
+  if (!s || !s->enabled || s->count==SCENE_MAX_LIGHTS) return;
+  if ((s->liquidType == 2 || s->liquidType == 4) &&
+      s->liquidY < (int)f->height + 64) {
+    unsigned n = f->width == 400 ? 3 : 2;
+    int width = f->worldRight - f->worldLeft;
+    int y = s->liquidY < (int)f->hudEndY ? (int)f->hudEndY + 48 : s->liquidY + 16;
+    unsigned r=116,g=54,b=18;
+    /* Lava and acid can share orange graphics. Read the liquid's BG3 palette
+     * rather than assuming acid is green; custom palettes follow their art. */
+    if(f->memory && f->lines) {
+      unsigned sampleY=Clamp(y,f->hudEndY,f->height-1);
+      const BgLayer *bg=&f->lines[sampleY].bg[2];
+      unsigned wx=(128+bg->hScroll)&(bg->tilemapWider?511:255);
+      unsigned wy=(sampleY+bg->vScroll)&(bg->tilemapHigher?511:255);
+      unsigned map=bg->tilemapAdr+((wy>>3)&31)*32+((wx>>3)&31)+
+          (wx>=256?0x400:0)+(wy>=256?(bg->tilemapWider?0x800:0x400):0);
+      unsigned palette=(f->memory->vram[map&0x7fff]&0x1c00)>>8;
+      unsigned best=0;
+      for(unsigned i=1;i<4;i++) {
+        unsigned c=f->memory->cgram[palette+i];
+        unsigned cr=c&31,cg=(c>>5)&31,cb=(c>>10)&31;
+        unsigned high=cr>cg?cr:cg;high=high>cb?high:cb;
+        unsigned low=cr<cg?cr:cg;low=low<cb?low:cb;
+        unsigned luma=cr*3+cg*6+cb;
+        if(high-low>=4 && luma>best) {
+          best=luma; r=cr*116/31;g=cg*116/31;b=cb*116/31;
+        }
+      }
+    }
+    for (unsigned i=0; i<n && width>0; i++)
+      SceneLighting_AddLight(s, f->worldLeft + width*(2*i+1)/(2*n), y,
+          120,r,g,b);
+  }
+  const PicaWideRoomLayer *room = &f->wideRoom[0];
+  if (!room->blocks || !f->wideRoomWidth || !f->wideRoomHeight) return;
+  int x0 = Clamp((room->cameraX + f->worldLeft - (int)f->originX - 64)/16,
+                 0, f->wideRoomWidth);
+  int x1 = Clamp((room->cameraX + f->worldRight - (int)f->originX + 79)/16,
+                 0, f->wideRoomWidth);
+  int y0 = Clamp((room->cameraY + (int)f->hudEndY - 64)/16, 0, f->wideRoomHeight);
+  int y1 = Clamp((room->cameraY + (int)f->height + 79)/16, 0, f->wideRoomHeight);
+  SceneLight doors[16];
+  int bounds[16][4];
+  unsigned count=0;
+  for (int y=y0; y<y1; y++) for (int x=x0; x<x1; x++) {
+    unsigned block = room->blocks[y*f->wideRoomWidth+x];
+    unsigned id = block & 0x3ff, type=block>>12;
+    if (id>=0x40 || (id&3)==3 ||
+        (type!=8 && type!=12 && type!=13 && type!=5)) continue;
+    unsigned color=(id&15)/4;
+    int sx=x*16+8-room->cameraX+f->originX, sy=y*16+8-room->cameraY;
+    unsigned j=0;
+    while(j<count && (doors[j].r!=color ||
+          doors[j].x-sx < -56 || doors[j].x-sx > 56 ||
+          doors[j].y-sy < -56 || doors[j].y-sy > 56)) j++;
+    if (j<count) {
+      bounds[j][0]=sx<bounds[j][0]?sx:bounds[j][0];
+      bounds[j][1]=sx>bounds[j][1]?sx:bounds[j][1];
+      bounds[j][2]=sy<bounds[j][2]?sy:bounds[j][2];
+      bounds[j][3]=sy>bounds[j][3]?sy:bounds[j][3];
+      doors[j].x=(bounds[j][0]+bounds[j][1])/2;
+      doors[j].y=(bounds[j][2]+bounds[j][3])/2;
+    } else if(count<16) {
+      doors[count]=(SceneLight){sx,sy,68,color,0,0};
+      bounds[count][0]=bounds[count][1]=sx;
+      bounds[count][2]=bounds[count][3]=sy;
+      count++;
+    }
+  }
+  /* At most two nearby caps; keep room for moving lights and lamp cores. */
+  static const uint8_t rgb[4][3]={{38,112,42},{112,38,62},{112,96,24},{42,74,126}};
+  for (unsigned n=0; n<2 && count; n++) {
+    unsigned nearest=0; int best=0x7fffffff;
+    for(unsigned j=0;j<count;j++) {
+      int dx=doors[j].x-s->samusX, dy=doors[j].y-s->samusY;
+      int distance=dx*dx+dy*dy;
+      if(distance<best) {best=distance;nearest=j;}
+    }
+    SceneLight l=doors[nearest]; const uint8_t *c=rgb[l.r];
+    SceneLighting_AddLight(s,l.x,l.y,l.radius,c[0],c[1],c[2]);
+    doors[nearest]=doors[--count];
+  }
+}
+
+SceneEmission SceneLighting_Emission(PicaFrame *f, unsigned slot) {
+  SceneLighting *s=f->lighting;
+  SceneEmission *cached=&s->emission[(slot*2654435761u)>>24];
+  if(cached->key==slot+1) return *cached;
+  unsigned bright=0,dark=0,r=0,g=0,b=0;
+  for(unsigned i=0;i<64;i++) {
+    uint32_t p=f->pixels[slot*64+i];
+    unsigned pr=p>>24,pg=(p>>16)&255,pb=(p>>8)&255;
+    unsigned luma=(pr*3+pg*6+pb)/10;
+    dark+=luma<64;
+    unsigned high=pr>pg?pr:pg; high=high>pb?high:pb;
+    unsigned low=pr<pg?pr:pg; low=low<pb?low:pb;
+    /* Ignore white specular highlights on metal and bright wall textures. */
+    if (high>=216 && high-low>=56 && luma>=130) {
+      bright++;r+=pr;g+=pg;b+=pb;
+    }
+  }
+  *cached=(SceneEmission){.key=slot+1};
+  if(bright>=3 && bright<=20 && dark>=32) {
+    cached->r=r/bright/2; cached->g=g/bright/2; cached->b=b/bright/2;
+  }
+  return *cached;
 }
 
 void SceneLighting_Prepare(PicaFrame *f) {

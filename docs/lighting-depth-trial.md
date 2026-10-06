@@ -17,8 +17,9 @@ so their original palette determines their hue.
 
 Loading/fades, pause screens, frozen-time X-ray, the expanded eye beam and CPU
 fallback retain normal output. Thus the effect is global for compatible PICA
-room rendering, not for every cinematic/special PPU mode. Static lamps outside
-the ship have not been authored individually.
+room rendering, not for every cinematic/special PPU mode. Environmental sources now include live colored door caps, visible lava/acid,
+and an approximate detector for small colored luminous cores in BG1/BG2.
+There are no individually authored lamp maps for every tileset.
 
 - A cooler, darker distant BG2 separates scenery from the foreground. BG1 and
   objects have stronger ambient light; nearest texture sampling stays intact.
@@ -90,7 +91,10 @@ make FULL_NATIVE=1 LTO=1 BUILD=build-lighting-trial OUTPUT=output-lighting-globa
 
 Optional fourth preview argument `fire`, `jump`, or `move` checks actual
 native inputs before capturing. `slot1` loads SRAM slot 1 to inspect another
-room. Use a separate output directory for each.
+room. `acid` uses the game's Norfair load-station 10 in room `b236`, with
+explicit diagnostic suit/health in host RAM so it can survive capture. This
+option belongs only to the host tool and is not compiled into the game. Use a
+separate output directory for each.
 The builder assumes the output folder exists. Run 3DSX/CIA targets sequentially
 because the root Makefile recurses into a shared build directory.
 
@@ -161,3 +165,59 @@ speedups. The model benchmark does not include atlas cache-clean API calls, glow
 rendering, audio, gameplay, or GPU synchronization. To establish real performance,
 load slot 2 and compare matched diagnostics with SETUP → VIDEO → LIGHTING ON/OFF
 at the same position, viewport and input; repeat in other rooms on actual 3DS.
+
+## Environmental lighting extension
+
+Environmental build artifacts are now under `output-lighting-environment-trial/`.
+The same VIDEO → LIGHTING switch controls the entire effect.
+
+- FX types 2 (lava) and 4 (acid) add a row of two sources at width 256 or three
+  at width 400, following the live `lava_acid_y_pos`. Their color follows the
+  visible liquid's BG3 palette, with a warm fallback. Ordinary water (type 6)
+  does not emit. Offscreen liquid below the viewport does not add a glow;
+  immersed views use a warm fill near the playfield rather than a source above
+  the HUD. Sources are limited to the visible room bounds.
+- Green/red/yellow/blue caps use the shared live block graphics from bank-84
+  draw definitions A767/A827/A8E7/A9B3, including vertical/horizontal layouts and
+  flips. Thus blue doors work without an active PLM, and an opened/removed cap
+  cannot leave a persistent light behind. At most two nearby colored caps emit.
+  Grey/eye doors and unusual custom door graphics are not separately authored.
+- BG1/BG2 sampling groups small colored luminous cores into lamp sources, with
+  at most two nearby groups. Classification requires a small bright colored
+  region surrounded by dark pixels; white metal highlights and broadly bright
+  wall tiles are rejected. This is a heuristic, not semantic lamp metadata or
+  ray-traced occlusion: unusual tilesets may need threshold/mask refinement.
+  Ship lamps retain their explicit sources. BG3 weather/liquid and HUD are not
+  sampled as decor lamps. Background windows and room edges are respected.
+- The source budget remains eight. Samus/charge and up to three active
+  player projectiles get priority in ordinary rooms (the moving-light count is
+  capped at four), then liquid, doors and available lamp slots. Ship builds use
+  a moving-light count cap of six, including the three ship lights. Remaining
+  projectile sources can be dropped when the budget is full. The lamp pass
+  primes the existing descriptor cache, so background emission reuses its tile
+  lookups. Lamp classifications are cached once per tile within the frame and
+  reset for palette animation; there is no additional GPU readback or render
+  target. The lighting struct is now 18,120 bytes (2,056 more than the previous
+  global build), plus the reusable 16-KiB glow texture.
+
+Verification: `tests/scene_environment_test.c` covers colored cap hues and
+centers, open/removed doors, liquid palette colors and levels, water exclusion,
+room bounds, capped counts, wall/white-highlight rejection and classification
+invalidation. Existing scene, atlas, widescreen and 264-frame differential tests
+still pass. Native Brinstar `a70b` captures show Samus, a blue cap at (24,128), and
+two green/yellow lamp groups near (112,44)/(80,52). The native Norfair `b236`
+fixture has FX type 4, world liquid Y=697, camera Y=512: its three wide liquid
+sources follow screen Y=185 and use orange palette RGB (116,82,0). It emits six
+sources including Samus/two luminous decor groups. Software previews are in the
+ignored environment output directory. They are not GPU captures.
+
+Environmental detection costs additional CPU compared with the previous global
+build; the eight-source limit bounds field/glow work, not total game FPS. A
+matched warm-cache Brinstar host sample at width 400 measured about 0.216 ms
+with four sources, versus 0.164 ms with only Samus in `2eb526e`; lights-off was
+about 0.099/0.096 ms (small host timing variation). Norfair's denser wide fixture
+measured about 0.393 ms with six sources and 0.178 ms off. These numbers include
+model/vertex preparation only, exclude GPU/glow cost, and are not console FPS.
+The earlier optimization table describes the ship/global build before this
+extension. Real-console performance and a campaign-wide visual pass remain
+pending. No original user SRAM is used as a preview write destination.

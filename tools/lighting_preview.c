@@ -28,7 +28,7 @@ void RtlApuUnlock(void) {}
 void Die(const char *s) { fprintf(stderr, "%s\n", s); exit(1); }
 
 int main(int argc, char **argv) {
-  if (argc != 4 && argc != 5) { fprintf(stderr,"usage: %s ROM SRAM output-directory [fire|jump|move|slot1]\n",argv[0]); return 1; }
+  if (argc != 4 && argc != 5) { fprintf(stderr,"usage: %s ROM SRAM output-directory [fire|jump|move|slot1|acid]\n",argv[0]); return 1; }
   /* Never permit game SRAM writes to the source save. */
   char path[1024];
   snprintf(path,sizeof(path),"%s/preview-only.srm",argv[3]);
@@ -48,14 +48,22 @@ int main(int argc, char **argv) {
   if (LoadFromSram(slot)) Die("Save slot has an invalid checksum");
   printf("slot %u: area=%u station=%u health=%u\n",slot+1,area_index,load_station_index,samus_health);
   selected_save_slot = slot;
+  bool acid = argc==5 && !strcmp(argv[4],"acid");
+  if(acid) {
+    /* Diagnostic spawn at the game's Norfair load station 10. Local SRAM
+     * remains the only write destination; source save is never changed. */
+    area_index=2; load_station_index=10;
+    equipped_items|=0x21;
+    samus_health=samus_max_health=9999;
+  }
   loading_game_state = 5;
   game_state = 6;
   coroutine_state_0 = coroutine_state_1 = coroutine_state_2 = coroutine_state_3 = 0;
   for (unsigned i = 0; i < 1200; i++) RtlRunFrame(0);
   printf("room=%04x state=%u samus=(%u,%u) camera=(%u,%u)\n",
           room_ptr,game_state,samus_x_pos,samus_y_pos,layer1_x_pos,layer1_y_pos);
-  if (game_state != 8 || (slot == 1 && room_ptr != 0x91f8)) Die("Slot 2 did not reach Landing Site gameplay");
-  if (argc == 5 && slot == 1) {
+  if (game_state != 8 || (!acid && slot == 1 && room_ptr != 0x91f8)) Die("Slot 2 did not reach Landing Site gameplay");
+  if (argc == 5 && slot == 1 && !acid) {
     unsigned input, frames;
     if (!strcmp(argv[4],"fire")) { input=button_config_shoot_x; frames=10; }
     else if (!strcmp(argv[4],"jump")) { input=button_config_jump_a; frames=12; }
@@ -79,6 +87,8 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[4],"move") && samus_x_pos<=initialX) Die("Right input did not move Samus");
     if (game_state!=8 || room_ptr!=0x91f8) Die("Action left the trial scene");
   }
+  printf("FX type=%u liquid_y=%u screen_y=%d\n",fx_type,lava_acid_y_pos,(int16_t)(lava_acid_y_pos-layer1_y_pos));
+  if(acid && fx_type!=4) Die("Diagnostic spawn did not reach the acid scene");
   snprintf(path,sizeof(path),"%s/landing-wram.bin",argv[3]);
   file=fopen(path,"wb"); if(!file) Die("WRAM output failed");
   fwrite(g_ram,1,sizeof(g_ram),file); fclose(file);

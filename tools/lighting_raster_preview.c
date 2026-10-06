@@ -91,7 +91,11 @@ int main(int argc,char **argv) {
     .lighting=&lighting,.emit=Capture};
   SceneLighting_Begin(&lighting,atoi(argv[3])!=0,room_ptr,game_state,
                       layer1_x_pos,layer1_y_pos,samus_x_pos,samus_y_pos,origin,flare_counter);
-  for (unsigned i=0;i<10;i++) if(projectile_type[i])
+  if (lighting.enabled && (int16_t)lava_acid_y_pos>=0) {
+    lighting.liquidType=fx_type;
+    lighting.liquidY=(int16_t)(lava_acid_y_pos-layer1_y_pos);
+  }
+  for (unsigned i=0;i<10;i++) if(projectile_type[i] && lighting.count<(lighting.ship?6u:4u))
     SceneLighting_AddLight(&lighting,
       (int16_t)(projectile_x_pos[i]-layer1_x_pos)+(int)origin,
       (int16_t)(projectile_y_pos[i]-layer1_y_pos),48,88,62,28);

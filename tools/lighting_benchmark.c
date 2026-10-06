@@ -62,9 +62,14 @@ static void Bench(const char *root,unsigned width,unsigned mode) {
           mode>=4 ? InitialSceneAdd : SceneLighting_AddLight;
       begin(&lighting,mode>=4 ? mode>=5 : mode>=2,room_ptr,game_state,layer1_x_pos,
         layer1_y_pos,samus_x_pos,samus_y_pos,origin,flare_counter);
+      if(mode<4 && lighting.enabled && (int16_t)lava_acid_y_pos>=0) {
+        lighting.liquidType=fx_type;
+        lighting.liquidY=(int16_t)(lava_acid_y_pos-layer1_y_pos);
+      }
       for(unsigned i=0;i<10;i++)if(projectile_type[i])
-        add(&lighting,(int16_t)(projectile_x_pos[i]-layer1_x_pos)+origin,
-          (int16_t)(projectile_y_pos[i]-layer1_y_pos),48,88,62,28);
+        if(mode>=4 || lighting.count<(lighting.ship?6u:4u))
+          add(&lighting,(int16_t)(projectile_x_pos[i]-layer1_x_pos)+origin,
+            (int16_t)(projectile_y_pos[i]-layer1_y_pos),48,88,62,28);
       if((mode==3 || mode==6) && lighting.enabled)while(lighting.count<SCENE_MAX_LIGHTS)
         add(&lighting,origin+128,100,108,100,90,60);
       assert(mode==0 ? BeforeBuildFrame(&f) : mode>=4 ? InitialBuildFrame(&f) : PicaBuildFrame(&f));

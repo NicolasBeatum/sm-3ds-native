@@ -433,8 +433,12 @@ bool PpuGpuFinish(Ppu *p) {
       BottomScreen_SceneLightingEnabled() && !time_is_frozen_flag,
       room_ptr, game_state, (int16_t)layer1_x_pos, (int16_t)layer1_y_pos,
       samus_x_pos, samus_y_pos, frame.originX, flare_counter);
+  if (g_lighting.enabled && (int16_t)lava_acid_y_pos >= 0) {
+    g_lighting.liquidType=fx_type;
+    g_lighting.liquidY=(int16_t)(lava_acid_y_pos-layer1_y_pos);
+  }
   for (unsigned i = 0; i < 10; i++)
-    if (projectile_type[i])
+    if (projectile_type[i] && g_lighting.count < (g_lighting.ship ? 6u : 4u))
       SceneLighting_AddLight(&g_lighting,
           (int16_t)(projectile_x_pos[i] - layer1_x_pos) + frame.originX,
           (int16_t)(projectile_y_pos[i] - layer1_y_pos), 48, 88, 62, 28);

@@ -1018,6 +1018,87 @@ static bool Compose(PicaFrame *f) {
   return true;
 }
 
+/* Sample visible BG tiles once to find small bright lamp cores. The atlas
+ * already caches decoded textures; a 256-entry classification cache avoids
+ * revisiting their 64 pixels. This heuristic does not turn bright walls into
+ * area lights and does not inspect HUD, sprites or liquid/weather BG3. */
+static void CollectLampSources(PicaFrame *f) {
+  SceneLighting *s=f->lighting;
+  if(s->ship || s->count==SCENE_MAX_LIGHTS) return;
+  SceneLight lamps[16]; unsigned count=0;
+  for(unsigned layer=0;layer<2;layer++) {
+    unsigned mask=1u<<layer;
+    for(unsigned y=f->hudEndY+4;y<f->height;y+=8) {
+      const PicaLine *p=&f->lines[y]; const BgLayer *bg=&p->bg[layer];
+      if(p->forcedBlank || !((p->screenEnabled[0]&mask) ||
+          (p->addSubscreen && (p->screenEnabled[1]&mask)))) continue;
+      unsigned wy=(y+bg->vScroll)&(bg->tilemapHigher?511:255);
+      unsigned mapRow=bg->tilemapAdr+((wy>>3)&31)*32+
+          (wy>=256?(bg->tilemapWider?0x800:0x400):0);
+      WideTileRow roomRow=WideRoomRow(f,layer,y);
+      int left=layer && f->boundBg2 ? f->bg2Left : f->worldLeft;
+      int right=layer && f->boundBg2 ? f->bg2Right : f->worldRight;
+      uint16_t *slots=BackgroundSlots(f->atlas,layer,bg->tileAdr);
+      WindowSpans windows[2]; bool enabled[2];
+      for(unsigned sub=0;sub<2;sub++) {
+        enabled[sub]=(p->screenEnabled[sub]&mask) && (!sub || p->addSubscreen);
+        if(enabled[sub]) Windows(f,p,layer,(p->screenWindowed[sub]&mask)!=0,
+                                left,right,&windows[sub]);
+      }
+      for(int x=left+4;x<right;x+=8) {
+        bool visible=false;
+        for(unsigned sub=0;sub<2;sub++) {
+          if(!enabled[sub]) continue;
+          const WindowSpans *win=&windows[sub];
+          for(unsigned i=0;i<win->nr;i++)
+            if(!(win->bits&(1u<<i)) && x>=win->edges[i] && x<win->edges[i+1]) visible=true;
+        }
+        if(!visible) continue;
+        unsigned wx=(x-(int)f->originX+bg->hScroll)&(bg->tilemapWider?511:255);
+        uint16_t tile; unsigned tx=wx&7,ty=wy&7;
+        if(f->width==kWideWidth && f->wideRoom[layer].blocks &&
+            (x<(int)f->originX || x>=(int)f->originX+kSnesWidth)) {
+          if(!WideRoomTile(f,&roomRow,x,layer,&tile,&tx,&ty)) continue;
+        } else tile=f->memory->vram[(mapRow+((wx>>3)&31)+(wx>=256?0x400:0))&0x7fff];
+        int slot=BackgroundTile(f,slots,tile,bg->tileAdr,16,6,4);
+        if(slot<0) continue;
+        SceneEmission e=SceneLighting_Emission(f,slot);
+        if(!(e.r || e.g || e.b)) continue;
+        int sx=x-(int)tx+4,sy=(int)y-(int)ty+4;
+        bool duplicate=false;
+        for(unsigned i=0;i<s->count;i++) {
+          int dx=s->lights[i].x-sx,dy=s->lights[i].y-sy;
+          if(s->lights[i].radius>=64 && dx*dx+dy*dy<32*32) duplicate=true;
+        }
+        if(duplicate) continue;
+        unsigned i=0;
+        while(i<count && (lamps[i].x-sx < -24 || lamps[i].x-sx > 24 ||
+                          lamps[i].y-sy < -24 || lamps[i].y-sy > 24)) i++;
+        if(i<count) {
+          lamps[i].x=(lamps[i].x+sx)/2; lamps[i].y=(lamps[i].y+sy)/2;
+        } else if(count<16) lamps[count++]=(SceneLight){sx,sy,52,e.r,e.g,e.b};
+      }
+    }
+  }
+  for(unsigned n=0;n<2 && count;n++) {
+    unsigned nearest=0;int best=0x7fffffff;
+    for(unsigned i=0;i<count;i++) {
+      int dx=lamps[i].x-s->samusX,dy=lamps[i].y-s->samusY;
+      int distance=dx*dx+dy*dy;
+      if(distance<best) {best=distance;nearest=i;}
+    }
+    SceneLight l=lamps[nearest];
+    SceneLighting_AddLight(s,l.x,l.y,l.radius,l.r,l.g,l.b);
+    lamps[nearest]=lamps[--count];
+  }
+}
+
+static void PrepareLights(PicaFrame *f) {
+  SceneLighting_AddRoomSources(f);
+  CollectLampSources(f);
+  SceneLighting_Prepare(f);
+}
+
 static bool BuildFrame(PicaFrame *f) {
 #ifdef SM3DS_PHASE_DIAG
   memset(&g_pica_build_timing, 0, sizeof(g_pica_build_timing));
@@ -1049,7 +1130,7 @@ static bool BuildFrame(PicaFrame *f) {
 #ifdef SM3DS_PHASE_DIAG
   uint64_t before = SDL_GetPerformanceCounter();
   /* Include the shared lighting field in preparation diagnostics. */
-  if (f->lighting) SceneLighting_Prepare(f);
+  if (f->lighting) PrepareLights(f);
   if (!Backgrounds(f, 0)) return false;
   uint64_t after = SDL_GetPerformanceCounter();
   g_pica_build_timing.bg_main = after - before;
@@ -1066,7 +1147,7 @@ static bool BuildFrame(PicaFrame *f) {
   g_pica_build_timing.compose = SDL_GetPerformanceCounter() - before;
   return true;
 #else
-  if (f->lighting) SceneLighting_Prepare(f);
+  if (f->lighting) PrepareLights(f);
   return Backgrounds(f, 0) && Objects(f, 0) && SceneLighting_EmitShadows(f, 0) &&
          Backgrounds(f, 1) && Objects(f, 1) && SceneLighting_EmitShadows(f, 1) &&
          Compose(f);
