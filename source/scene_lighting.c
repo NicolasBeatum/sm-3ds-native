@@ -8,7 +8,8 @@ static int Clamp(int x, int low, int high) {
 void SceneLighting_AddLight(SceneLighting *s, int x, int y, int radius,
                             unsigned r, unsigned g, unsigned b) {
   if (!s->enabled || s->count == SCENE_MAX_LIGHTS || radius <= 0) return;
-  s->lights[s->count++] = (SceneLight){x,y,radius,r,g,b};
+  s->lights[s->count++] = (SceneLight){x,y,Clamp(radius,1,256),
+      Clamp(r,0,255),Clamp(g,0,255),Clamp(b,0,255)};
 }
 
 void SceneLighting_Begin(SceneLighting *s, bool enabled, unsigned room,
@@ -17,22 +18,57 @@ void SceneLighting_Begin(SceneLighting *s, bool enabled, unsigned room,
                          unsigned charge) {
   s->count = s->shadowCount = 0;
   s->castShadow = false;
-  s->enabled = enabled && room == 0x91f8 && state == 8;
+  s->enabled = enabled && state == 8;
+  s->ship = room == 0x91f8;
   if (!s->enabled) return;
   s->samusX = samusX - cameraX + (int)origin;
   s->samusY = samusY - cameraY;
   /* Ship hatch and two side lamps, fixed to room coordinates. */
-  SceneLighting_AddLight(s, 1152 - cameraX + (int)origin, 1120 - cameraY,
-                          112, 106, 78, 34);
-  SceneLighting_AddLight(s, 1112 - cameraX + (int)origin, 1156 - cameraY,
-                          72, 74, 52, 20);
-  SceneLighting_AddLight(s, 1192 - cameraX + (int)origin, 1156 - cameraY,
-                          72, 74, 52, 20);
+  if (s->ship) {
+    SceneLighting_AddLight(s, 1152 - cameraX + (int)origin, 1120 - cameraY,
+                            112, 106, 78, 34);
+    SceneLighting_AddLight(s, 1112 - cameraX + (int)origin, 1156 - cameraY,
+                            72, 74, 52, 20);
+    SceneLighting_AddLight(s, 1192 - cameraX + (int)origin, 1156 - cameraY,
+                            72, 74, 52, 20);
+  }
   SceneLighting_AddLight(s, s->samusX, s->samusY - 14,
                           56, 26, 42, 38);
   if (charge >= 16)
     SceneLighting_AddLight(s, s->samusX + 10, s->samusY - 8,
                             48 + Clamp(charge, 0, 60), 88, 100, 62);
+}
+
+void SceneLighting_Prepare(PicaFrame *f) {
+  SceneLighting *s = f->lighting;
+  memset(s->field, 0, sizeof(s->field));
+  memset(s->relief, 0, sizeof(s->relief));
+  /* One shared 8-pixel field for main/sub and BG/OBJ. Compute only inside
+   * each source's screen bounds; division is once per light, never per quad.
+   * Cell centers align with 8x8 tiles; cropped/flipped tiles keep their UVs. */
+  for (unsigned i = 0; i < s->count; i++) {
+    const SceneLight *l = &s->lights[i];
+    int radius2 = l->radius * l->radius;
+    uint32_t reciprocal = (1u << 24) / radius2;
+    int left = Clamp((l->x - l->radius) / 8, 0, (int)f->width / 8);
+    int right = Clamp((l->x + l->radius + 7) / 8, 0, (int)f->width / 8);
+    int top = Clamp((l->y - l->radius) / 8, (int)f->hudEndY / 8,
+                    ((int)f->height + 7) / 8);
+    int bottom = Clamp((l->y + l->radius + 7) / 8, top, ((int)f->height + 7) / 8);
+    for (int y = top; y < bottom; y++) {
+      int dy = y * 8 + 4 - l->y;
+      for (int x = left; x < right; x++) {
+        int dx = x * 8 + 4 - l->x;
+        int distance2 = dx * dx + dy * dy;
+        if (distance2 >= radius2) continue;
+        unsigned weight = ((uint32_t)(radius2 - distance2) * reciprocal) >> 16;
+        weight = (weight * weight) >> 8;
+        s->field[y][x][0] += (l->r * weight) >> 8;
+        s->field[y][x][1] += (l->g * weight) >> 8;
+        s->field[y][x][2] += (l->b * weight) >> 8;
+      }
+    }
+  }
 }
 
 static unsigned TexelLuma(const PicaFrame *f, unsigned slot, int x, int y) {
@@ -55,9 +91,9 @@ void SceneLighting_Tile(PicaFrame *f, unsigned group, unsigned slot,
   if (!object && layer == 2) return;
   if (object && s->castShadow && s->shadowCount < SCENE_MAX_SHADOWS) {
     PicaQuad shadow = *q;
-    /* Offset away from the ship's hatch. Keep the sprite's alpha silhouette.
+    /* Offset away from the ship's hatch, or use a fixed relief elsewhere.
      * Shadows sit between BG2-low and BG1-low, so foreground occludes them. */
-    int dx = s->samusX <= s->lights[0].x ? -10 : 10;
+    int dx = s->ship && s->samusX <= s->lights[0].x ? -10 : 10;
     shadow.x0 += dx; shadow.x1 += dx;
     shadow.y0 += 9; shadow.y1 += 9;
     shadow.depth = 0x7200;
@@ -79,37 +115,39 @@ void SceneLighting_Tile(PicaFrame *f, unsigned group, unsigned slot,
     }
   }
   int x = (q->x0 + q->x1) / 2, y = (q->y0 + q->y1) / 2;
-  int r = object ? 190 : layer == 0 ? 158 : 100;
-  int g = object ? 198 : layer == 0 ? 176 : 126;
-  int b = object ? 210 : layer == 0 ? 202 : 161;
+  /* Other rooms keep their palette hue and more ambient light. This avoids
+   * tinting hot lava rooms blue or making already-dark rooms unreadable. */
+  int r = s->ship ? (object ? 190 : layer == 0 ? 158 : 100) :
+                   (object ? 226 : layer == 0 ? 218 : 184);
+  int g = s->ship ? (object ? 198 : layer == 0 ? 176 : 126) : r;
+  int b = s->ship ? (object ? 210 : layer == 0 ? 202 : 161) : r;
   /* A small luminance gradient gives tile surfaces directional relief.
    * Sample the actual flipped/cropped texture rather than screen tile edges.
    * This is an approximation, not an authored per-pixel normal map. */
   int tx = ((q->u0 + q->u1) / 8) & 7;
   int ty = ((8192 - q->v0 - q->v1) / 16) & 7;
-  int nx = (int)TexelLuma(f, slot, tx - 1, ty) -
-           (int)TexelLuma(f, slot, tx + 1, ty);
-  int ny = (int)TexelLuma(f, slot, tx, ty - 1) -
-           (int)TexelLuma(f, slot, tx, ty + 1);
-  if (q->u1 < q->u0) nx = -nx;
-  if (q->v1 > q->v0) ny = -ny;
-  int relief = Clamp((-nx - ny) / 10, -14, 14);
-  r += relief; g += relief; b += relief;
-  for (unsigned i = 0; i < s->count; i++) {
-    const SceneLight *l = &s->lights[i];
-    int dx = x - l->x, dy = y - l->y;
-    int radius2 = l->radius * l->radius;
-    if (dx < -l->radius || dx > l->radius ||
-        dy < -l->radius || dy > l->radius) continue;
-    int distance2 = dx * dx + dy * dy;
-    if (distance2 >= radius2) continue;
-    int weight = (radius2 - distance2) * 256 / radius2;
-    weight = weight * weight / 256;
-    if (!object && layer == 1) weight = weight * 3 / 4;
-    r += l->r * weight / 256;
-    g += l->g * weight / 256;
-    b += l->b * weight / 256;
+  /* A decoded atlas slot is immutable for this frame. Reuse its relief for
+   * repeated tiles and the second SNES screen; cropped centers are keys too. */
+  uint32_t key = (slot | (tx << 13) | (ty << 16)) + 1;
+  SceneRelief *cached = &s->relief[(key * 2654435761u) >> 23];
+  if (cached->key != key) {
+    int nx = (int)TexelLuma(f, slot, tx - 1, ty) -
+             (int)TexelLuma(f, slot, tx + 1, ty);
+    int ny = (int)TexelLuma(f, slot, tx, ty - 1) -
+             (int)TexelLuma(f, slot, tx, ty + 1);
+    cached->key = key;
+    cached->shade[0] = Clamp((-nx-ny)/10,-14,14);
+    cached->shade[1] = Clamp(( nx-ny)/10,-14,14);
+    cached->shade[2] = Clamp((-nx+ny)/10,-14,14);
+    cached->shade[3] = Clamp(( nx+ny)/10,-14,14);
   }
+  int relief = cached->shade[(q->u1 < q->u0) | ((q->v1 > q->v0) << 1)];
+  r += relief; g += relief; b += relief;
+  const uint16_t *light = s->field[Clamp(y / 8,0,SCENE_FIELD_H-1)]
+                                   [Clamp(x / 8,0,SCENE_FIELD_W-1)];
+  r += !object && layer == 1 ? light[0] * 3 / 4 : light[0];
+  g += !object && layer == 1 ? light[1] * 3 / 4 : light[1];
+  b += !object && layer == 1 ? light[2] * 3 / 4 : light[2];
   q->r = Clamp(r, 0, 255); q->g = Clamp(g, 0, 255); q->b = Clamp(b, 0, 255);
 }
 

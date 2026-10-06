@@ -53,6 +53,37 @@ void PicaAtlasBegin(PicaAtlas *a) {
   a->hits = a->decodes = a->live = 0;
 }
 
+bool PicaAtlasFlush(PicaAtlas *a, const uint32_t *pixels,
+                    PicaClean *clean, void *context) {
+  bool ok = true;
+  /* Most frames modify few tiles. Skip clean 32-tile words instead of
+   * testing all 8,191 slots; keep adjacent dirty tiles in one cache flush.
+   * Slot zero is initialized/flushed with the whole atlas at startup. */
+  for (unsigned i = 1; i < PICA_SLOTS;) {
+    uint32_t bits = a->dirty[i / 32] & (UINT32_MAX << (i & 31));
+    if (!bits) { i = (i | 31) + 1; continue; }
+    unsigned first = (i & ~31u) + __builtin_ctz(bits);
+    i = first;
+    while (i < PICA_SLOTS) {
+      bits = a->dirty[i / 32] >> (i & 31);
+      unsigned n = bits == UINT32_MAX ? 32 : __builtin_ctz(~bits);
+      i += n;
+      if (!n || (i & 31)) break;
+    }
+    if (!clean(context, pixels + first * 64, (i - first) * 64 * 4)) {
+      ok = false;
+      continue; /* Keep these dirty bits for the next frame's retry. */
+    }
+    for (unsigned j = first; j < i;) {
+      unsigned n = Min(32 - (j & 31), i - j);
+      uint32_t mask = (UINT32_MAX >> (32 - n)) << (j & 31);
+      a->dirty[j / 32] &= ~mask;
+      j += n;
+    }
+  }
+  return ok;
+}
+
 static void Remove(PicaAtlas *a, uint32_t key) {
   unsigned i = Hash(key);
   while (a->hash[i] && a->tile[a->hash[i]].key != key)
@@ -295,20 +326,10 @@ static bool TileQuad(PicaFrame *f, unsigned group, unsigned slot,
   int v0 = row * 8 + (vf ? 8 - sy : sy), v1 = v0 + (vf ? -h : h);
   PicaQuad q = {x,y,x+w,y+h,u0*4,4096-v0*8,u1*4,4096-v1*8,
                 depth,255,255,255,alpha};
-  if (f->lighting && f->lighting->enabled)
-    SceneLighting_Tile(f, group, slot, &q);
   return Emit(f, group, q);
 }
 
-static unsigned EqualRun(const PicaFrame *f, unsigned y,
-                         size_t offset, size_t size, unsigned maxRun) {
-  unsigned end = y + 1;
-  const uint8_t *base = (const uint8_t *)&f->lines[y] + offset;
-  while (end < f->height && end - y < maxRun &&
-         !memcmp(base, (const uint8_t *)&f->lines[end] + offset, size))
-    end++;
-  return end - y;
-}
+
 
 static bool HasLayer(const PicaFrame *f, unsigned sub, unsigned mask) {
   for (unsigned y = 0; y < f->height; y++)
@@ -697,9 +718,9 @@ static int ObjectX(const PicaFrame *f, unsigned index, unsigned high,
   return x;
 }
 
-static bool Objects(PicaFrame *f, unsigned sub) {
-  if (!HasLayer(f, sub, 16)) return true;
-  uint16_t active[128], first[128], last[128];
+static void SelectObjects(PicaFrame *f) {
+  uint16_t *active = f->objectActive, *first = f->objectFirst,
+           *last = f->objectLast;
   unsigned activeCount = 0;
   for (unsigned index = 0; index < 256; index += 2) {
     if ((f->memory->oam[index] >> 8) == 0xf0) continue;
@@ -737,8 +758,7 @@ static bool Objects(PicaFrame *f, unsigned sub) {
   }
   for (unsigned y = 0; y < f->height; y++) {
     const PicaLine *p = &f->lines[y];
-    if (p->forcedBlank || !(p->screenEnabled[sub] & 16) ||
-        (sub && !p->addSubscreen)) continue;
+    if (p->forcedBlank) continue;
     int sprites = 33, tiles = 35;
     bool stop = false;
     if (!stableSize) {
@@ -785,11 +805,30 @@ static bool Objects(PicaFrame *f, unsigned sub) {
     }
   }
 
+  f->objectCount = activeCount;
+  f->objectsSelected = true;
+}
+
+static bool ObjectLine(const PicaLine *p, unsigned sub) {
+  return !p->forcedBlank && (p->screenEnabled[sub] & 16) &&
+         (!sub || p->addSubscreen);
+}
+
+static bool Objects(PicaFrame *f, unsigned sub) {
+  if (!HasLayer(f, sub, 16)) return true;
+  /* OAM membership and the SNES sprite/tile limits are screen-independent.
+   * Reuse the selection for main and sub, filtering each screen at emission. */
+  if (!f->objectsSelected) SelectObjects(f);
+  const uint16_t *active = f->objectActive, *first = f->objectFirst,
+                 *last = f->objectLast;
+  unsigned activeCount = f->objectCount;
+  const uint8_t (*columns)[PICA_MAX_LINES] = f->atlas->objectColumns;
+
   for (unsigned item = 0; item < activeCount; item++) {
     unsigned index = active[item];
     for (unsigned y = first[index / 2]; y < last[index / 2];) {
       unsigned mask = columns[index / 2][y];
-      if (!mask) { y++; continue; }
+      if (!mask || !ObjectLine(&f->lines[y], sub)) { y++; continue; }
       const PicaLine *p = &f->lines[y];
       unsigned yy = f->memory->oam[index] >> 8;
       unsigned high = HighOam(f->memory, index);
@@ -801,7 +840,8 @@ static bool Objects(PicaFrame *f, unsigned sub) {
       unsigned h = vf ? 1 + (row & 7) : 8 - (row & 7);
       h = Min(h, last[index / 2] - y);
       for (unsigned dy = 1; dy < h; dy++)
-        if (columns[index / 2][y + dy] != mask) { h = dy; break; }
+        if (columns[index / 2][y + dy] != mask ||
+            !ObjectLine(&f->lines[y + dy], sub)) { h = dy; break; }
       int x = ObjectX(f, index, high, size);
       unsigned base = (attr & 0x100) ? p->objTileAdr2 : p->objTileAdr1;
       unsigned palette = 128 + ((attr >> 9) & 7) * 16;
@@ -978,10 +1018,11 @@ static bool Compose(PicaFrame *f) {
   return true;
 }
 
-bool PicaBuildFrame(PicaFrame *f) {
+static bool BuildFrame(PicaFrame *f) {
 #ifdef SM3DS_PHASE_DIAG
   memset(&g_pica_build_timing, 0, sizeof(g_pica_build_timing));
 #endif
+  f->objectsSelected = false;
   memset(f->quads, 0, sizeof(f->quads));
   f->failure = NULL;
   if (!((f->width == kSnesWidth && f->originX == 0) ||
@@ -1007,6 +1048,8 @@ bool PicaBuildFrame(PicaFrame *f) {
     ExtendEyeBeam(f, f->beamLeft, f->beamRight);
 #ifdef SM3DS_PHASE_DIAG
   uint64_t before = SDL_GetPerformanceCounter();
+  /* Include the shared lighting field in preparation diagnostics. */
+  if (f->lighting) SceneLighting_Prepare(f);
   if (!Backgrounds(f, 0)) return false;
   uint64_t after = SDL_GetPerformanceCounter();
   g_pica_build_timing.bg_main = after - before;
@@ -1023,8 +1066,44 @@ bool PicaBuildFrame(PicaFrame *f) {
   g_pica_build_timing.compose = SDL_GetPerformanceCounter() - before;
   return true;
 #else
+  if (f->lighting) SceneLighting_Prepare(f);
   return Backgrounds(f, 0) && Objects(f, 0) && SceneLighting_EmitShadows(f, 0) &&
          Backgrounds(f, 1) && Objects(f, 1) && SceneLighting_EmitShadows(f, 1) &&
          Compose(f);
 #endif
+}
+
+
+/* Select the emitter once per frame. The ordinary TileQuad path has no
+ * lighting branch, texture sampling or extra callback when the option is off. */
+typedef struct LitEmitter {
+  PicaFrame *frame;
+  PicaEmit *emit;
+  void *context;
+} LitEmitter;
+
+static bool EmitLit(void *context, unsigned group, const PicaQuad *quad) {
+  LitEmitter *e = context;
+  if (group >= 4 || quad->depth == 1)
+    return e->emit(e->context, group, quad);
+  PicaQuad q = *quad;
+  unsigned col = (q.u0 + q.u1) / 64;
+  unsigned row = (8192 - q.v0 - q.v1) / 128;
+  SceneLighting_Tile(e->frame, group, row * (PICA_ATLAS_W / 8) + col, &q);
+  return e->emit(e->context, group, &q);
+}
+
+bool PicaBuildFrame(PicaFrame *f) {
+  SceneLighting *scene = f->lighting;
+  /* Special window effects retain their original brightness and masks. */
+  if (scene && (f->xrayActive || f->extendEyeBeam)) scene->enabled = false;
+  LitEmitter e = {f, f->emit, f->context};
+  bool lit = scene && scene->enabled;
+  if (lit) { f->emit = EmitLit; f->context = &e; }
+  else f->lighting = NULL;
+  bool ok = BuildFrame(f);
+  f->emit = e.emit;
+  f->context = e.context;
+  f->lighting = scene;
+  return ok;
 }

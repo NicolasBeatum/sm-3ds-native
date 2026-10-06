@@ -95,6 +95,7 @@ int main(int argc,char **argv) {
     SceneLighting_AddLight(&lighting,
       (int16_t)(projectile_x_pos[i]-layer1_x_pos)+(int)origin,
       (int16_t)(projectile_y_pos[i]-layer1_y_pos),48,88,62,28);
+  frame.lighting = lighting.enabled ? &lighting : NULL;
   bool ok=PicaBuildFrame(&frame);
   if(!ok) { fprintf(stderr,"PPU model rejected frame: %s\n",frame.failure);return 1; }
   Draw(0,width); Draw(21,width); Draw(1,width);

@@ -1221,7 +1221,7 @@ static void DrawSetupTab(uint8_t *fb, int top) {
     static const char *modes[] = {"FIT", "STRETCHED", "1:1"};
     DrawSetupRow(fb, y, height, "WIDESCREEN", g_widescreen ? "ON" : "OFF", g_widescreen);
     DrawSetupRow(fb, y + step, height, "SCREEN SIZE", modes[g_video_mode], true);
-    DrawSetupRow(fb, y + 2 * step, height, "SHIP LIGHTING",
+    DrawSetupRow(fb, y + 2 * step, height, "LIGHTING",
                  g_scene_lighting ? "ON" : "OFF", g_scene_lighting);
   }
 }

@@ -71,6 +71,11 @@ static bool Clean(const void *p, size_t bytes) {
   return R_SUCCEEDED(GSPGPU_FlushDataCache(p, bytes));
 }
 
+static bool CleanAtlas(void *context, const void *p, size_t bytes) {
+  (void)context;
+  return Clean(p, bytes);
+}
+
 static uint32_t Rgba(unsigned r, unsigned green, unsigned b, unsigned a) {
   return r | (green << 8) | (b << 16) | (a << 24);
 }
@@ -424,7 +429,8 @@ bool PpuGpuFinish(Ppu *p) {
                      .wideRoomWidth=room_width_in_blocks,
                      .wideRoomHeight=room_height_in_blocks,
                      .emit=Emit};
-  SceneLighting_Begin(&g_lighting, BottomScreen_SceneLightingEnabled(),
+  SceneLighting_Begin(&g_lighting,
+      BottomScreen_SceneLightingEnabled() && !time_is_frozen_flag,
       room_ptr, game_state, (int16_t)layer1_x_pos, (int16_t)layer1_y_pos,
       samus_x_pos, samus_y_pos, frame.originX, flare_counter);
   for (unsigned i = 0; i < 10; i++)
@@ -432,7 +438,7 @@ bool PpuGpuFinish(Ppu *p) {
       SceneLighting_AddLight(&g_lighting,
           (int16_t)(projectile_x_pos[i] - layer1_x_pos) + frame.originX,
           (int16_t)(projectile_y_pos[i] - layer1_y_pos), 48, 88, 62, 28);
-  frame.lighting = &g_lighting;
+  frame.lighting = g_lighting.enabled ? &g_lighting : NULL;
   bool ok = !p->gpuInvalidWrite && g.captured == g.height;
   uint32_t roomBlocks =
       (uint32_t)room_width_in_blocks * room_height_in_blocks;
@@ -479,15 +485,7 @@ bool PpuGpuFinish(Ppu *p) {
 #ifdef SM3DS_PHASE_DIAG
   uint64_t upload_before = SDL_GetPerformanceCounter();
 #endif
-  for (unsigned i = 1; i < PICA_SLOTS;) {
-    if (!(g.cache->dirty[i / 32] & (1u << (i & 31)))) { i++; continue; }
-    unsigned first = i++;
-    while (i < PICA_SLOTS && (g.cache->dirty[i / 32] & (1u << (i & 31)))) i++;
-    unsigned bytes = (i - first) * 64 * 4;
-    if (!Clean((uint8_t *)g.atlas.data + first * 64 * 4, bytes)) ok = false;
-    else for (unsigned j = first; j < i; j++)
-      g.cache->dirty[j / 32] &= ~(1u << (j & 31));
-  }
+  if (!PicaAtlasFlush(g.cache, g.atlas.data, CleanAtlas, NULL)) ok = false;
   if (!Clean(g.vertices, g.count * sizeof(Vertex))) ok = false;
 #ifdef SM3DS_PHASE_DIAG
   g_diag_upload_ticks = SDL_GetPerformanceCounter() - upload_before;

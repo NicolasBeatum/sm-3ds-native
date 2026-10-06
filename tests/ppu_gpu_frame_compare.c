@@ -94,7 +94,7 @@ static void Setup(Ppu *p, PicaLine *lines, unsigned width, unsigned variation) {
     PicaLine *l = &lines[y]; memset(l, 0, sizeof(*l));
     l->mode = 1; l->brightness = 15;
     l->screenEnabled[0] = l->screenEnabled[1] = 23;
-    l->objSize = variation == 3 && y > 120 ? 4 : 3;
+    l->objSize = (variation == 3 || variation == 10) && y > 120 ? 4 : 3;
     l->addSubscreen = true; l->mathEnabled = 7;
     for (unsigned layer = 0; layer < 3; ++layer) {
       l->bg[layer].tilemapAdr = 0x4000 + layer * 0x800;
@@ -126,6 +126,12 @@ static void Setup(Ppu *p, PicaLine *lines, unsigned width, unsigned variation) {
    for(unsigned l=0;l<3;l++)lines[y].bg[l].hScroll=y*3;
   }
   if(variation==8)for(unsigned y=0;y<224;y++)for(unsigned l=0;l<3;l++)lines[y].bg[l].hScroll=y*3;
+  if (variation == 9 || variation == 10) for(unsigned y=0;y<224;y++) {
+    lines[y].screenEnabled[0] = (y % 13 < 7) ? 23 : 7;
+    lines[y].screenEnabled[1] = (y % 17 < 11) ? 23 : 7;
+    lines[y].addSubscreen = y % 19 < 13;
+    lines[y].forcedBlank = y % 29 == 0;
+  }
   (void)width;
 }
 int main(void) {
@@ -143,7 +149,7 @@ int main(void) {
          packed[0].vertices && packed[1].vertices);
   for (unsigned widthMode = 0; widthMode < 2; ++widthMode) {
     unsigned width = widthMode ? kWideWidth : kSnesWidth;
-    for (unsigned variation = 0; variation < 9; ++variation) {
+    for (unsigned variation = 0; variation < 11; ++variation) {
       Setup(p, lines, width, variation);
       ReferenceAtlasInit(a[0], pixels[0]); PicaAtlasInit(a[1], pixels[1]);
       PicaFrame f[2];
@@ -187,7 +193,7 @@ int main(void) {
         packed[0].count,packed[1].count);
     }
   }
-  puts("Main and sub color/alpha rasters match across 216 animated frames, including room block side bands.");
+  puts("Main and sub color/alpha rasters match across 264 animated frames, including room block side bands.");
   free(packed[0].vertices); free(packed[1].vertices);
   return 0;
 }

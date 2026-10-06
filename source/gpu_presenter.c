@@ -232,6 +232,10 @@ static void DrawSceneGlow(const TopVideoLayout *layout) {
   for (unsigned i = 0; i < s->count; i++) {
     const SceneLight *l = &s->lights[i];
     float radius = l->radius * 0.55f;
+    if (l->x + radius <= layout->source_x ||
+        l->x - radius >= layout->source_x + layout->source_width ||
+        l->y + radius <= kHudEndLine || l->y - radius >= kSnesHeight)
+      continue;
     C2D_ImageTint tint;
     C2D_PlainImageTint(&tint, C2D_Color32(l->r, l->g, l->b, 65), 1.0f);
     C2D_DrawImageAt(image,

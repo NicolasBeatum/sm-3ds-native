@@ -28,7 +28,7 @@ void RtlApuUnlock(void) {}
 void Die(const char *s) { fprintf(stderr, "%s\n", s); exit(1); }
 
 int main(int argc, char **argv) {
-  if (argc != 4 && argc != 5) { fprintf(stderr,"usage: %s ROM SRAM output-directory [fire|jump|move]\n",argv[0]); return 1; }
+  if (argc != 4 && argc != 5) { fprintf(stderr,"usage: %s ROM SRAM output-directory [fire|jump|move|slot1]\n",argv[0]); return 1; }
   /* Never permit game SRAM writes to the source save. */
   char path[1024];
   snprintf(path,sizeof(path),"%s/preview-only.srm",argv[3]);
@@ -44,17 +44,18 @@ int main(int argc, char **argv) {
   FILE *file = fopen(argv[2], "rb");
   if (!file || fread(g_sram, 1, 8192, file) != 8192) Die("SRAM read failed");
   fclose(file);
-  if (LoadFromSram(1)) Die("Save slot 2 has an invalid checksum");
-  printf("slot 2: area=%u station=%u health=%u\n",area_index,load_station_index,samus_health);
-  selected_save_slot = 1;
+  unsigned slot = argc == 5 && !strcmp(argv[4],"slot1") ? 0 : 1;
+  if (LoadFromSram(slot)) Die("Save slot has an invalid checksum");
+  printf("slot %u: area=%u station=%u health=%u\n",slot+1,area_index,load_station_index,samus_health);
+  selected_save_slot = slot;
   loading_game_state = 5;
   game_state = 6;
   coroutine_state_0 = coroutine_state_1 = coroutine_state_2 = coroutine_state_3 = 0;
   for (unsigned i = 0; i < 1200; i++) RtlRunFrame(0);
   printf("room=%04x state=%u samus=(%u,%u) camera=(%u,%u)\n",
           room_ptr,game_state,samus_x_pos,samus_y_pos,layer1_x_pos,layer1_y_pos);
-  if (room_ptr != 0x91f8 || game_state != 8) Die("Slot 2 did not reach Landing Site gameplay");
-  if (argc == 5) {
+  if (game_state != 8 || (slot == 1 && room_ptr != 0x91f8)) Die("Slot 2 did not reach Landing Site gameplay");
+  if (argc == 5 && slot == 1) {
     unsigned input, frames;
     if (!strcmp(argv[4],"fire")) { input=button_config_shoot_x; frames=10; }
     else if (!strcmp(argv[4],"jump")) { input=button_config_jump_a; frames=12; }

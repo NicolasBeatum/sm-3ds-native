@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #include "src/snes/ppu.h"
 
@@ -106,10 +107,16 @@ typedef struct PicaFrame {
   uint32_t quads[PICA_GROUPS];
   uint16_t bandEnd[PICA_MAX_LINES];
   struct SceneLighting *lighting;
+  uint16_t objectActive[128], objectFirst[128], objectLast[128];
+  unsigned objectCount;
+  bool objectsSelected;
 } PicaFrame;
 
 void PicaAtlasInit(PicaAtlas *atlas, uint32_t *pixels);
 void PicaAtlasBegin(PicaAtlas *atlas);
+typedef bool PicaClean(void *context, const void *data, size_t bytes);
+bool PicaAtlasFlush(PicaAtlas *atlas, const uint32_t *pixels,
+                    PicaClean *clean, void *context);
 void PicaCaptureLine(PicaLine *out, const Ppu *ppu);
 unsigned PicaHudLineCount(const PicaFrame *frame);
 bool PicaBuildFrame(PicaFrame *frame);
