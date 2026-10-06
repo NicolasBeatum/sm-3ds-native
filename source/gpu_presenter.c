@@ -1,4 +1,5 @@
 #include "gpu_presenter.h"
+#include "scene_lighting.h"
 #include "ppu_gpu.h"
 #include "bottom_screen.h"
 #include "wide_config.h"
@@ -24,6 +25,8 @@ static C3D_Tex g_bottom_texture;
 static Tex3DS_SubTexture g_top_subtexture;
 static Tex3DS_SubTexture g_top_gpu_subtexture;
 static Tex3DS_SubTexture g_bottom_subtexture;
+static C3D_Tex g_glow_texture;
+static bool g_glow_ready;
 static bool g_initialized;
 static bool g_frame_active;
 
@@ -192,6 +195,56 @@ bool GpuPresenter_DrawBottom(const uint8_t *pixels, bool upload) {
   return true;
 }
 
+/* A small reusable radial texture adds bloom without reading back the PPU.
+ * Texture bytes are Morton tiled RGBA8 (ABGR in little endian). */
+static void DrawSceneGlow(const TopVideoLayout *layout) {
+  const SceneLighting *s = PpuGpuLighting();
+  if (!s->enabled) return;
+  if (!g_glow_ready) {
+    if (!C3D_TexInit(&g_glow_texture, 64, 64, GPU_RGBA8)) return;
+    uint32_t *pixels = g_glow_texture.data;
+    for (unsigned y = 0; y < 64; y++) for (unsigned x = 0; x < 64; x++) {
+      unsigned ux = x & 7, uy = y & 7;
+      unsigned morton = (ux & 1) | ((uy & 1) << 1) | ((ux & 2) << 1) |
+                        ((uy & 2) << 2) | ((ux & 4) << 2) | ((uy & 4) << 3);
+      float dx = (x - 31.5f) / 32.0f, dy = (y - 31.5f) / 32.0f;
+      float a = 1.0f - dx * dx - dy * dy;
+      unsigned alpha = a > 0 ? a * a * a * 255 : 0;
+      pixels[((y / 8) * 8 + x / 8) * 64 + morton] = 0xffffff00u | alpha;
+    }
+    CleanDataCache(pixels, 64 * 64 * 4);
+    C3D_TexSetFilter(&g_glow_texture, GPU_LINEAR, GPU_LINEAR);
+    C3D_TexSetWrap(&g_glow_texture, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    g_glow_ready = true;
+  }
+  Tex3DS_SubTexture subtex = {64,64,0.0f,1.0f,1.0f,0.0f};
+  C2D_Image image = {&g_glow_texture, &subtex};
+  float sx = (float)layout->width / layout->source_width;
+  float sy = (float)layout->height / kSnesHeight;
+  C2D_Flush();
+  C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE,
+                  GPU_ZERO, GPU_ONE);
+  /* Clip to the playfield: bloom must never illuminate HUD or letterboxing. */
+  C3D_SetScissor(GPU_SCISSOR_NORMAL,
+      240 - layout->y - layout->height, layout->x,
+      240 - layout->y - (int)(kHudEndLine * sy + 0.5f),
+      layout->x + layout->width);
+  for (unsigned i = 0; i < s->count; i++) {
+    const SceneLight *l = &s->lights[i];
+    float radius = l->radius * 0.55f;
+    C2D_ImageTint tint;
+    C2D_PlainImageTint(&tint, C2D_Color32(l->r, l->g, l->b, 65), 1.0f);
+    C2D_DrawImageAt(image,
+        layout->x + (l->x - layout->source_x - radius) * sx,
+        layout->y + (l->y - radius) * sy, 0.0f, &tint,
+        2.0f * radius * sx / 64.0f, 2.0f * radius * sy / 64.0f);
+  }
+  C2D_Flush();
+  C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+  C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA,
+                  GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
+}
+
 bool GpuPresenter_DrawTop(const uint8_t *pixels) {
   if (!g_initialized || !pixels || !C3D_FrameBegin(0))
     return false;
@@ -250,6 +303,7 @@ bool GpuPresenter_DrawTop(const uint8_t *pixels) {
   if (!gpu_ppu)
     ConfigureArgbTextureEnv();
   C2D_Flush();
+  if (gpu_ppu) DrawSceneGlow(&layout);
   unsigned hudLines = gpu_ppu ? PpuGpuHudLines() :
       (game_state >= kGameState_7_MainGameplayFadeIn &&
        game_state <= kGameState_11_LoadingNextRoom ? kHudEndLine : 0);
@@ -295,6 +349,8 @@ void GpuPresenter_Fini(void) {
   C3D_TexDelete(&g_bottom_texture);
   C3D_RenderTargetDelete(g_top_target);
   C3D_TexDelete(&g_top_texture);
+  if (g_glow_ready) C3D_TexDelete(&g_glow_texture);
+  g_glow_ready = false;
   C2D_Fini();
   C3D_Fini();
   g_top_target = NULL;

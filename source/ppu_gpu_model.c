@@ -1,3 +1,4 @@
+#include "scene_lighting.h"
 #include "ppu_gpu_model.h"
 #include "wide_config.h"
 
@@ -294,6 +295,8 @@ static bool TileQuad(PicaFrame *f, unsigned group, unsigned slot,
   int v0 = row * 8 + (vf ? 8 - sy : sy), v1 = v0 + (vf ? -h : h);
   PicaQuad q = {x,y,x+w,y+h,u0*4,4096-v0*8,u1*4,4096-v1*8,
                 depth,255,255,255,alpha};
+  if (f->lighting && f->lighting->enabled)
+    SceneLighting_Tile(f, group, slot, &q);
   return Emit(f, group, q);
 }
 
@@ -802,6 +805,12 @@ static bool Objects(PicaFrame *f, unsigned sub) {
       int x = ObjectX(f, index, high, size);
       unsigned base = (attr & 0x100) ? p->objTileAdr2 : p->objTileAdr1;
       unsigned palette = 128 + ((attr >> 9) & 7) * 16;
+      if (f->lighting) {
+        int dx = x + (int)f->originX - f->lighting->samusX;
+        int dy = (int)y - f->lighting->samusY;
+        f->lighting->castShadow = palette == 192 && dx > -32 && dx < 32 &&
+                                  dy > -40 && dy < 24;
+      }
       unsigned z = ((((attr >> 12) & 3) * 4 + 2) * 16 + 4 +
                     ((attr & 0x800) ? 0 : 2)) << 8;
       WindowSpans win;
@@ -1001,20 +1010,21 @@ bool PicaBuildFrame(PicaFrame *f) {
   if (!Backgrounds(f, 0)) return false;
   uint64_t after = SDL_GetPerformanceCounter();
   g_pica_build_timing.bg_main = after - before;
-  if (!Objects(f, 0)) return false;
+  if (!Objects(f, 0) || !SceneLighting_EmitShadows(f, 0)) return false;
   before = SDL_GetPerformanceCounter();
   g_pica_build_timing.obj_main = before - after;
   if (!Backgrounds(f, 1)) return false;
   after = SDL_GetPerformanceCounter();
   g_pica_build_timing.bg_sub = after - before;
-  if (!Objects(f, 1)) return false;
+  if (!Objects(f, 1) || !SceneLighting_EmitShadows(f, 1)) return false;
   before = SDL_GetPerformanceCounter();
   g_pica_build_timing.obj_sub = before - after;
   if (!Compose(f)) return false;
   g_pica_build_timing.compose = SDL_GetPerformanceCounter() - before;
   return true;
 #else
-  return Backgrounds(f, 0) && Objects(f, 0) && Backgrounds(f, 1) &&
-         Objects(f, 1) && Compose(f);
+  return Backgrounds(f, 0) && Objects(f, 0) && SceneLighting_EmitShadows(f, 0) &&
+         Backgrounds(f, 1) && Objects(f, 1) && SceneLighting_EmitShadows(f, 1) &&
+         Compose(f);
 #endif
 }

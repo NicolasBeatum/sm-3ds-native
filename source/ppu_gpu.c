@@ -1,4 +1,6 @@
 #include "ppu_gpu.h"
+#include "scene_lighting.h"
+#include "bottom_screen.h"
 #include "ppu_gpu_model.h"
 #include "ppu_gpu_vertices.h"
 #include "wide_bounds.h"
@@ -49,6 +51,10 @@ static struct {
   float invWidth, invHeight;
   const char *reason;
 } g;
+
+static SceneLighting g_lighting;
+
+const SceneLighting *PpuGpuLighting(void) { return &g_lighting; }
 
 static WideConfig g_wide_config = {
     .output_width = kSnesWidth,
@@ -159,6 +165,15 @@ static bool DrawLayers(C3D_RenderTarget *target, unsigned sub) {
   C3D_AlphaTest(true, GPU_GREATER, 0);
   C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_ALL);
   DrawRange(sub * 2);
+  if (g.ranges[21 + sub].count) {
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA,
+                    GPU_ONE_MINUS_SRC_ALPHA, GPU_ZERO, GPU_ONE);
+    C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_COLOR);
+    DrawRange(21 + sub);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO,
+                    GPU_ONE, GPU_ZERO);
+    C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_ALL);
+  }
   C3D_StencilTest(true, GPU_NOTEQUAL, 1, 1, 1);
   C3D_StencilOp(GPU_STENCIL_KEEP, GPU_STENCIL_REPLACE, GPU_STENCIL_REPLACE);
   DrawRange(sub * 2 + 1);
@@ -409,6 +424,15 @@ bool PpuGpuFinish(Ppu *p) {
                      .wideRoomWidth=room_width_in_blocks,
                      .wideRoomHeight=room_height_in_blocks,
                      .emit=Emit};
+  SceneLighting_Begin(&g_lighting, BottomScreen_SceneLightingEnabled(),
+      room_ptr, game_state, (int16_t)layer1_x_pos, (int16_t)layer1_y_pos,
+      samus_x_pos, samus_y_pos, frame.originX, flare_counter);
+  for (unsigned i = 0; i < 10; i++)
+    if (projectile_type[i])
+      SceneLighting_AddLight(&g_lighting,
+          (int16_t)(projectile_x_pos[i] - layer1_x_pos) + frame.originX,
+          (int16_t)(projectile_y_pos[i] - layer1_y_pos), 48, 88, 62, 28);
+  frame.lighting = &g_lighting;
   bool ok = !p->gpuInvalidWrite && g.captured == g.height;
   uint32_t roomBlocks =
       (uint32_t)room_width_in_blocks * room_height_in_blocks;
@@ -485,6 +509,7 @@ bool PpuGpuFinish(Ppu *p) {
 
 void PpuGpuCpuFrame(void) {
   g.prepared = g.output = false;
+  g_lighting.enabled = false;
 #ifdef SM3DS_PROFILE
   g_profile_pica_cpu_frames++;
   if (g_wide_config.enabled) g_profile_pica_wide_cpu_frames++;

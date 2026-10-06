@@ -27,3 +27,6 @@ typedef struct PpuGpuTiming {
 } PpuGpuTiming;
 PpuGpuTiming PpuGpuGetTiming(void);
 #endif
+
+struct SceneLighting;
+const struct SceneLighting *PpuGpuLighting(void);

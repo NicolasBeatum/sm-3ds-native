@@ -77,6 +77,11 @@ static bool g_world_touch_active, g_world_touch_moved;
 static int g_world_last_touch_x, g_world_last_touch_y;
 static bool g_hide_main_hud;
 static bool g_widescreen = true;
+#ifdef SM3DS_LIGHTING_TRIAL
+static bool g_scene_lighting = true;
+#else
+static bool g_scene_lighting;
+#endif
 static bool g_status_bar_visible[3] = {true, true, false};
 static bool g_clear_markers_armed;
 static bool g_setup_build_info;
@@ -1216,6 +1221,8 @@ static void DrawSetupTab(uint8_t *fb, int top) {
     static const char *modes[] = {"FIT", "STRETCHED", "1:1"};
     DrawSetupRow(fb, y, height, "WIDESCREEN", g_widescreen ? "ON" : "OFF", g_widescreen);
     DrawSetupRow(fb, y + step, height, "SCREEN SIZE", modes[g_video_mode], true);
+    DrawSetupRow(fb, y + 2 * step, height, "SHIP LIGHTING",
+                 g_scene_lighting ? "ON" : "OFF", g_scene_lighting);
   }
 }
 
@@ -1279,7 +1286,8 @@ void BottomScreen_LoadSettings(const char *path) {
   int value;
   while (fgets(line, sizeof(line), f)) {
     if (sscanf(line, "%63[^=]=%d", key, &value) != 2) continue;
-    if (strcmp(key, "widescreen") == 0) g_widescreen = value != 0;
+    if (strcmp(key, "scene_lighting") == 0) g_scene_lighting = value != 0;
+    else if (strcmp(key, "widescreen") == 0) g_widescreen = value != 0;
     else if (strcmp(key, "hide_main_hud") == 0) g_hide_main_hud = value != 0;
     else if (strcmp(key, "status_map") == 0) g_status_bar_visible[0] = value != 0;
     else if (strcmp(key, "status_items") == 0) g_status_bar_visible[1] = value != 0;
@@ -1347,11 +1355,11 @@ bool BottomScreen_SaveSettings(void) {
   int written = snprintf(text, sizeof(text),
       "widescreen=%d\nhide_main_hud=%d\nstatus_map=%d\n"
       "status_items=%d\nstatus_setup=%d\nroom_zoom=%d\nworld_zoom=%d\n"
-      "world_labels=%d\nmap_buttons=%d\nhud_items=%d\nhud_numbers_horizontal=%d\nxray_map_button=%d\nvideo_mode=%d\n",
+      "world_labels=%d\nmap_buttons=%d\nhud_items=%d\nhud_numbers_horizontal=%d\nxray_map_button=%d\nvideo_mode=%d\nscene_lighting=%d\n",
       g_widescreen, g_hide_main_hud, g_status_bar_visible[0],
       g_status_bar_visible[1], g_status_bar_visible[2],
       g_room_zoom, g_world_zoom, g_world_labels, g_map_buttons_visible,
-      g_hud_items_mode, g_hud_numbers_horizontal, g_xray_map_button, g_video_mode);
+      g_hud_items_mode, g_hud_numbers_horizontal, g_xray_map_button, g_video_mode, g_scene_lighting);
   if (written <= 0 || written >= sizeof(text)) return false;
   if (!g_settings_thread) return WriteSettings(g_settings_path, text);
   /* The worker only sees an immutable snapshot. Rapid zoom taps coalesce
@@ -1635,7 +1643,7 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
     int row_y = top + (compact ? 47 : 53);
     int step = SetupRowStep(compact);
     int height = SetupRowHeight(compact);
-    int rows = g_setup_group == kSetupHud ? 6 : g_setup_group == kSetupMap ? 4 : 2;
+    int rows = g_setup_group == kSetupHud ? 6 : g_setup_group == kSetupMap ? 4 : 3;
     if (x >= 13 && x < 307 && y >= row_y) {
       int row = (y - row_y) / step;
       if (row < rows && y < row_y + row * step + height) {
@@ -1654,7 +1662,8 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
           } else g_clear_markers_armed = true;
         } else {
           if (!row) g_widescreen = !g_widescreen;
-          else g_video_mode = (g_video_mode + 1) % 3;
+          else if (row == 1) g_video_mode = (g_video_mode + 1) % 3;
+          else g_scene_lighting = !g_scene_lighting;
         }
         BottomScreen_SaveSettings();
       }
@@ -1763,3 +1772,5 @@ bool BottomScreen_WidescreenEnabled(void) {
 }
 
 enum BottomScreenVideoMode BottomScreen_VideoMode(void) { return g_video_mode; }
+
+bool BottomScreen_SceneLightingEnabled(void) { return g_scene_lighting; }

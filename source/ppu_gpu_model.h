@@ -12,7 +12,7 @@ enum {
   PICA_HASH = 16384,
   PICA_MAX_LINES = 240,
   PICA_MAX_VERTICES = 174760, /* Same 43,690 quads, four shared vertices each. */
-  PICA_GROUPS = 21,
+  PICA_GROUPS = 23, /* Two optional background shadow passes. */
 };
 
 #ifdef SM3DS_PHASE_DIAG
@@ -105,6 +105,7 @@ typedef struct PicaFrame {
   const char *failure;
   uint32_t quads[PICA_GROUPS];
   uint16_t bandEnd[PICA_MAX_LINES];
+  struct SceneLighting *lighting;
 } PicaFrame;
 
 void PicaAtlasInit(PicaAtlas *atlas, uint32_t *pixels);

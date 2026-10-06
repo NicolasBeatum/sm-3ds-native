@@ -27,3 +27,5 @@ void BottomScreen_DrawRomSelector(const char *const *rows, int row_count,
                                   int selected, int total, const char *message);
 void BottomScreen_DrawRomSelectorTop(void);
 void BottomScreen_ShowNotice(const char *message, uint64_t until_ms);
+
+bool BottomScreen_SceneLightingEnabled(void);
