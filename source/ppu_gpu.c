@@ -531,7 +531,13 @@ PpuGpuTiming PpuGpuGetTiming(void) {
                         g_pica_build_timing.bg_sub,
                         g_pica_build_timing.obj_sub,
                         g_pica_build_timing.compose,
-                        g_diag_upload_ticks};
+                        g_diag_upload_ticks,
+                        g_pica_build_timing.light_prepare,
+                        g_pica_build_timing.shadow_submit,
+                        g_pica_build_timing.light_sources,
+                        g_pica_build_timing.shadow_quads,
+                        g_pica_build_timing.lighting_applied,
+                        g_pica_build_timing.light_field_rebuilt};
 }
 #endif
 

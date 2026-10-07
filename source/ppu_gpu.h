@@ -24,6 +24,9 @@ const char *PpuGpuReason(void);
 #ifdef SM3DS_PHASE_DIAG
 typedef struct PpuGpuTiming {
   uint64_t bg_main, obj_main, bg_sub, obj_sub, compose, upload;
+  uint64_t light_prepare, shadow_submit;
+  unsigned light_sources, shadow_quads;
+  bool lighting_applied, light_field_rebuilt;
 } PpuGpuTiming;
 PpuGpuTiming PpuGpuGetTiming(void);
 #endif

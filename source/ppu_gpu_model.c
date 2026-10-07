@@ -1034,6 +1034,19 @@ static void PrepareLights(PicaFrame *f) {
   SceneLighting_Prepare(f);
 }
 
+#ifdef SM3DS_PHASE_DIAG
+/* Time a whole shadow pass, never individual tiles or vertices. Silhouette
+ * creation remains inside the OBJ phases and the full model-build span. */
+static bool EmitTimedShadows(PicaFrame *f, unsigned sub) {
+  if (!f->lighting) return true;
+  uint64_t before = SDL_GetPerformanceCounter();
+  bool ok = SceneLighting_EmitShadows(f, sub);
+  g_pica_build_timing.shadow_submit += SDL_GetPerformanceCounter() - before;
+  g_pica_build_timing.shadow_quads += f->quads[21 + sub];
+  return ok;
+}
+#endif
+
 static bool BuildFrame(PicaFrame *f) {
 #ifdef SM3DS_PHASE_DIAG
   memset(&g_pica_build_timing, 0, sizeof(g_pica_build_timing));
@@ -1065,17 +1078,22 @@ static bool BuildFrame(PicaFrame *f) {
 #ifdef SM3DS_PHASE_DIAG
   uint64_t before = SDL_GetPerformanceCounter();
   /* Include the shared lighting field in preparation diagnostics. */
-  if (f->lighting) PrepareLights(f);
+  if (f->lighting) {
+    PrepareLights(f);
+    g_pica_build_timing.light_prepare = SDL_GetPerformanceCounter() - before;
+    g_pica_build_timing.lighting_applied = true;
+    g_pica_build_timing.light_sources = f->lighting->count;
+  }
   if (!Backgrounds(f, 0)) return false;
   uint64_t after = SDL_GetPerformanceCounter();
   g_pica_build_timing.bg_main = after - before;
-  if (!Objects(f, 0) || !SceneLighting_EmitShadows(f, 0)) return false;
+  if (!Objects(f, 0) || !EmitTimedShadows(f, 0)) return false;
   before = SDL_GetPerformanceCounter();
   g_pica_build_timing.obj_main = before - after;
   if (!Backgrounds(f, 1)) return false;
   after = SDL_GetPerformanceCounter();
   g_pica_build_timing.bg_sub = after - before;
-  if (!Objects(f, 1) || !SceneLighting_EmitShadows(f, 1)) return false;
+  if (!Objects(f, 1) || !EmitTimedShadows(f, 1)) return false;
   before = SDL_GetPerformanceCounter();
   g_pica_build_timing.obj_sub = before - after;
   if (!Compose(f)) return false;

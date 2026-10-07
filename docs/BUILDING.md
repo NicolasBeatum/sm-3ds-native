@@ -90,6 +90,31 @@ Recent diagnostic builds further separate main/sub background and object work,
 color composition, and vertex/atlas upload. These timings are recorded only
 for frames that actually use the PICA renderer.
 
+Schema v5 adds lighting diagnostics to PHASE_DIAG builds. `frame-times.csv`
+records requested/applied/profiled lighting separately, source/shadow/glow
+counts, whether the color grid was rebuilt, `light_prepare_us`,
+`shadow_submit_us`, `glow_submit_us`, and `model_build_us`. Preparation includes
+room emitters, ambient tint, projection and color-grid cache lookup/rebuild.
+Shadow submission excludes silhouette creation (inside OBJ/model build).
+Glow submission includes the first-use texture initialization, if needed.
+All these are CPU wall spans: preparation/shadows overlap the PPU phases and
+glow submission overlaps the top-screen phase. Do not add them to frame work
+or interpret them as isolated GPU time. The full model build includes tile
+color lookup and silhouette creation; compare matched ON/OFF captures to
+measure their additional cost.
+
+`info.txt` includes recent/session lighting averages and cumulative
+`lighting_on_*` / `lighting_off_*` GPU-gameplay cohorts. These cohorts mix
+locations and viewport modes, so they do not by themselves prove an overhead
+percentage. Frames with lighting requested but suppressed by a special effect
+are excluded from the OFF baseline; CPU fallbacks/unprofiled frames are also
+excluded. Compare at the same room, Samus position, camera, viewport and input:
+set **SETUP → VIDEO → LIGHTING ON**, return to gameplay for ten seconds and
+hold **L + R + A**; repeat with **LIGHTING OFF** without moving. Using the chord
+keeps the recent window in gameplay. Repeat while moving along the same route
+and in lava/door-heavy rooms. Lighting measurements use fixed RAM, no per-tile
+clock reads and no SD writes from the rendering path.
+
 Optional build switches:
 
 | Variable / define | Purpose |

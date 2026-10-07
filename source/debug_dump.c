@@ -100,6 +100,7 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
       "samus_x=%u\nsamus_y=%u\nsamus_health=%u\n"
       "widescreen=%u\nhide_main_hud=%u\nvideo_mode=%u\n"
       "top_sampling=nearest-biased-v1\n"
+      "lighting_model=cached-color-grid-16px-verified-emitters-v1\n"
       "wram_file=memory.wram\nsram_file=save.sram\n",
       dump_id, rom_name ? rom_name : "unknown", (unsigned long)frame_number,
       APP_VERSION, SM3DS_BUILD_FLAGS,

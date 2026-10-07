@@ -715,6 +715,7 @@ int main(int argc, char** argv) {
         game_state <= kGameState_11_LoadingNextRoom);
     RtlSetSpriteViewportMargin(frameViewport.origin_x);
     PpuGpuSetWideConfig(frameViewport);
+    bool frameLightingRequested = BottomScreen_SceneLightingEnabled();
     uint8 is_replay = RtlRunFrame(inputs);
     uint64_t afterGame = SDL_GetPerformanceCounter();
     bool pica_frame = PpuGpuOutputActive();
@@ -790,7 +791,20 @@ int main(int argc, char** argv) {
       FrameDiagnostics_RecordPpuDetail(
           timing.bg_main, timing.obj_main, timing.bg_sub, timing.obj_sub,
           timing.compose, timing.upload);
+      GpuGlowTiming glow = gpu_frame ? GpuPresenter_GetGlowTiming() : (GpuGlowTiming){0};
+      FrameDiagnostics_RecordLighting(frameLightingRequested,
+          timing.lighting_applied, true, timing.light_prepare,
+          timing.shadow_submit, glow.submit_ticks,
+          timing.bg_main + timing.obj_main + timing.bg_sub + timing.obj_sub + timing.compose,
+          timing.light_sources, timing.shadow_quads, glow.quads,
+          timing.light_field_rebuilt);
+    } else {
+      FrameDiagnostics_RecordLighting(frameLightingRequested, false, false,
+          0, 0, 0, 0, 0, 0, 0, false);
     }
+#else
+    FrameDiagnostics_RecordLighting(frameLightingRequested, false, false,
+        0, 0, 0, 0, 0, 0, 0, false);
 #endif
 
 #ifdef SM3DS_PROFILE

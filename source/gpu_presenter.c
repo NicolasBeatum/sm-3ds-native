@@ -10,6 +10,11 @@
 #include <3ds.h>
 #include <citro2d.h>
 #include <stddef.h>
+#ifdef SM3DS_PHASE_DIAG
+#include "SDL2/SDL.h"
+static GpuGlowTiming g_glow_timing;
+GpuGlowTiming GpuPresenter_GetGlowTiming(void) { return g_glow_timing; }
+#endif
 
 enum {
   kTextureWidth = 256,
@@ -242,6 +247,9 @@ static void DrawSceneGlow(const TopVideoLayout *layout) {
         layout->x + (l->x - layout->source_x - radius) * sx,
         layout->y + (l->y - radius) * sy, 0.0f, &tint,
         2.0f * radius * sx / 64.0f, 2.0f * radius * sy / 64.0f);
+#ifdef SM3DS_PHASE_DIAG
+    g_glow_timing.quads++;
+#endif
   }
   C2D_Flush();
   C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
@@ -250,6 +258,9 @@ static void DrawSceneGlow(const TopVideoLayout *layout) {
 }
 
 bool GpuPresenter_DrawTop(const uint8_t *pixels) {
+#ifdef SM3DS_PHASE_DIAG
+  g_glow_timing = (GpuGlowTiming){0};
+#endif
   if (!g_initialized || !pixels || !C3D_FrameBegin(0))
     return false;
   g_frame_active = true;
@@ -307,7 +318,16 @@ bool GpuPresenter_DrawTop(const uint8_t *pixels) {
   if (!gpu_ppu)
     ConfigureArgbTextureEnv();
   C2D_Flush();
-  if (gpu_ppu) DrawSceneGlow(&layout);
+  if (gpu_ppu) {
+#ifdef SM3DS_PHASE_DIAG
+    uint64_t glow_before = SDL_GetPerformanceCounter();
+#endif
+    DrawSceneGlow(&layout);
+#ifdef SM3DS_PHASE_DIAG
+    if (PpuGpuLighting()->enabled)
+      g_glow_timing.submit_ticks = SDL_GetPerformanceCounter() - glow_before;
+#endif
+  }
   unsigned hudLines = gpu_ppu ? PpuGpuHudLines() :
       (game_state >= kGameState_7_MainGameplayFadeIn &&
        game_state <= kGameState_11_LoadingNextRoom ? kHudEndLine : 0);

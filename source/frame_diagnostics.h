@@ -23,6 +23,15 @@ void FrameDiagnostics_RecordScene(uint16_t state_value, uint16_t room,
                                   uint16_t map_x, uint16_t map_y,
                                   uint16_t scroll_x, uint16_t scroll_y,
                                   bool bottom_redrawn);
+/* CPU wall spans are nested in existing PPU/top timings, not additional
+ * frame work. Model build includes tile shading and silhouette creation. */
+void FrameDiagnostics_RecordLighting(bool requested, bool applied, bool profiled,
+                                     uint32_t prepare_ticks,
+                                     uint32_t shadow_submit_ticks,
+                                     uint32_t glow_submit_ticks,
+                                     uint32_t model_build_ticks,
+                                     unsigned sources, unsigned shadow_quads,
+                                     unsigned glow_quads, bool field_rebuilt);
 
 /* Writes session/recent totals and recent individual samples at dump time. */
 bool FrameDiagnostics_WriteSummary(FILE *out);

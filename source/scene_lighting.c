@@ -235,6 +235,9 @@ void SceneLighting_Prepare(PicaFrame *f) {
     key.base[2][0]=188; key.base[2][1]=196; key.base[2][2]=208;
   }
   if (s->fieldValid && !memcmp(&key,&s->fieldKey,sizeof(key))) return;
+#ifdef SM3DS_PHASE_DIAG
+  g_pica_build_timing.light_field_rebuilt = true;
+#endif
   memcpy(&s->fieldKey,&key,sizeof(key)); s->fieldValid=true;
   uint16_t field[SCENE_FIELD_H][SCENE_FIELD_W][3]={0};
   unsigned cols=(f->width+SCENE_FIELD_CELL-1)>>SCENE_FIELD_SHIFT;

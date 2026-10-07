@@ -1,5 +1,46 @@
 # Global lighting and depth trial
 
+## Hardware lighting measurements (schema v5)
+
+`output-lighting-diagnostics-trial/` extends the lean trial with lighting
+diagnostics; visual behavior, frame limiter, game logic and the 30% system-core
+allocation are unchanged. The earlier CIA only reported lighting preparation
+inside `bg_main` and shading/shadow creation inside background/object phases.
+It could support matched total-render ON/OFF comparisons, but did not identify
+the lighting mode or split out preparation, shadows and glow submission.
+
+New `info.txt` and `frame-times.csv` entries identify applied lighting, source
+counts, shadow/glow quads, grid reuse/rebuild, preparation and submission CPU
+spans, plus the whole model-build span. Recent data covers 120 rendered frames;
+session data keeps cumulative ON/OFF GPU-gameplay cohorts. These timings are
+nested in existing PPU/top phases. They are not an isolated GPU timer and do
+not isolate the per-quad color lookup or silhouette creation. Measure their
+extra cost using ON/OFF captures in the same room/position/viewport, as
+described in `docs/BUILDING.md`; global session cohorts can mix scenes.
+
+Only a few clock reads are added per lit frame, with no per-tile timers, extra
+render passes or SD writes from rendering. Unprofiled/CPU-fallback samples are
+marked unavailable; ON requested but suppressed by X-ray/fades is not used as
+an OFF baseline. Diagnostic regression tests cover clock conversion, cohort
+filtering, recent-ring eviction and retention of session totals.
+
+Verification: frame-diagnostics and model-lighting diagnostics regressions,
+existing lighting/environment/widescreen tests, and 22 native-capture/viewport
+pairs with ten cold/warm frames each. Instrumented and ordinary model builds
+emit identical quad bytes in those captures; cache-rebuild and shadow counters
+agree with actual model output. FULL_NATIVE/LTO 3DSX and CIA builds pass. Actual
+Old 3DS timing values still require user dumps.
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror tests/frame_diagnostics_test.c \
+  source/frame_diagnostics.c -o /tmp/sm-frame-diagnostics-test
+/tmp/sm-frame-diagnostics-test
+cc -O2 -w -DSM3DS_PHASE_DIAG -Itests/profile_stubs -iquote sm -Isource \
+  tests/lighting_diagnostics_test.c source/ppu_gpu_model.c source/scene_lighting.c \
+  -o /tmp/sm-light-diagnostics-test
+/tmp/sm-light-diagnostics-test
+```
+
 Branch: `codex/super-metroid-lighting-depth`, based on `b5d38d0` (the
 resume/session-log branch). Reference video:
 https://www.youtube.com/watch?v=IMEYEe3Smoc (PixelRamp / Life2Build).
