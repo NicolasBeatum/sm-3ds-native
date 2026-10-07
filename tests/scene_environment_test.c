@@ -49,6 +49,28 @@ int main(void) {
     assert(scene.count==2 && scene.lights[1].x==112 && scene.lights[1].y==88);
   }
   Begin();
+  /* Solid walls and isolated low graphics must not create cap lights. */
+  for (unsigned i=0;i<16*14;i++) blocks[i]=0x8000;
+  SceneLighting_AddRoomSources(&f); assert(scene.count==1);
+  Begin(); blocks[5*16+1]=0xc00c;
+  SceneLighting_AddRoomSources(&f); assert(scene.count==1);
+  /* Blue door opening frames retain their emitter until the cap disappears. */
+  Begin(); blocks[5*16+1]=0x840d; blocks[6*16+1]=0x842d;
+  blocks[7*16+1]=0x8c2d; blocks[8*16+1]=0x8c0d;
+  SceneLighting_AddRoomSources(&f); assert(scene.count==2 && scene.lights[1].b>scene.lights[1].r);
+  /* A complete animated horizontal cap is valid; vertical middle tiles
+   * cannot masquerade as a horizontal anchor. */
+  Begin(); blocks[5*16+5]=0x843d; blocks[5*16+6]=0x843c;
+  blocks[5*16+7]=0x803c; blocks[5*16+8]=0x803d;
+  SceneLighting_AddRoomSources(&f); assert(scene.count==2 && scene.lights[1].x==112);
+  Begin();
+  for (unsigned x=1;x<=13;x+=6) {
+    blocks[5*16+x]=0xc00c; blocks[6*16+x]=0xd02c;
+    blocks[7*16+x]=0xd82c; blocks[8*16+x]=0xd80c;
+  }
+  SceneLighting_AddRoomSources(&f);
+  assert(scene.count==3 && scene.lights[1].x==120 && scene.lights[2].x==216);
+  Begin();
   /* Fully open blue cap animation graphics must not emit. */
   blocks[5*16+1]=0x800f; blocks[6*16+1]=0x002f;
   SceneLighting_AddRoomSources(&f); assert(scene.count==1);
@@ -70,20 +92,6 @@ int main(void) {
   SceneLighting_AddRoomSources(&f); assert(scene.lights[1].y>=32);
   for(unsigned i=0;i<20;i++) SceneLighting_AddLight(&scene,128,100,48,100,80,40);
   SceneLighting_AddRoomSources(&f); assert(scene.count==SCENE_MAX_LIGHTS);
-  /* Small colored cores emit; flat bright walls and white metal do not. */
-  Begin();
-  for(unsigned i=0;i<8;i++) pixels[64+i]=0x60f030ff;
-  SceneEmission e=SceneLighting_Emission(&f,1);
-  assert(e.g>e.r && e.g>e.b);
-  for(unsigned i=0;i<64;i++) pixels[128+i]=0xf0f0f0ff;
-  e=SceneLighting_Emission(&f,2); assert(!e.r && !e.g && !e.b);
-  for(unsigned i=0;i<64;i++) pixels[192+i]=0x60f030ff;
-  e=SceneLighting_Emission(&f,3); assert(!e.r && !e.g && !e.b);
-  for(unsigned i=0;i<8;i++) pixels[256+i]=0xffffffff;
-  e=SceneLighting_Emission(&f,4); assert(!e.r && !e.g && !e.b);
-  /* Palette changes are reclassified on the next frame. */
-  memset(pixels+64,0,64*4); Begin();
-  e=SceneLighting_Emission(&f,1); assert(!e.r && !e.g && !e.b);
   static Ppu p;
   static PicaLine lines[224];
   Begin(); f.memory=&p; f.lines=lines;
@@ -91,8 +99,8 @@ int main(void) {
   scene.liquidType=4; scene.liquidY=180;
   SceneLighting_AddRoomSources(&f);
   assert(scene.lights[1].g>scene.lights[1].r && scene.lights[1].g>scene.lights[1].b);
-  /* The CPU saves work by retaining classification and sampled lamp locations.
-   * Palette, scroll/window and room changes must still invalidate immediately. */
+  /* A small bright colored texture must never become an emitter, including
+   * palette/VRAM animation and atlas reinitialization. Ambient color remains. */
   static PicaAtlas atlas;
   memset(&p,0,sizeof(p)); memset(lines,0,sizeof(lines));
   for (unsigned y=0;y<224;y++) {
@@ -100,38 +108,16 @@ int main(void) {
     lines[y].bg[0].tilemapAdr=0x4000;
   }
   for (unsigned i=0;i<1024;i++) p.vram[0x4000+i]=1;
-  p.vram[16]=0xff; p.cgram[1]=31<<5; /* Eight green core pixels. */
+  p.vram[16]=0xff; p.cgram[1]=31<<5;
   f.width=f.worldRight=256; f.worldLeft=0; f.atlas=&atlas; f.emit=Accept;
   Begin(); PicaAtlasInit(&atlas,pixels); Frame(&f);
-  assert(scene.lampCount==2 && scene.lamps[0].g>scene.lamps[0].r);
-  assert(scene.ambient[1][1]>101 && scene.ambient[1][0]<88);
-  assert(sizeof(PicaTile)==80); /* Classification consumes old padding only. */
-  unsigned revision=atlas.contentRevision;
-  Frame(&f); assert(scene.lampAge==1 && !atlas.decodes &&
-      atlas.contentRevision==revision);
-  Frame(&f); assert(scene.lampAge==2);
-  Frame(&f); assert(scene.lampAge==3);
-  Frame(&f); assert(scene.lampAge==0);
-  p.cgram[1]=(31<<10)|(23<<5); Frame(&f); /* Bright cyan/blue core. */
-  assert(scene.lampAge==0 && scene.lamps[0].b>scene.lamps[0].g &&
-      atlas.contentRevision!=revision);
-  assert(scene.ambient[1][2]-121>scene.ambient[1][1]-101);
-  for (unsigned y=0;y<224;y++) lines[y].bg[0].hScroll=8;
-  Frame(&f); assert(scene.lampAge==0);
-  Frame(&f); assert(scene.lampAge==1);
-  for (unsigned y=0;y<224;y++) {
-    lines[y].screenWindowed[0]=1; lines[y].windowsel=2;
-    lines[y].window1left=0; lines[y].window1right=255;
-  }
-  Frame(&f); assert(scene.lampAge==0 && !scene.lampCount);
-  /* Undo the window and animate the core into a broad bright wall: no light
-   * survives after a reclassification, including reuse of atlas storage. */
-  for (unsigned y=0;y<224;y++) lines[y].screenWindowed[0]=0;
+  assert(scene.count==1 && scene.ambient[1][1]>101 && scene.ambient[1][0]<88);
+  assert(sizeof(PicaTile)==80);
+  Frame(&f); assert(scene.count==1 && !atlas.decodes);
+  p.cgram[1]=(31<<10)|(23<<5); Frame(&f);
+  assert(scene.count==1 && scene.ambient[1][2]-121>scene.ambient[1][1]-101);
   for (unsigned i=0;i<8;i++) p.vram[16+i]=0xff;
-  Frame(&f); assert(!scene.lampCount);
-  revision=atlas.contentRevision;
-  PicaAtlasInit(&atlas,pixels);
-  assert(atlas.contentRevision!=revision);
-  Frame(&f); assert(!scene.lampCount);
-  puts("Environment: live colored caps, opened doors, lava/acid/water, bounds, light budget and lamp cores passed.");
+  Frame(&f); assert(scene.count==1);
+  PicaAtlasInit(&atlas,pixels); Frame(&f); assert(scene.count==1);
+  puts("Environment: colored caps, opened doors, liquids, bounds and no texture-generated lights passed.");
 }

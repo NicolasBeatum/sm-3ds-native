@@ -47,8 +47,8 @@ typedef struct PicaTile {
   uint32_t key, checked, used;
   uint16_t source[16], palette[16];
   bool valid, opaque;
-  /* RGB555 + valid bit. Uses the existing two bytes of tile padding. */
-  uint16_t emission;
+  /* Preserve the atlas layout; lighting no longer classifies texture pixels. */
+  uint16_t reserved;
 } PicaTile;
 
 typedef struct PicaAtlas {

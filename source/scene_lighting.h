@@ -2,42 +2,44 @@
 #include "ppu_gpu_model.h"
 
 enum { SCENE_MAX_LIGHTS = 8, SCENE_MAX_SHADOWS = 128,
-       SCENE_FIELD_W = 50, SCENE_FIELD_H = (PICA_MAX_LINES + 7) / 8 };
+       SCENE_FIELD_SHIFT = 4, SCENE_FIELD_CELL = 1 << SCENE_FIELD_SHIFT,
+       SCENE_FIELD_W = (400 + SCENE_FIELD_CELL - 1) / SCENE_FIELD_CELL,
+       SCENE_FIELD_H = (PICA_MAX_LINES + SCENE_FIELD_CELL - 1) / SCENE_FIELD_CELL };
 typedef struct SceneLight {
   int x, y, radius;
   uint8_t r, g, b;
 } SceneLight;
-typedef struct SceneRelief {
-  uint32_t key, revision;
-  int8_t shade[4];
-} SceneRelief;
-typedef struct SceneEmission {
-  uint32_t key;
-  uint8_t r, g, b;
-} SceneEmission;
-/* Initialize to zero once; persistent caches are validated by atlas/view state. */
+/* Zero-initialized key has no dependence on atlas buffer addresses. */
+typedef struct SceneFieldKey {
+  int lights[SCENE_MAX_LIGHTS][6];
+  unsigned count, width, height, hudEndY;
+  uint8_t base[3][3];
+} SceneFieldKey;
+/* Initialize to zero once; colors are rebuilt only when this key changes. */
 typedef struct SceneLighting {
-  bool enabled, castShadow;
+  bool enabled, castShadow, ship, fieldValid;
   int samusX, samusY;
-  unsigned count, shadowCount, environmentStart;
+  unsigned count, shadowCount, environmentStart, room;
   SceneLight lights[SCENE_MAX_LIGHTS];
   PicaQuad shadows[SCENE_MAX_SHADOWS];
-  bool ship;
   int shadowX, shadowY;
-  uint16_t field[SCENE_FIELD_H][SCENE_FIELD_W][3];
-  SceneRelief relief[512];
-  PicaAtlas *reliefAtlas[2];
-  unsigned reliefBank;
   unsigned liquidType;
   int liquidY;
-  SceneEmission emission[256];
   uint8_t ambient[2][3];
-  unsigned room, lampCount, lampAge;
-  uint32_t lampSignature;
-  bool lampValid;
-  SceneLight lamps[2];
-  uint16_t lampPalette[128];
+  /* Finished BG1/BG2/OBJ modulation colors, shared by both SNES screens. */
+  uint8_t color[3][SCENE_FIELD_H][SCENE_FIELD_W][3];
+  SceneFieldKey fieldKey;
 } SceneLighting;
+
+/* The model has already clipped these quads to the viewport. Backgrounds use
+ * this lookup directly; only objects need the separate shadow routine. */
+static inline void SceneLighting_ApplyColor(const SceneLighting *s,
+                                            unsigned layer, PicaQuad *q) {
+  unsigned x=(q->x0+q->x1)>>(SCENE_FIELD_SHIFT+1);
+  unsigned y=(q->y0+q->y1)>>(SCENE_FIELD_SHIFT+1);
+  const uint8_t *color=s->color[layer][y][x];
+  q->r=color[0]; q->g=color[1]; q->b=color[2];
+}
 
 /* Gameplay lighting in every room. Coordinates include the widescreen origin.
  * Fixed ship lamps are added only in Landing Site. */
@@ -52,8 +54,6 @@ void SceneLighting_Prepare(PicaFrame *frame);
 void SceneLighting_Ambient(PicaFrame *frame);
 /* Liquid Y is screen-relative; room blocks identify the live door caps. */
 void SceneLighting_AddRoomSources(PicaFrame *frame);
-/* Approximate small luminous cores, excluding broad bright wall surfaces. */
-SceneEmission SceneLighting_Emission(PicaFrame *frame, unsigned slot);
 void SceneLighting_Tile(PicaFrame *frame, unsigned group, unsigned slot,
                         PicaQuad *quad);
 bool SceneLighting_EmitShadows(PicaFrame *frame, unsigned sub);

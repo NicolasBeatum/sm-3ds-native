@@ -23,8 +23,7 @@ void SceneLighting_Begin(SceneLighting *s, bool enabled, unsigned room,
   s->enabled = enabled && state == 8;
   s->ship = room == 0x91f8;
   s->room = room;
-  if (!s->enabled) { s->lampValid=false; return; }
-  memset(s->emission,0,sizeof(s->emission));
+  if (!s->enabled) { s->fieldValid=false; return; }
   const uint8_t interior[2][3]={{150,158,170},{88,101,121}};
   memcpy(s->ambient,interior,sizeof(interior));
   s->samusX = samusX - cameraX + (int)origin;
@@ -95,82 +94,52 @@ void SceneLighting_AddRoomSources(PicaFrame *f) {
                  0, f->wideRoomWidth);
   int y0 = Clamp((room->cameraY + (int)f->hudEndY - 64)/16, 0, f->wideRoomHeight);
   int y1 = Clamp((room->cameraY + (int)f->height + 79)/16, 0, f->wideRoomHeight);
-  SceneLight doors[16];
-  int bounds[16][4];
+  /* A lone low block ID (notably ordinary solid 0x8000) is not a door.
+   * Validate the complete four-block cap and its flips from bank-84 draw
+   * definitions. Closed bodies use D/5; opening frames use type 8. */
+  SceneLight doors[2]={{0}}; int distance[2]={0x7fffffff,0x7fffffff};
   unsigned count=0;
-  for (int y=y0; y<y1; y++) for (int x=x0; x<x1; x++) {
-    unsigned block = room->blocks[y*f->wideRoomWidth+x];
-    unsigned id = block & 0x3ff, type=block>>12;
-    if (id>=0x40 || (id&3)==3 ||
-        (type!=8 && type!=12 && type!=13 && type!=5)) continue;
-    unsigned color=(id&15)/4;
-    int sx=x*16+8-room->cameraX+f->originX, sy=y*16+8-room->cameraY;
-    unsigned j=0;
-    while(j<count && (doors[j].r!=color ||
-          doors[j].x-sx < -56 || doors[j].x-sx > 56 ||
-          doors[j].y-sy < -56 || doors[j].y-sy > 56)) j++;
-    if (j<count) {
-      bounds[j][0]=sx<bounds[j][0]?sx:bounds[j][0];
-      bounds[j][1]=sx>bounds[j][1]?sx:bounds[j][1];
-      bounds[j][2]=sy<bounds[j][2]?sy:bounds[j][2];
-      bounds[j][3]=sy>bounds[j][3]?sy:bounds[j][3];
-      doors[j].x=(bounds[j][0]+bounds[j][1])/2;
-      doors[j].y=(bounds[j][2]+bounds[j][3])/2;
-    } else if(count<16) {
-      doors[count]=(SceneLight){sx,sy,88,color,0,0};
-      bounds[count][0]=bounds[count][1]=sx;
-      bounds[count][2]=bounds[count][3]=sy;
-      count++;
-    }
-  }
-  /* At most two nearby caps; keep room for moving lights and lamp cores. */
   static const uint8_t rgb[4][3]={{48,156,58},{156,48,82},{156,132,32},{54,100,174}};
-  for (unsigned n=0; n<2 && count; n++) {
-    unsigned nearest=0; int best=0x7fffffff;
-    for(unsigned j=0;j<count;j++) {
-      int dx=doors[j].x-s->samusX, dy=doors[j].y-s->samusY;
-      int distance=dx*dx+dy*dy;
-      if(distance<best) {best=distance;nearest=j;}
+  for (int y=y0;y<y1;y++) for (int x=x0;x<x1;x++) {
+    unsigned block=room->blocks[y*f->wideRoomWidth+x];
+    unsigned id=block&0x3ff,type=block>>12,gfx=block&0xfff;
+    if (id>=0x40 || (type!=8 && type!=12)) continue;
+    unsigned stride,expect[3],body;
+    bool vertical=id<0x10;
+    if (vertical) {
+      if ((id&3)==3 || (gfx&0x800) || y+3>=(int)f->wideRoomHeight) continue;
+      stride=f->wideRoomWidth;
+      expect[0]=gfx+0x20; expect[1]=(gfx+0x20)^0x800; expect[2]=gfx^0x800;
+      body=13;
+    } else {
+      if (!(id&0x10) || (id&3)!=1 || x+3>=(int)f->wideRoomWidth) continue;
+      stride=1;
+      expect[0]=gfx-1; expect[1]=(gfx-1)^0x400; expect[2]=gfx^0x400;
+      body=5;
     }
-    SceneLight l=doors[nearest]; const uint8_t *c=rgb[l.r];
-    SceneLighting_AddLight(s,l.x,l.y,l.radius,c[0],c[1],c[2]);
-    doors[nearest]=doors[--count];
-  }
-}
-
-SceneEmission SceneLighting_Emission(PicaFrame *f, unsigned slot) {
-  SceneLighting *s=f->lighting;
-  PicaTile *tile=f->atlas?&f->atlas->tile[slot]:NULL;
-  if (tile && (tile->emission&0x8000)) {
-    unsigned c=tile->emission;
-    return (SceneEmission){.key=slot+1,.r=(c&31)<<3,
-      .g=((c>>5)&31)<<3,.b=((c>>10)&31)<<3};
-  }
-  SceneEmission *cached=&s->emission[(slot*2654435761u)>>24];
-  if(!tile && cached->key==slot+1) return *cached;
-  unsigned bright=0,dark=0,r=0,g=0,b=0;
-  for(unsigned i=0;i<64;i++) {
-    uint32_t p=f->pixels[slot*64+i];
-    unsigned pr=p>>24,pg=(p>>16)&255,pb=(p>>8)&255;
-    unsigned luma=(pr*3+pg*6+pb)/10;
-    dark+=luma<64;
-    unsigned high=pr>pg?pr:pg; high=high>pb?high:pb;
-    unsigned low=pr<pg?pr:pg; low=low<pb?low:pb;
-    /* Ignore white specular highlights on metal and bright wall textures. */
-    if (high>=216 && high-low>=56 && luma>=130) {
-      bright++;r+=pr;g+=pg;b+=pb;
+    unsigned index=y*f->wideRoomWidth+x;
+    bool cap=true;
+    for (unsigned part=0;part<3;part++) {
+      unsigned tile=room->blocks[index+(part+1)*stride];
+      unsigned t=tile>>12;
+      if ((tile&0xfff)!=expect[part] || (t!=body && t!=8)) {cap=false;break;}
     }
+    if (!cap) continue;
+    unsigned color=(id&15)/4;
+    int sx=x*16+8-room->cameraX+f->originX+(vertical?0:24);
+    int sy=y*16+8-room->cameraY+(vertical?24:0);
+    int dx=sx-s->samusX,dy=sy-s->samusY,d=dx*dx+dy*dy;
+    unsigned place=d<distance[0]?0:1;
+    if (d>=distance[place]) continue;
+    if (!place) {doors[1]=doors[0];distance[1]=distance[0];}
+    doors[place]=(SceneLight){sx,sy,88,rgb[color][0],rgb[color][1],rgb[color][2]};
+    distance[place]=d;
+    if (count<2) count++;
   }
-  *cached=(SceneEmission){.key=slot+1};
-  if(bright>=3 && bright<=20 && dark>=32) {
-    cached->r=r/bright*3/4; cached->g=g/bright*3/4; cached->b=b/bright*3/4;
+  for (unsigned i=0;i<count;i++) {
+    const SceneLight *l=&doors[i];
+    SceneLighting_AddLight(s,l->x,l->y,l->radius,l->r,l->g,l->b);
   }
-  if (tile) {
-    tile->emission=0x8000 | (cached->r>>3) | ((cached->g>>3)<<5) |
-        ((cached->b>>3)<<10);
-    cached->r&=248; cached->g&=248; cached->b&=248;
-  }
-  return *cached;
 }
 
 void SceneLighting_Ambient(PicaFrame *f) {
@@ -224,22 +193,6 @@ void SceneLighting_Ambient(PicaFrame *f) {
 
 void SceneLighting_Prepare(PicaFrame *f) {
   SceneLighting *s = f->lighting;
-  memset(s->field, 0, sizeof(s->field));
-  /* The atlas revision changes on decode/eviction, palette animation or
-   * reinitialization. Pure host fixtures without an atlas remain per-frame. */
-  if (!f->atlas) memset(s->relief, 0, sizeof(s->relief));
-  else {
-    /* The 3DS alternates two atlas buffers. Give each half of the existing
-     * relief table instead of evicting every entry when the buffer changes. */
-    unsigned bank=s->reliefAtlas[0]==f->atlas?0:
-                  s->reliefAtlas[1]==f->atlas?1:
-                  !s->reliefAtlas[0]?0:!s->reliefAtlas[1]?1:(s->reliefBank^1);
-    if (s->reliefAtlas[bank]!=f->atlas) {
-      s->reliefAtlas[bank]=f->atlas;
-      memset(s->relief+bank*256,0,256*sizeof(SceneRelief));
-    }
-    s->reliefBank=bank;
-  }
   SceneLighting_Ambient(f);
   /* One projection per frame: cast away from the nearest environmental
    * source, never from Samus's own fill/charge. Keep a stable diagonal in
@@ -260,45 +213,65 @@ void SceneLighting_Prepare(PicaFrame *f) {
       }
     }
   }
-  /* One shared 8-pixel field for main/sub and BG/OBJ. Compute only inside
-   * each source's screen bounds; division is once per light, never per quad.
-   * Cell centers align with 8x8 tiles; cropped/flipped tiles keep their UVs. */
-  for (unsigned i = 0; i < s->count; i++) {
-    const SceneLight *l = &s->lights[i];
-    int radius2 = l->radius * l->radius;
-    uint32_t reciprocal = (1u << 24) / radius2;
-    int left = Clamp((l->x - l->radius) / 8, 0, (int)f->width / 8);
-    int right = Clamp((l->x + l->radius + 7) / 8, 0, (int)f->width / 8);
-    int top = Clamp((l->y - l->radius) / 8, (int)f->hudEndY / 8,
-                    ((int)f->height + 7) / 8);
-    int bottom = Clamp((l->y + l->radius + 7) / 8, top, ((int)f->height + 7) / 8);
-    for (int y = top; y < bottom; y++) {
-      int dy = y * 8 + 4 - l->y;
-      for (int x = left; x < right; x++) {
-        int dx = x * 8 + 4 - l->x;
-        int distance2 = dx * dx + dy * dy;
-        if (distance2 >= radius2) continue;
-        unsigned weight = ((uint32_t)(radius2 - distance2) * reciprocal) >> 16;
-        weight = (weight * weight) >> 8;
-        s->field[y][x][0] += (l->r * weight) >> 8;
-        s->field[y][x][1] += (l->g * weight) >> 8;
-        s->field[y][x][2] += (l->b * weight) >> 8;
+  /* Precompute finished modulation colors for a small grid. Both SNES
+   * screens and all repeated tiles read these bytes without texture probes,
+   * relief hashes or per-quad light arithmetic. Exact source changes rebuild
+   * immediately; a stationary view reuses the grid across atlas swaps. */
+  SceneFieldKey key;
+  memset(&key,0,sizeof(key));
+  key.count=s->count; key.width=f->width; key.height=f->height;
+  key.hudEndY=f->hudEndY;
+  for (unsigned i=0;i<s->count;i++) {
+    const SceneLight *l=&s->lights[i];
+    key.lights[i][0]=l->x; key.lights[i][1]=l->y;
+    key.lights[i][2]=l->radius; key.lights[i][3]=l->r;
+    key.lights[i][4]=l->g; key.lights[i][5]=l->b;
+  }
+  if (s->ship) {
+    const uint8_t ship[3][3]={{158,176,202},{100,126,161},{190,198,210}};
+    memcpy(key.base,ship,sizeof(ship));
+  } else {
+    memcpy(key.base,s->ambient,sizeof(s->ambient));
+    key.base[2][0]=188; key.base[2][1]=196; key.base[2][2]=208;
+  }
+  if (s->fieldValid && !memcmp(&key,&s->fieldKey,sizeof(key))) return;
+  memcpy(&s->fieldKey,&key,sizeof(key)); s->fieldValid=true;
+  uint16_t field[SCENE_FIELD_H][SCENE_FIELD_W][3]={0};
+  unsigned cols=(f->width+SCENE_FIELD_CELL-1)>>SCENE_FIELD_SHIFT;
+  unsigned rows=(f->height+SCENE_FIELD_CELL-1)>>SCENE_FIELD_SHIFT;
+  for (unsigned i=0;i<s->count;i++) {
+    const SceneLight *l=&s->lights[i];
+    int radius2=l->radius*l->radius;
+    uint32_t reciprocal=(1u<<24)/radius2;
+    int left=Clamp((l->x-l->radius)/SCENE_FIELD_CELL,0,cols);
+    int right=Clamp((l->x+l->radius+SCENE_FIELD_CELL-1)/SCENE_FIELD_CELL,0,cols);
+    int top=Clamp((l->y-l->radius)/SCENE_FIELD_CELL,
+                  f->hudEndY>>SCENE_FIELD_SHIFT,rows);
+    int bottom=Clamp((l->y+l->radius+SCENE_FIELD_CELL-1)/SCENE_FIELD_CELL,top,rows);
+    for (int y=top;y<bottom;y++) {
+      int dy=y*SCENE_FIELD_CELL+SCENE_FIELD_CELL/2-l->y;
+      for (int x=left;x<right;x++) {
+        int dx=x*SCENE_FIELD_CELL+SCENE_FIELD_CELL/2-l->x;
+        int distance2=dx*dx+dy*dy;
+        if (distance2>=radius2) continue;
+        unsigned weight=((uint32_t)(radius2-distance2)*reciprocal)>>16;
+        weight=(weight*weight)>>8;
+        field[y][x][0]+=(l->r*weight)>>8;
+        field[y][x][1]+=(l->g*weight)>>8;
+        field[y][x][2]+=(l->b*weight)>>8;
       }
     }
   }
-}
-
-static unsigned TexelLuma(const PicaFrame *f, unsigned slot, int x, int y) {
-  unsigned ux = Clamp(x, 0, 7), uy = Clamp(y, 0, 7);
-  unsigned morton = (ux & 1) | ((uy & 1) << 1) | ((ux & 2) << 1) |
-                    ((uy & 2) << 2) | ((ux & 4) << 2) | ((uy & 4) << 3);
-  uint32_t pixel = f->pixels[slot * 64 + morton];
-  return ((pixel >> 24) * 3 + ((pixel >> 16) & 255) * 6 +
-          ((pixel >> 8) & 255)) / 10;
+  for (unsigned layer=0;layer<3;layer++)
+    for (unsigned y=0;y<rows;y++) for (unsigned x=0;x<cols;x++)
+      for (unsigned c=0;c<3;c++)
+        s->color[layer][y][x][c]=Clamp(key.base[layer][c]+
+            (layer==1?field[y][x][c]*3/4:field[y][x][c]),0,255);
 }
 
 void SceneLighting_Tile(PicaFrame *f, unsigned group, unsigned slot,
                         PicaQuad *q) {
+  (void)slot;
   SceneLighting *s = f->lighting;
   if (!s || !s->enabled || q->y0 < (int)f->hudEndY) return;
   /* BG3 contains the HUD and weather; leave both crisp and unmodified. */
@@ -330,48 +303,10 @@ void SceneLighting_Tile(PicaFrame *f, unsigned group, unsigned slot,
       s->shadows[s->shadowCount++] = shadow;
     }
   }
-  int x = (q->x0 + q->x1) / 2, y = (q->y0 + q->y1) / 2;
-  /* Interior contrast matches Landing Site: darker distant scenery and
-   * readable foreground/objects. A mild cool ambient preserves palette hues;
-   * environmental sources locally restore brightness and warm hot rooms. */
-  int r = s->ship ? (object ? 190 : layer == 0 ? 158 : 100) :
-                   (object ? 188 : s->ambient[layer][0]);
-  int g = s->ship ? (object ? 198 : layer == 0 ? 176 : 126) :
-                   (object ? 196 : s->ambient[layer][1]);
-  int b = s->ship ? (object ? 210 : layer == 0 ? 202 : 161) :
-                   (object ? 208 : s->ambient[layer][2]);
-  /* A small luminance gradient gives tile surfaces directional relief.
-   * Sample the actual flipped/cropped texture rather than screen tile edges.
-   * This is an approximation, not an authored per-pixel normal map. */
-  int tx = ((q->u0 + q->u1) / 8) & 7;
-  int ty = ((8192 - q->v0 - q->v1) / 16) & 7;
-  /* A decoded atlas slot is immutable for this frame. Reuse its relief for
-   * repeated tiles and the second SNES screen; cropped centers are keys too. */
-  uint32_t key = (slot | (tx << 13) | (ty << 16)) + 1;
-  unsigned index=f->atlas ? s->reliefBank*256+((key*2654435761u)>>24) :
-                                           (key*2654435761u)>>23;
-  SceneRelief *cached = &s->relief[index];
-  unsigned revision=f->atlas?f->atlas->contentRevision:0;
-  if (cached->key != key || cached->revision!=revision) {
-    int nx = (int)TexelLuma(f, slot, tx - 1, ty) -
-             (int)TexelLuma(f, slot, tx + 1, ty);
-    int ny = (int)TexelLuma(f, slot, tx, ty - 1) -
-             (int)TexelLuma(f, slot, tx, ty + 1);
-    cached->key = key;
-    cached->revision=revision;
-    cached->shade[0] = Clamp((-nx-ny)/10,-14,14);
-    cached->shade[1] = Clamp(( nx-ny)/10,-14,14);
-    cached->shade[2] = Clamp((-nx+ny)/10,-14,14);
-    cached->shade[3] = Clamp(( nx+ny)/10,-14,14);
-  }
-  int relief = cached->shade[(q->u1 < q->u0) | ((q->v1 > q->v0) << 1)];
-  r += relief; g += relief; b += relief;
-  const uint16_t *light = s->field[Clamp(y / 8,0,SCENE_FIELD_H-1)]
-                                   [Clamp(x / 8,0,SCENE_FIELD_W-1)];
-  r += !object && layer == 1 ? light[0] * 3 / 4 : light[0];
-  g += !object && layer == 1 ? light[1] * 3 / 4 : light[1];
-  b += !object && layer == 1 ? light[2] * 3 / 4 : light[2];
-  q->r = Clamp(r, 0, 255); q->g = Clamp(g, 0, 255); q->b = Clamp(b, 0, 255);
+  unsigned x=Clamp((q->x0+q->x1)>>(SCENE_FIELD_SHIFT+1),0,SCENE_FIELD_W-1);
+  unsigned y=Clamp((q->y0+q->y1)>>(SCENE_FIELD_SHIFT+1),0,SCENE_FIELD_H-1);
+  const uint8_t *color=s->color[object?2:layer][y][x];
+  q->r=color[0]; q->g=color[1]; q->b=color[2];
 }
 
 bool SceneLighting_EmitShadows(PicaFrame *f, unsigned sub) {

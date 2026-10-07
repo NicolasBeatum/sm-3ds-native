@@ -156,7 +156,6 @@ static int Tile(PicaFrame *f, unsigned address, unsigned palette, unsigned bpp) 
   memcpy(t->palette, pal, colors * 2);
   t->valid = true;
   t->opaque = false;
-  t->emission = 0;
   a->contentRevision=NextContentRevision();
   a->decodes++;
   a->dirty[slot / 32] |= 1u << (slot & 31);
@@ -1028,135 +1027,10 @@ static bool Compose(PicaFrame *f) {
   return true;
 }
 
-/* Sample visible BG tiles to find small bright lamp cores. Classification
- * survives in atlas metadata until the texture/palette changes. A stable
- * view reuses selected lamps for three frames, then resamples animated VRAM.
- * Scroll/window/palette changes refresh immediately. No HUD/sprites/BG3. */
-static uint32_t LampViewSignature(const PicaFrame *f) {
-  uint32_t hash=2166136261u;
-#define MIX(v) (hash=(hash^(uint32_t)(v))*16777619u)
-  MIX(f->lighting->room); MIX(f->width); MIX(f->height); MIX(f->hudEndY);
-  MIX(f->originX); MIX(f->worldLeft); MIX(f->worldRight);
-  MIX(f->boundBg2); MIX(f->bg2Left); MIX(f->bg2Right);
-  MIX(f->wideRoomWidth); MIX(f->wideRoomHeight); MIX((uintptr_t)f->wideTileTable);
-  for (unsigned layer=0;layer<2;layer++) {
-    const PicaWideRoomLayer *room=&f->wideRoom[layer];
-    MIX((uintptr_t)room->blocks); MIX(room->cameraX); MIX(room->cameraY);
-    MIX(room->scrollX); MIX(room->scrollY); MIX(room->followScroll);
-  }
-  /* Only these scanlines are sampled by the lamp detector. Include window
-   * masks and per-line scrolling so a changed view cannot reuse old positions. */
-  for (unsigned y=f->hudEndY+4;y<f->height;y+=8) {
-    const PicaLine *p=&f->lines[y];
-    MIX(p->forcedBlank); MIX(p->addSubscreen);
-    MIX(p->screenEnabled[0]|(p->screenEnabled[1]<<8));
-    MIX(p->screenWindowed[0]|(p->screenWindowed[1]<<8));
-    MIX(p->windowsel); MIX(p->windowLogic[0]|(p->windowLogic[1]<<8));
-    MIX(p->window1left|(p->window1right<<8)|((uint32_t)p->window2left<<16)|
-        ((uint32_t)p->window2right<<24));
-    for (unsigned layer=0;layer<2;layer++) {
-      const BgLayer *bg=&p->bg[layer];
-      MIX(bg->hScroll|((uint32_t)bg->vScroll<<16));
-      MIX(bg->tilemapAdr|((uint32_t)bg->tileAdr<<16));
-      MIX(bg->tilemapWider|(bg->tilemapHigher<<1));
-    }
-  }
-#undef MIX
-  return hash;
-}
-
-static void AddCachedLamps(PicaFrame *f) {
-  SceneLighting *s=f->lighting;
-  for (unsigned i=0;i<s->lampCount;i++) {
-    const SceneLight *l=&s->lamps[i];
-    SceneLighting_AddLight(s,l->x,l->y,l->radius,l->r,l->g,l->b);
-  }
-}
-
-static void CollectLampSources(PicaFrame *f) {
-  SceneLighting *s=f->lighting;
-  if(s->ship || s->count==SCENE_MAX_LIGHTS) { s->lampValid=false; return; }
-  uint32_t signature=LampViewSignature(f);
-  if (s->lampValid && s->lampSignature==signature && s->lampAge<3 &&
-      !memcmp(s->lampPalette,f->memory->cgram,sizeof(s->lampPalette))) {
-    s->lampAge++;
-    AddCachedLamps(f);
-    return;
-  }
-  s->lampSignature=signature; s->lampAge=0; s->lampCount=0; s->lampValid=true;
-  memcpy(s->lampPalette,f->memory->cgram,sizeof(s->lampPalette));
-  SceneLight lamps[16]; unsigned count=0;
-  for(unsigned layer=0;layer<2;layer++) {
-    unsigned mask=1u<<layer;
-    for(unsigned y=f->hudEndY+4;y<f->height;y+=8) {
-      const PicaLine *p=&f->lines[y]; const BgLayer *bg=&p->bg[layer];
-      if(p->forcedBlank || !((p->screenEnabled[0]&mask) ||
-          (p->addSubscreen && (p->screenEnabled[1]&mask)))) continue;
-      unsigned wy=(y+bg->vScroll)&(bg->tilemapHigher?511:255);
-      unsigned mapRow=bg->tilemapAdr+((wy>>3)&31)*32+
-          (wy>=256?(bg->tilemapWider?0x800:0x400):0);
-      WideTileRow roomRow=WideRoomRow(f,layer,y);
-      int left=layer && f->boundBg2 ? f->bg2Left : f->worldLeft;
-      int right=layer && f->boundBg2 ? f->bg2Right : f->worldRight;
-      uint16_t *slots=BackgroundSlots(f->atlas,layer,bg->tileAdr);
-      WindowSpans windows[2]; bool enabled[2];
-      for(unsigned sub=0;sub<2;sub++) {
-        enabled[sub]=(p->screenEnabled[sub]&mask) && (!sub || p->addSubscreen);
-        if(enabled[sub]) Windows(f,p,layer,(p->screenWindowed[sub]&mask)!=0,
-                                left,right,&windows[sub]);
-      }
-      for(int x=left+4;x<right;x+=8) {
-        bool visible=false;
-        for(unsigned sub=0;sub<2;sub++) {
-          if(!enabled[sub]) continue;
-          const WindowSpans *win=&windows[sub];
-          for(unsigned i=0;i<win->nr;i++)
-            if(!(win->bits&(1u<<i)) && x>=win->edges[i] && x<win->edges[i+1]) visible=true;
-        }
-        if(!visible) continue;
-        unsigned wx=(x-(int)f->originX+bg->hScroll)&(bg->tilemapWider?511:255);
-        uint16_t tile; unsigned tx=wx&7,ty=wy&7;
-        if(f->width==kWideWidth && f->wideRoom[layer].blocks &&
-            (x<(int)f->originX || x>=(int)f->originX+kSnesWidth)) {
-          if(!WideRoomTile(f,&roomRow,x,layer,&tile,&tx,&ty)) continue;
-        } else tile=f->memory->vram[(mapRow+((wx>>3)&31)+(wx>=256?0x400:0))&0x7fff];
-        int slot=BackgroundTile(f,slots,tile,bg->tileAdr,16,6,4);
-        if(slot<0) continue;
-        SceneEmission e=SceneLighting_Emission(f,slot);
-        if(!(e.r || e.g || e.b)) continue;
-        int sx=x-(int)tx+4,sy=(int)y-(int)ty+4;
-        bool duplicate=false;
-        for(unsigned i=s->environmentStart;i<s->count;i++) {
-          int dx=s->lights[i].x-sx,dy=s->lights[i].y-sy;
-          if(s->lights[i].radius>=64 && dx*dx+dy*dy<32*32) duplicate=true;
-        }
-        if(duplicate) continue;
-        unsigned i=0;
-        while(i<count && (lamps[i].x-sx < -24 || lamps[i].x-sx > 24 ||
-                          lamps[i].y-sy < -24 || lamps[i].y-sy > 24)) i++;
-        if(i<count) {
-          lamps[i].x=(lamps[i].x+sx)/2; lamps[i].y=(lamps[i].y+sy)/2;
-        } else if(count<16) lamps[count++]=(SceneLight){sx,sy,76,e.r,e.g,e.b};
-      }
-    }
-  }
-  for(unsigned n=0;n<2 && count;n++) {
-    unsigned nearest=0;int best=0x7fffffff;
-    for(unsigned i=0;i<count;i++) {
-      int dx=lamps[i].x-s->samusX,dy=lamps[i].y-s->samusY;
-      int distance=dx*dx+dy*dy;
-      if(distance<best) {best=distance;nearest=i;}
-    }
-    SceneLight l=lamps[nearest];
-    s->lamps[s->lampCount++]=l;
-    lamps[nearest]=lamps[--count];
-  }
-  AddCachedLamps(f);
-}
-
+/* Emitters come from native doors/liquids and authored ship lamps.
+ * Bright texture pixels alone never create a light. */
 static void PrepareLights(PicaFrame *f) {
   SceneLighting_AddRoomSources(f);
-  CollectLampSources(f);
   SceneLighting_Prepare(f);
 }
 
@@ -1229,9 +1103,13 @@ static bool EmitLit(void *context, unsigned group, const PicaQuad *quad) {
   if (group >= 4 || quad->depth == 1)
     return e->emit(e->context, group, quad);
   PicaQuad q = *quad;
-  unsigned col = (q.u0 + q.u1) / 64;
-  unsigned row = (8192 - q.v0 - q.v1) / 128;
-  SceneLighting_Tile(e->frame, group, row * (PICA_ATLAS_W / 8) + col, &q);
+  if (q.y0 >= (int)e->frame->hudEndY) {
+    if (group & 1) SceneLighting_Tile(e->frame, group, 0, &q);
+    else if (q.depth == 0x8000 || q.depth == 0xc000)
+      SceneLighting_ApplyColor(e->frame->lighting, 0, &q);
+    else if (q.depth == 0x7100 || q.depth == 0xb100)
+      SceneLighting_ApplyColor(e->frame->lighting, 1, &q);
+  }
   return e->emit(e->context, group, &q);
 }
 

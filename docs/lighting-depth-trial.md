@@ -379,3 +379,87 @@ the top eight playfield rows receive the effect. The verification record
 is `topline-verification.json`; `biomas-borde-corregido.png` is the overview.
 These are host raster previews. The lighting regression covers row 30
 remaining untouched and a BG quad starting at row 31 receiving the tint.
+
+## Lean lighting with verified emitters
+
+The previous detector could treat a bright colored texture highlight as a
+lamp. More significantly, the cap detector accepted isolated low block IDs:
+an ordinary solid `0x8000` could become a green door light. Remove the
+texture-brightness lamp pass and require the complete four-block door cap,
+including the graphics/flips in bank-84 draw definitions A767/A827/A8E7/A9B3.
+Closed and opening caps are accepted; isolated pieces, solid walls and open
+caps are rejected. Select at most the nearest two valid caps. Keep the three
+authored Landing Site lamps, native lava/acid surfaces, Samus fill/charge and
+bounded projectile lights. Ordinary water still does not emit. Colored room
+ambience stays diffuse and does not add another spotlight.
+
+The lighter renderer precomputes finished BG1/BG2/OBJ colors in a 16-pixel
+grid. Both SNES screens read those same RGB bytes. An exact key of sources,
+colors, ambient values and viewport dimensions reuses the map until something
+changes; player/source movement updates immediately without quantization of
+the source position or delayed frames. Background emission reads the map
+inline. The unlit renderer still selects its ordinary callback once per frame.
+
+Remove texture-gradient relief calculations and their atlas caches. The
+depth effect now relies on darker distant layers, local environmental light
+and the projected Samus silhouette. The retained shadow depth, clipping and
+nearest environmental-source direction are unchanged. Light sampling is
+coarser than the old 8-pixel field; arbitrary decor lamps need verified room
+fixtures before they will emit again. No ray-traced geometry/occlusion is added.
+
+The compiled ARM ELF's `g_lighting` shrinks from 20,508 to 6,592 bytes (67.9%).
+The host struct shrinks from 20,520 to 6,592 bytes. This is lighting state,
+not total application RAM. Atlas layout, the 16 KiB glow texture and shadow
+capacity are retained. Fewer false sources also reduce glow draws in affected
+rooms; actual GPU timing still needs hardware measurement.
+
+Matched host medians against `d8e57b8`, width 400, alternating two atlas
+buffers, four-vertex packing, nine measured 400-frame batches after warm-up:
+
+| Scene / camera | Previous lit CPU | Lean lit CPU | Total model saving | Lighting overhead saving |
+| --- | ---: | ---: | ---: | ---: |
+| Landing Site / stationary | 0.185739 ms | 0.140925 ms | 24.1% | 59.1% |
+| Landing Site / moving | 0.189030 ms | 0.149443 ms | 20.9% | 49.4% |
+| Green Brinstar / stationary | 0.180896 ms | 0.135735 ms | 25.0% | 55.1% |
+| Green Brinstar / moving | 0.216788 ms | 0.145817 ms | 32.7% | 62.7% |
+| Norfair lava / stationary | 0.458684 ms | 0.326669 ms | 28.8% | 54.5% |
+| Norfair lava / moving | 0.506658 ms | 0.346333 ms | 31.6% | 58.8% |
+| Maridia caverns / stationary | 0.547774 ms | 0.423724 ms | 22.6% | 50.1% |
+| Maridia caverns / moving | 0.571871 ms | 0.442059 ms | 22.7% | 48.6% |
+
+Lighting overhead is each revision's lit time minus its own lights-off time;
+raw on/off measurements and ranges are in `performance-host.json`. Moving
+cases shift the camera/scroll over the native capture synthetically, not an
+end-to-end engine replay. These are CPU model/packing measurements, not GPU
+times, console FPS or whole-game speedups. They include intentionally fewer
+emitters and the simpler surface treatment. No console-performance claim is
+made from desktop timings.
+
+`tools/build_lighting_benchmark.py --reference d8e57b8` builds independent
+previous/current executables against their own revision's headers, avoiding
+scene-struct ABI mismatches. Example invocation:
+
+```sh
+build-lighting-benchmark/current-lighting-benchmark \
+  output-lighting-biomes/norfair-lava 1 1 400
+```
+
+The CIA/3DSX in `output-lighting-lean-trial/` use FULL_NATIVE/LTO and retain
+`SM3DS_SYSTEM_CORE_PERCENT=30` from the NWM isolation trial. This lighting
+change does not establish a wireless/sleep crash fix. Real Old 3DS testing
+must check frame rate, audio and the previously reported Wi-Fi/repose sequence.
+
+Verification: all ten biome captures at 256/400 pixels preserve HUD rows
+0..30 and byte-identical lights-off pixels; captured native fire/jump/move
+frames pass those checks too. Twenty cold/warm double-atlas checks produce
+identical quad bytes. Tests cover solid-wall false positives, complete colored
+caps, opening/removed caps, nearest-two selection, texture highlights producing
+no emitter, palette-driven ambience, immediate source movement and bounded
+shadows. Widescreen/cache/dirty/indexed-vertex/lifecycle tests and the 264-frame
+lights-off main/sub color/alpha differential check pass. Biome comparisons and
+`biomas-modo-ligero.png` remain host raster previews, not console screenshots.
+
+The precomputed-color approach follows the general principle described in
+[Apple's vertex light-map documentation](https://developer.apple.com/documentation/modelio/mdlmesh/generatelightmapvertexcolorswithlights(toconsider:objectstoconsider:vertexattributenamed:)):
+reuse computed lighting rather than recalculating it for each primitive.
+This port uses a small dynamic color grid, rather than Apple's API or OpenGL.

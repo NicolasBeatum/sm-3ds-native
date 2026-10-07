@@ -35,7 +35,7 @@ int main(void) {
   assert(s.enabled && !s.ship && s.count==1);
   assert(s.lights[0].x==128 && s.lights[0].y==102);
   SceneLighting_Prepare(&f);
-  assert(s.field[12][16][1]>0); /* Samus fill in another room. */
+  assert(s.color[0][6][8][1]>s.ambient[0][1]); /* Samus fill in another room. */
   SceneLighting_AddLight(&s,220,44,48,88,62,28);
   SceneLighting_Prepare(&f);
   q=original; q.x0=216; q.x1=224; q.y0=40; q.y1=48;
@@ -64,9 +64,9 @@ int main(void) {
   s.count=0;
   SceneLighting_AddLight(&s,-30000,30000,256,255,255,255);
   SceneLighting_Prepare(&f);
-  for(unsigned y=0;y<SCENE_FIELD_H;y++)
-    for(unsigned x=0;x<SCENE_FIELD_W;x++)
-      for(unsigned c=0;c<3;c++) assert(!s.field[y][x][c]);
+  for(unsigned y=0;y<(f.height+SCENE_FIELD_CELL-1)/SCENE_FIELD_CELL;y++)
+    for(unsigned x=0;x<(f.width+SCENE_FIELD_CELL-1)/SCENE_FIELD_CELL;x++)
+      for(unsigned c=0;c<3;c++) assert(s.color[0][y][x][c]==s.fieldKey.base[0][c]);
   SceneLighting_Begin(&s,true,0x91f8,8,1024,1024,1152,1140,0,0);
   SceneLighting_Prepare(&f);
   s.castShadow=true; s.samusX=0;
@@ -76,20 +76,15 @@ int main(void) {
   q=original; SceneLighting_Tile(&f,1,1,&q);
   assert(s.shadowCount==1 && q.a==original.a);
   assert(SceneLighting_EmitShadows(&f,0) && emitted==1 && !s.shadowCount);
-  /* Cached relief must preserve flips and invalidate after palette/tile
-   * changes on the next frame, even when the same atlas slot is reused. */
+  /* Texture highlights are surface art, never fake relief or emitters. */
   SceneLighting_Begin(&s,true,0xa70b,8,0,0,128,152,0,0);
   s.count=0;
   pixels[64+Morton(3,4)]=pixels[64+Morton(4,3)]=0xffffffff;
   SceneLighting_Prepare(&f);
   q=original; SceneLighting_Tile(&f,0,1,&q);
-  assert(q.r==136 && q.g==144 && q.b==156);
+  assert(q.r==150 && q.g==158 && q.b==170);
   q=original; q.u0=32; q.u1=0; q.v0=4032; q.v1=4096;
   SceneLighting_Tile(&f,0,1,&q);
-  assert(q.r==164 && q.g==172 && q.b==184);
-  pixels[64+Morton(3,4)]=pixels[64+Morton(4,3)]=0;
-  SceneLighting_Prepare(&f);
-  q=original; SceneLighting_Tile(&f,0,1,&q);
   assert(q.r==150 && q.g==158 && q.b==170);
   /* Interiors separate distant scenery without dimming HUD or Samus as far
    * as walls. Shadows reach BG1-low (8000), remain below BG1-high (c000),
@@ -114,25 +109,24 @@ int main(void) {
   SceneLighting_AddLight(&s,128,200,160,154,72,24);
   SceneLighting_Prepare(&f);
   assert(s.shadowX==0 && s.shadowY==-12); /* Lava illuminates from below. */
-  /* Reused slots in the two 3DS atlas buffers cannot share the wrong relief.
-   * Reinitialization and actual content revisions invalidate a warm entry. */
+  /* Exact light changes rebuild immediately; unrelated atlas changes and
+   * buffer swaps reuse colors. Flips/cropped UVs cannot create fake light. */
   static PicaAtlas atlases[2];
   SceneLighting_Begin(&s,true,0xa70b,8,0,0,128,152,0,0); s.count=0;
   PicaAtlasInit(&atlases[0],pixels); f.atlas=&atlases[0];
-  pixels[64+Morton(3,4)]=pixels[64+Morton(4,3)]=0xffffffff;
-  SceneLighting_Prepare(&f); q=original; SceneLighting_Tile(&f,0,1,&q);
-  assert(q.r==136);
-  unsigned bank=s.reliefBank;
-  PicaAtlasInit(&atlases[1],pixels); f.atlas=&atlases[1];
-  SceneLighting_Prepare(&f); q=original; SceneLighting_Tile(&f,0,1,&q);
-  assert(q.r==150 && s.reliefBank!=bank);
-  f.atlas=&atlases[0];
-  pixels[64+Morton(3,4)]=pixels[64+Morton(4,3)]=0xffffffff;
-  SceneLighting_Prepare(&f); q=original; SceneLighting_Tile(&f,0,1,&q);
-  assert(q.r==136 && s.reliefBank==bank);
-  PicaAtlasInit(&atlases[0],pixels);
   SceneLighting_Prepare(&f); q=original; SceneLighting_Tile(&f,0,1,&q);
   assert(q.r==150);
+  SceneFieldKey saved=s.fieldKey;
+  PicaAtlasInit(&atlases[1],pixels); f.atlas=&atlases[1];
+  SceneLighting_Prepare(&f);
+  assert(!memcmp(&saved,&s.fieldKey,sizeof(saved)));
+  SceneLighting_AddLight(&s,104,104,64,100,20,10);
+  SceneLighting_Prepare(&f); q=original; SceneLighting_Tile(&f,0,1,&q);
+  assert(q.r>230 && q.g>158);
+  s.lights[0].x=220;
+  SceneLighting_Prepare(&f); q=original; SceneLighting_Tile(&f,0,1,&q);
+  assert(q.r==150 && q.g==158 && q.b==170);
+  s.count=0; SceneLighting_Prepare(&f);
   /* The native IRQ switches to the playfield at visible row 31. A whole
    * BG tile chunk starting there must be shaded, while row 30 stays HUD. */
   f.hudEndY=WideConfig_Create(false).hud_end_y;
