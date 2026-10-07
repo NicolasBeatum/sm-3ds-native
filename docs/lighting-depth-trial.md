@@ -361,3 +361,21 @@ eight warm frames emit identical quad bytes in all eight native samples at
 both widths (16 checks). The 264-frame lights-off main/sub differential test,
 widescreen, tile cache, dirty atlas and vertex checks pass. Preview output is
 still software rasterization rather than an Azahar GPU capture.
+
+## Upper playfield boundary correction
+
+The game switches its PPU registers after SNES scanline 31. Scanline 32
+is drawn into zero-based visible row 31, so the HUD occupies rows 0..30.
+The former exclusive bound of 32 left the first playfield tile chunk
+unmodified: a quad starting at row 31 was excluded from lighting in its
+entirety, sometimes leaving an eight-row bright strip. `kHudEndLine` is
+now 31 for lighting, glow clipping and the viewport masks. The host preview
+uses this same constant instead of a separate hard-coded boundary.
+
+`output-lighting-sleep-trial/` contains regenerated before/after previews
+for all ten biome captures. At both 256 and 400 pixels, HUD rows 0..30
+remain byte-identical, the lights-off image remains byte-identical, and
+the top eight playfield rows receive the effect. The verification record
+is `topline-verification.json`; `biomas-borde-corregido.png` is the overview.
+These are host raster previews. The lighting regression covers row 30
+remaining untouched and a BG quad starting at row 31 receiving the tint.

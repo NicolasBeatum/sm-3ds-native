@@ -7,7 +7,9 @@ enum {
   kSnesHeight = 224,
   kWideExtraX = 72,
   kWideWidth = kSnesWidth + 2 * kWideExtraX,
-  kHudEndLine = 32,
+  /* IRQ at SNES line 31 switches to gameplay before line 32 is drawn.
+   * Visible rows are indexed from zero: HUD [0,31), playfield [31,224). */
+  kHudEndLine = 31,
 };
 
 typedef struct WideConfig {

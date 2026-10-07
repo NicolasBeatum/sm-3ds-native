@@ -195,9 +195,19 @@ static bool CreateEmulatorDspMarker(void) {
   return true;
 }
 
+/* Allow hardware trials to reserve less of the system core for SDL audio.
+ * Game logic and PICA preparation run on the application core. */
+#ifndef SM3DS_SYSTEM_CORE_PERCENT
+#define SM3DS_SYSTEM_CORE_PERCENT 80
+#endif
+#if SM3DS_SYSTEM_CORE_PERCENT < 10 || SM3DS_SYSTEM_CORE_PERCENT > 80
+#error SM3DS_SYSTEM_CORE_PERCENT must be between 10 and 80
+#endif
 static bool EnableSystemCoreTime(void) {
-  static const u32 candidates[] = { 80, 70, 50, 30 };
+  static const u32 candidates[] = { SM3DS_SYSTEM_CORE_PERCENT, 70, 50, 30, 20, 10 };
   for (unsigned i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+    if (candidates[i] > SM3DS_SYSTEM_CORE_PERCENT ||
+        (i && candidates[i] == SM3DS_SYSTEM_CORE_PERCENT)) continue;
     if (R_SUCCEEDED(APT_SetAppCpuTimeLimit(candidates[i]))) {
       u32 actual = 0;
       if (R_SUCCEEDED(APT_GetAppCpuTimeLimit(&actual)) && actual > 0)

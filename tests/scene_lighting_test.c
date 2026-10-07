@@ -1,4 +1,5 @@
 #include "scene_lighting.h"
+#include "wide_config.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -132,6 +133,17 @@ int main(void) {
   PicaAtlasInit(&atlases[0],pixels);
   SceneLighting_Prepare(&f); q=original; SceneLighting_Tile(&f,0,1,&q);
   assert(q.r==150);
+  /* The native IRQ switches to the playfield at visible row 31. A whole
+   * BG tile chunk starting there must be shaded, while row 30 stays HUD. */
+  f.hudEndY=WideConfig_Create(false).hud_end_y;
+  assert(f.hudEndY==31 && WideConfig_Create(true).hud_end_y==31);
+  q=original; q.y0=30; q.y1=31;
+  PicaQuad hudEdge=q;
+  SceneLighting_Tile(&f,0,1,&q);
+  assert(!memcmp(&q,&hudEdge,sizeof(q)));
+  q=original; q.y0=31; q.y1=39;
+  SceneLighting_Tile(&f,0,1,&q);
+  assert(q.r==150 && q.g==158 && q.b==170 && q.y0==31 && q.y1==39);
   /* A rejected frame must restore the caller's callback/context. */
   f.width=255; f.context=&s;
   assert(!PicaBuildFrame(&f) && f.emit==Capture && f.context==&s && f.lighting==&s);

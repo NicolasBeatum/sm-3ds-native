@@ -85,7 +85,7 @@ int main(int argc,char **argv) {
   Read(argv[1],"landing-lines.bin",lines,sizeof(lines));
   PicaAtlasInit(&atlas,atlasPixels); PicaAtlasBegin(&atlas);
   PicaFrame frame={.memory=&memory,.lines=lines,.atlas=&atlas,.pixels=atlasPixels,
-    .width=width,.height=224,.originX=origin,.hudEndY=32,.worldRight=width,
+    .width=width,.height=224,.originX=origin,.hudEndY=kHudEndLine,.worldRight=width,
     .wideRoom={{.blocks=level_data,.cameraX=layer1_x_pos,.cameraY=layer1_y_pos,
       .scrollX=layer1_x_pos+bg1_x_offset,.scrollY=layer1_y_pos+bg1_y_offset,.followScroll=true}},
     .wideTileTable=(const uint16_t *)(g_ram+0xA000),
@@ -123,7 +123,7 @@ int main(int argc,char **argv) {
       }
     }
   }
-  if(lighting.enabled) for(unsigned y=32;y<224;y++)for(unsigned x=0;x<width;x++) {
+  if(lighting.enabled) for(unsigned y=frame.hudEndY;y<224;y++)for(unsigned x=0;x<width;x++) {
     unsigned pos=y*width+x;
     for(unsigned i=0;i<lighting.count;i++) {
       SceneLight *l=&lighting.lights[i]; float radius=l->radius*.55f;
