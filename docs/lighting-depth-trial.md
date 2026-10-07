@@ -300,3 +300,64 @@ Azahar screenshots. Logs and capture/comparison manifests are in the ignored
 output directory. Scenes without large emitting sources primarily show darker
 scenery and Samus silhouettes; this does not establish complete authored lamp
 coverage in every tileset.
+
+## Colored ambience and 3DS cache optimization
+
+Latest builds: `output-lighting-3ds-color-trial/SuperMetroid3DSPort.{3dsx,cia}`,
+compiled with native/LTO/OLD3DS/phase diagnostics and the LIGHTING toggle.
+Visual comparisons against the previous lit revision are in
+`output-lighting-3ds-color-trial/repaso-colores.png` and individual PNG pairs.
+Eight samples were reviewed: green/blue/red/pink Brinstar, actual Norfair lava,
+Maridia caverns, Wrecked Ship and Tourian.
+
+Interior ambient light now follows colored foreground scenery palettes. Six
+native tilemap samples select BG palettes below the HUD; chromatic colors
+contribute a bounded tint, up to +/-12 vertex levels on BG1 and +/-24 on BG2.
+Thus vegetation, blue caverns and red/amber rooms get distinct color bounce
+without extra point sources, halos, render targets or GPU passes. Objects retain
+their readable ambient level and Samus's own local fill. This is diffuse
+artistic ambience, not a claim that every green leaf is an emissive lamp.
+Landing Site retains its existing authored ambient/light profile.
+
+Lamp classification is retained as RGB555 plus a valid bit in the old padding
+of `PicaTile`; its size remains 80 bytes. Decode resets this metadata on VRAM,
+palette or slot changes; atlas initialization clears it too. The 3DS's two
+atlas buffers each retain their own metadata. The selected two decor lights
+are reused for at most three intervening frames if the sampled view and first
+128 palette colors are unchanged. Camera, scroll/window, room/bounds and palette
+changes refresh immediately. Pure VRAM animation in an otherwise identical
+view can take at most three frames to update this approximate decor detector.
+Doors, liquids, projectiles, shadows, ambience and the light field still update
+every frame. A full light budget or disabled effect invalidates the lamp cache.
+
+Relief retains 512 total entries, split into two 256-entry banks for the two
+atlas buffers. Content revision validates palette/tile/eviction changes, and
+atlas initialization gets a new revision even at the same address. The host
+scene struct is 20,520 bytes, about 2.4 KiB more than the previous build; the
+reusable glow texture and the eight-light/source and shadow limits are unchanged.
+Caller-owned scene structs must be initialized to zero once.
+
+Matched host benchmark against `a08035f`, alternating two atlas/pixel buffers,
+width 400, same native captures/four-vertex callback and source counts; median
+of nine 600-frame warm batches after discarding warm-up:
+
+| Lit scene | Previous CPU model | Current CPU model | Reduction |
+| --- | ---: | ---: | ---: |
+| Landing Site | 0.182912 ms | 0.179214 ms | 2.0% |
+| Green Brinstar | 0.226508 ms | 0.178395 ms | 21.2% |
+| Norfair lava | 0.482735 ms | 0.453904 ms | 6.0% |
+| Maridia caverns | 0.570142 ms | 0.541756 ms | 5.0% |
+
+Lights-off is essentially unchanged within host timing variance. This is
+stationary-view CPU model/vertex work, not console FPS, GPU time or total game
+speedup. Scrolling and animated palettes refresh detection more often, so they
+can reduce the cache benefit. Actual Old/New 3DS FPS still needs device testing.
+Raw results: `performance-double-atlas-host.txt` in the output directory.
+
+Verification adds actual model/atlas tests for warm lamp reuse, bounded refresh,
+palette color changes, window/scroll invalidation, rejection of broad bright
+walls, atlas reinitialization and double-buffer relief separation. Cold and
+eight warm frames emit identical quad bytes in all eight native samples at
+both widths (16 checks). The 264-frame lights-off main/sub differential test,
+widescreen, tile cache, dirty atlas and vertex checks pass. Preview output is
+still software rasterization rather than an Azahar GPU capture.

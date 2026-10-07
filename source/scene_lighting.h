@@ -8,13 +8,14 @@ typedef struct SceneLight {
   uint8_t r, g, b;
 } SceneLight;
 typedef struct SceneRelief {
-  uint32_t key;
+  uint32_t key, revision;
   int8_t shade[4];
 } SceneRelief;
 typedef struct SceneEmission {
   uint32_t key;
   uint8_t r, g, b;
 } SceneEmission;
+/* Initialize to zero once; persistent caches are validated by atlas/view state. */
 typedef struct SceneLighting {
   bool enabled, castShadow;
   int samusX, samusY;
@@ -25,9 +26,17 @@ typedef struct SceneLighting {
   int shadowX, shadowY;
   uint16_t field[SCENE_FIELD_H][SCENE_FIELD_W][3];
   SceneRelief relief[512];
+  PicaAtlas *reliefAtlas[2];
+  unsigned reliefBank;
   unsigned liquidType;
   int liquidY;
   SceneEmission emission[256];
+  uint8_t ambient[2][3];
+  unsigned room, lampCount, lampAge;
+  uint32_t lampSignature;
+  bool lampValid;
+  SceneLight lamps[2];
+  uint16_t lampPalette[128];
 } SceneLighting;
 
 /* Gameplay lighting in every room. Coordinates include the widescreen origin.
@@ -39,6 +48,8 @@ void SceneLighting_Begin(SceneLighting *scene, bool enabled, unsigned room,
 void SceneLighting_AddLight(SceneLighting *scene, int x, int y, int radius,
                             unsigned r, unsigned g, unsigned b);
 void SceneLighting_Prepare(PicaFrame *frame);
+/* Diffuse room color from visible BG palettes; no extra point lights/passes. */
+void SceneLighting_Ambient(PicaFrame *frame);
 /* Liquid Y is screen-relative; room blocks identify the live door caps. */
 void SceneLighting_AddRoomSources(PicaFrame *frame);
 /* Approximate small luminous cores, excluding broad bright wall surfaces. */

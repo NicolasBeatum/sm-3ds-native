@@ -47,12 +47,15 @@ typedef struct PicaTile {
   uint32_t key, checked, used;
   uint16_t source[16], palette[16];
   bool valid, opaque;
+  /* RGB555 + valid bit. Uses the existing two bytes of tile padding. */
+  uint16_t emission;
 } PicaTile;
 
 typedef struct PicaAtlas {
   PicaTile tile[PICA_SLOTS];
   uint16_t hash[PICA_HASH];
   uint32_t frame, cursor, hits, decodes, live;
+  uint32_t contentRevision;
   uint32_t dirty[PICA_SLOTS / 32];
   uint8_t objectColumns[128][PICA_MAX_LINES];
   /* Resolve each BG tile/palette descriptor once per frame. Priority and

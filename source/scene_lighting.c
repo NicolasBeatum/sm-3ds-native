@@ -22,8 +22,11 @@ void SceneLighting_Begin(SceneLighting *s, bool enabled, unsigned room,
   s->liquidType = 0;
   s->enabled = enabled && state == 8;
   s->ship = room == 0x91f8;
-  if (!s->enabled) return;
+  s->room = room;
+  if (!s->enabled) { s->lampValid=false; return; }
   memset(s->emission,0,sizeof(s->emission));
+  const uint8_t interior[2][3]={{150,158,170},{88,101,121}};
+  memcpy(s->ambient,interior,sizeof(interior));
   s->samusX = samusX - cameraX + (int)origin;
   s->samusY = samusY - cameraY;
   /* Ship hatch and two side lamps, fixed to room coordinates. */
@@ -137,8 +140,14 @@ void SceneLighting_AddRoomSources(PicaFrame *f) {
 
 SceneEmission SceneLighting_Emission(PicaFrame *f, unsigned slot) {
   SceneLighting *s=f->lighting;
+  PicaTile *tile=f->atlas?&f->atlas->tile[slot]:NULL;
+  if (tile && (tile->emission&0x8000)) {
+    unsigned c=tile->emission;
+    return (SceneEmission){.key=slot+1,.r=(c&31)<<3,
+      .g=((c>>5)&31)<<3,.b=((c>>10)&31)<<3};
+  }
   SceneEmission *cached=&s->emission[(slot*2654435761u)>>24];
-  if(cached->key==slot+1) return *cached;
+  if(!tile && cached->key==slot+1) return *cached;
   unsigned bright=0,dark=0,r=0,g=0,b=0;
   for(unsigned i=0;i<64;i++) {
     uint32_t p=f->pixels[slot*64+i];
@@ -156,13 +165,82 @@ SceneEmission SceneLighting_Emission(PicaFrame *f, unsigned slot) {
   if(bright>=3 && bright<=20 && dark>=32) {
     cached->r=r/bright*3/4; cached->g=g/bright*3/4; cached->b=b/bright*3/4;
   }
+  if (tile) {
+    tile->emission=0x8000 | (cached->r>>3) | ((cached->g>>3)<<5) |
+        ((cached->b>>3)<<10);
+    cached->r&=248; cached->g&=248; cached->b&=248;
+  }
   return *cached;
+}
+
+void SceneLighting_Ambient(PicaFrame *f) {
+  SceneLighting *s=f->lighting;
+  if (!s || s->ship || !f->memory || !f->lines ||
+      f->worldLeft>=f->worldRight || f->hudEndY>=f->height) return;
+  /* Six palette samples in foreground scenery, not the HUD or sprite colors.
+   * Broad vegetation/cavern color is diffuse ambience, never a fake lamp.
+   * Each of the eight BG palettes is examined at most once per frame. */
+  unsigned palettes=0;
+  for (unsigned row=0;row<2;row++) {
+    unsigned y=f->hudEndY+(f->height-f->hudEndY)*(row?3:1)/4;
+    const PicaLine *p=&f->lines[y];
+    if (p->forcedBlank || !((p->screenEnabled[0] |
+        (p->addSubscreen?p->screenEnabled[1]:0))&1)) continue;
+    const BgLayer *bg=&p->bg[0];
+    unsigned wy=(y+bg->vScroll)&(bg->tilemapHigher?511:255);
+    for (unsigned col=0;col<3;col++) {
+      /* Keep samples in the native VRAM center; side room blocks may differ. */
+      int x=(int)f->originX+16+col*112;
+      if (x<f->worldLeft || x>=f->worldRight) continue;
+      unsigned wx=(x-(int)f->originX+bg->hScroll)&(bg->tilemapWider?511:255);
+      unsigned map=bg->tilemapAdr+((wy>>3)&31)*32+((wx>>3)&31)+
+        (wx>=256?0x400:0)+(wy>=256?(bg->tilemapWider?0x800:0x400):0);
+      unsigned tile=f->memory->vram[map&0x7fff];
+      if (tile&1023) palettes|=1u<<((tile>>10)&7);
+    }
+  }
+  unsigned rgb[3]={0},weight=0;
+  for (unsigned palette=0;palette<8;palette++) if (palettes&(1u<<palette))
+    for (unsigned i=1;i<16;i++) {
+      unsigned c=f->memory->cgram[palette*16+i];
+      unsigned r=c&31,g=(c>>5)&31,b=(c>>10)&31;
+      unsigned high=r>g?r:g; high=high>b?high:b;
+      unsigned low=r<g?r:g; low=low<b?low:b;
+      if (high<8 || high-low<6) continue;
+      unsigned w=high-low;
+      rgb[0]+=r*w; rgb[1]+=g*w; rgb[2]+=b*w; weight+=w;
+    }
+  if (!weight) return;
+  unsigned high=rgb[0]>rgb[1]?rgb[0]:rgb[1]; high=high>rgb[2]?high:rgb[2];
+  /* Stronger colored bounce in the distant layer, with a small foreground
+   * influence. Bounded brightness keeps interiors dark and objects readable. */
+  const uint8_t base[2][3]={{150,158,170},{88,101,121}};
+  for (unsigned c=0;c<3;c++) {
+    int tint=(int)(rgb[c]*48/high)-24;
+    s->ambient[0][c]=base[0][c]+tint/2;
+    s->ambient[1][c]=base[1][c]+tint;
+  }
 }
 
 void SceneLighting_Prepare(PicaFrame *f) {
   SceneLighting *s = f->lighting;
   memset(s->field, 0, sizeof(s->field));
-  memset(s->relief, 0, sizeof(s->relief));
+  /* The atlas revision changes on decode/eviction, palette animation or
+   * reinitialization. Pure host fixtures without an atlas remain per-frame. */
+  if (!f->atlas) memset(s->relief, 0, sizeof(s->relief));
+  else {
+    /* The 3DS alternates two atlas buffers. Give each half of the existing
+     * relief table instead of evicting every entry when the buffer changes. */
+    unsigned bank=s->reliefAtlas[0]==f->atlas?0:
+                  s->reliefAtlas[1]==f->atlas?1:
+                  !s->reliefAtlas[0]?0:!s->reliefAtlas[1]?1:(s->reliefBank^1);
+    if (s->reliefAtlas[bank]!=f->atlas) {
+      s->reliefAtlas[bank]=f->atlas;
+      memset(s->relief+bank*256,0,256*sizeof(SceneRelief));
+    }
+    s->reliefBank=bank;
+  }
+  SceneLighting_Ambient(f);
   /* One projection per frame: cast away from the nearest environmental
    * source, never from Samus's own fill/charge. Keep a stable diagonal in
    * unlit corridors. This remains a bounded sprite silhouette, not geometry. */
@@ -257,11 +335,11 @@ void SceneLighting_Tile(PicaFrame *f, unsigned group, unsigned slot,
    * readable foreground/objects. A mild cool ambient preserves palette hues;
    * environmental sources locally restore brightness and warm hot rooms. */
   int r = s->ship ? (object ? 190 : layer == 0 ? 158 : 100) :
-                   (object ? 188 : layer == 0 ? 150 : 88);
+                   (object ? 188 : s->ambient[layer][0]);
   int g = s->ship ? (object ? 198 : layer == 0 ? 176 : 126) :
-                   (object ? 196 : layer == 0 ? 158 : 101);
+                   (object ? 196 : s->ambient[layer][1]);
   int b = s->ship ? (object ? 210 : layer == 0 ? 202 : 161) :
-                   (object ? 208 : layer == 0 ? 170 : 121);
+                   (object ? 208 : s->ambient[layer][2]);
   /* A small luminance gradient gives tile surfaces directional relief.
    * Sample the actual flipped/cropped texture rather than screen tile edges.
    * This is an approximation, not an authored per-pixel normal map. */
@@ -270,13 +348,17 @@ void SceneLighting_Tile(PicaFrame *f, unsigned group, unsigned slot,
   /* A decoded atlas slot is immutable for this frame. Reuse its relief for
    * repeated tiles and the second SNES screen; cropped centers are keys too. */
   uint32_t key = (slot | (tx << 13) | (ty << 16)) + 1;
-  SceneRelief *cached = &s->relief[(key * 2654435761u) >> 23];
-  if (cached->key != key) {
+  unsigned index=f->atlas ? s->reliefBank*256+((key*2654435761u)>>24) :
+                                           (key*2654435761u)>>23;
+  SceneRelief *cached = &s->relief[index];
+  unsigned revision=f->atlas?f->atlas->contentRevision:0;
+  if (cached->key != key || cached->revision!=revision) {
     int nx = (int)TexelLuma(f, slot, tx - 1, ty) -
              (int)TexelLuma(f, slot, tx + 1, ty);
     int ny = (int)TexelLuma(f, slot, tx, ty - 1) -
              (int)TexelLuma(f, slot, tx, ty + 1);
     cached->key = key;
+    cached->revision=revision;
     cached->shade[0] = Clamp((-nx-ny)/10,-14,14);
     cached->shade[1] = Clamp(( nx-ny)/10,-14,14);
     cached->shade[2] = Clamp((-nx+ny)/10,-14,14);

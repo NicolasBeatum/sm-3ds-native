@@ -17,7 +17,7 @@ static bool Capture(void *context, unsigned group, const PicaQuad *q) {
   return true;
 }
 int main(void) {
-  SceneLighting s;
+  SceneLighting s={0};
   uint32_t pixels[PICA_ATLAS_W * PICA_ATLAS_H] = {0};
   PicaFrame f = {.width=256,.height=224,.hudEndY=32,
                 .worldRight=256,.pixels=pixels,.lighting=&s,.emit=Capture};
@@ -113,6 +113,25 @@ int main(void) {
   SceneLighting_AddLight(&s,128,200,160,154,72,24);
   SceneLighting_Prepare(&f);
   assert(s.shadowX==0 && s.shadowY==-12); /* Lava illuminates from below. */
+  /* Reused slots in the two 3DS atlas buffers cannot share the wrong relief.
+   * Reinitialization and actual content revisions invalidate a warm entry. */
+  static PicaAtlas atlases[2];
+  SceneLighting_Begin(&s,true,0xa70b,8,0,0,128,152,0,0); s.count=0;
+  PicaAtlasInit(&atlases[0],pixels); f.atlas=&atlases[0];
+  pixels[64+Morton(3,4)]=pixels[64+Morton(4,3)]=0xffffffff;
+  SceneLighting_Prepare(&f); q=original; SceneLighting_Tile(&f,0,1,&q);
+  assert(q.r==136);
+  unsigned bank=s.reliefBank;
+  PicaAtlasInit(&atlases[1],pixels); f.atlas=&atlases[1];
+  SceneLighting_Prepare(&f); q=original; SceneLighting_Tile(&f,0,1,&q);
+  assert(q.r==150 && s.reliefBank!=bank);
+  f.atlas=&atlases[0];
+  pixels[64+Morton(3,4)]=pixels[64+Morton(4,3)]=0xffffffff;
+  SceneLighting_Prepare(&f); q=original; SceneLighting_Tile(&f,0,1,&q);
+  assert(q.r==136 && s.reliefBank==bank);
+  PicaAtlasInit(&atlases[0],pixels);
+  SceneLighting_Prepare(&f); q=original; SceneLighting_Tile(&f,0,1,&q);
+  assert(q.r==150);
   /* A rejected frame must restore the caller's callback/context. */
   f.width=255; f.context=&s;
   assert(!PicaBuildFrame(&f) && f.emit==Capture && f.context==&s && f.lighting==&s);

@@ -28,6 +28,13 @@ static unsigned Min(unsigned a, unsigned b) { return a < b ? a : b; }
 static int IMin(int a, int b) { return a < b ? a : b; }
 static int IMax(int a, int b) { return a > b ? a : b; }
 static uint32_t Hash(uint32_t key) { return (key * 2654435761u) >> 18; }
+/* Unique across both presenter atlas buffers and reinitializations. Lighting
+ * caches can survive frames without trusting a reused slot or atlas address. */
+static uint32_t contentRevision;
+static uint32_t NextContentRevision(void) {
+  if (++contentRevision == 0) ++contentRevision;
+  return contentRevision;
+}
 static uint32_t Encode(uint16_t rgb, unsigned alpha) {
   return (((rgb & 31) * 8 + 1) << 24) |
          ((((rgb >> 5) & 31) * 8 + 1) << 16) |
@@ -36,6 +43,7 @@ static uint32_t Encode(uint16_t rgb, unsigned alpha) {
 
 void PicaAtlasInit(PicaAtlas *a, uint32_t *pixels) {
   memset(a, 0, sizeof(*a));
+  a->contentRevision=NextContentRevision();
   memset(pixels, 0, PICA_ATLAS_W * PICA_ATLAS_H * 4);
   for (unsigned i = 0; i < 64; i++) pixels[i] = 0xffffffffu;
   a->tile[0].valid = true;
@@ -148,6 +156,8 @@ static int Tile(PicaFrame *f, unsigned address, unsigned palette, unsigned bpp) 
   memcpy(t->palette, pal, colors * 2);
   t->valid = true;
   t->opaque = false;
+  t->emission = 0;
+  a->contentRevision=NextContentRevision();
   a->decodes++;
   a->dirty[slot / 32] |= 1u << (slot & 31);
   uint32_t *dest = f->pixels + slot * 64;
@@ -1018,13 +1028,63 @@ static bool Compose(PicaFrame *f) {
   return true;
 }
 
-/* Sample visible BG tiles once to find small bright lamp cores. The atlas
- * already caches decoded textures; a 256-entry classification cache avoids
- * revisiting their 64 pixels. This heuristic does not turn bright walls into
- * area lights and does not inspect HUD, sprites or liquid/weather BG3. */
+/* Sample visible BG tiles to find small bright lamp cores. Classification
+ * survives in atlas metadata until the texture/palette changes. A stable
+ * view reuses selected lamps for three frames, then resamples animated VRAM.
+ * Scroll/window/palette changes refresh immediately. No HUD/sprites/BG3. */
+static uint32_t LampViewSignature(const PicaFrame *f) {
+  uint32_t hash=2166136261u;
+#define MIX(v) (hash=(hash^(uint32_t)(v))*16777619u)
+  MIX(f->lighting->room); MIX(f->width); MIX(f->height); MIX(f->hudEndY);
+  MIX(f->originX); MIX(f->worldLeft); MIX(f->worldRight);
+  MIX(f->boundBg2); MIX(f->bg2Left); MIX(f->bg2Right);
+  MIX(f->wideRoomWidth); MIX(f->wideRoomHeight); MIX((uintptr_t)f->wideTileTable);
+  for (unsigned layer=0;layer<2;layer++) {
+    const PicaWideRoomLayer *room=&f->wideRoom[layer];
+    MIX((uintptr_t)room->blocks); MIX(room->cameraX); MIX(room->cameraY);
+    MIX(room->scrollX); MIX(room->scrollY); MIX(room->followScroll);
+  }
+  /* Only these scanlines are sampled by the lamp detector. Include window
+   * masks and per-line scrolling so a changed view cannot reuse old positions. */
+  for (unsigned y=f->hudEndY+4;y<f->height;y+=8) {
+    const PicaLine *p=&f->lines[y];
+    MIX(p->forcedBlank); MIX(p->addSubscreen);
+    MIX(p->screenEnabled[0]|(p->screenEnabled[1]<<8));
+    MIX(p->screenWindowed[0]|(p->screenWindowed[1]<<8));
+    MIX(p->windowsel); MIX(p->windowLogic[0]|(p->windowLogic[1]<<8));
+    MIX(p->window1left|(p->window1right<<8)|((uint32_t)p->window2left<<16)|
+        ((uint32_t)p->window2right<<24));
+    for (unsigned layer=0;layer<2;layer++) {
+      const BgLayer *bg=&p->bg[layer];
+      MIX(bg->hScroll|((uint32_t)bg->vScroll<<16));
+      MIX(bg->tilemapAdr|((uint32_t)bg->tileAdr<<16));
+      MIX(bg->tilemapWider|(bg->tilemapHigher<<1));
+    }
+  }
+#undef MIX
+  return hash;
+}
+
+static void AddCachedLamps(PicaFrame *f) {
+  SceneLighting *s=f->lighting;
+  for (unsigned i=0;i<s->lampCount;i++) {
+    const SceneLight *l=&s->lamps[i];
+    SceneLighting_AddLight(s,l->x,l->y,l->radius,l->r,l->g,l->b);
+  }
+}
+
 static void CollectLampSources(PicaFrame *f) {
   SceneLighting *s=f->lighting;
-  if(s->ship || s->count==SCENE_MAX_LIGHTS) return;
+  if(s->ship || s->count==SCENE_MAX_LIGHTS) { s->lampValid=false; return; }
+  uint32_t signature=LampViewSignature(f);
+  if (s->lampValid && s->lampSignature==signature && s->lampAge<3 &&
+      !memcmp(s->lampPalette,f->memory->cgram,sizeof(s->lampPalette))) {
+    s->lampAge++;
+    AddCachedLamps(f);
+    return;
+  }
+  s->lampSignature=signature; s->lampAge=0; s->lampCount=0; s->lampValid=true;
+  memcpy(s->lampPalette,f->memory->cgram,sizeof(s->lampPalette));
   SceneLight lamps[16]; unsigned count=0;
   for(unsigned layer=0;layer<2;layer++) {
     unsigned mask=1u<<layer;
@@ -1066,7 +1126,7 @@ static void CollectLampSources(PicaFrame *f) {
         if(!(e.r || e.g || e.b)) continue;
         int sx=x-(int)tx+4,sy=(int)y-(int)ty+4;
         bool duplicate=false;
-        for(unsigned i=0;i<s->count;i++) {
+        for(unsigned i=s->environmentStart;i<s->count;i++) {
           int dx=s->lights[i].x-sx,dy=s->lights[i].y-sy;
           if(s->lights[i].radius>=64 && dx*dx+dy*dy<32*32) duplicate=true;
         }
@@ -1088,9 +1148,10 @@ static void CollectLampSources(PicaFrame *f) {
       if(distance<best) {best=distance;nearest=i;}
     }
     SceneLight l=lamps[nearest];
-    SceneLighting_AddLight(s,l.x,l.y,l.radius,l.r,l.g,l.b);
+    s->lamps[s->lampCount++]=l;
     lamps[nearest]=lamps[--count];
   }
+  AddCachedLamps(f);
 }
 
 static void PrepareLights(PicaFrame *f) {

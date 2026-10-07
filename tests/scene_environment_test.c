@@ -6,6 +6,13 @@
 static uint16_t blocks[16*14];
 static uint32_t pixels[PICA_ATLAS_W*PICA_ATLAS_H];
 static SceneLighting scene;
+static bool Accept(void *ctx,unsigned group,const PicaQuad *q) {
+  (void)ctx; (void)group; (void)q; return true;
+}
+static void Frame(PicaFrame *f) {
+  SceneLighting_Begin(&scene,true,0xa70b,8,0,0,128,152,0,0);
+  PicaAtlasBegin(f->atlas); assert(PicaBuildFrame(f));
+}
 
 static void Begin(void) {
   SceneLighting_Begin(&scene,true,0xa70b,8,0,0,128,152,0,0);
@@ -84,5 +91,47 @@ int main(void) {
   scene.liquidType=4; scene.liquidY=180;
   SceneLighting_AddRoomSources(&f);
   assert(scene.lights[1].g>scene.lights[1].r && scene.lights[1].g>scene.lights[1].b);
+  /* The CPU saves work by retaining classification and sampled lamp locations.
+   * Palette, scroll/window and room changes must still invalidate immediately. */
+  static PicaAtlas atlas;
+  memset(&p,0,sizeof(p)); memset(lines,0,sizeof(lines));
+  for (unsigned y=0;y<224;y++) {
+    lines[y].mode=1; lines[y].brightness=15; lines[y].screenEnabled[0]=1;
+    lines[y].bg[0].tilemapAdr=0x4000;
+  }
+  for (unsigned i=0;i<1024;i++) p.vram[0x4000+i]=1;
+  p.vram[16]=0xff; p.cgram[1]=31<<5; /* Eight green core pixels. */
+  f.width=f.worldRight=256; f.worldLeft=0; f.atlas=&atlas; f.emit=Accept;
+  Begin(); PicaAtlasInit(&atlas,pixels); Frame(&f);
+  assert(scene.lampCount==2 && scene.lamps[0].g>scene.lamps[0].r);
+  assert(scene.ambient[1][1]>101 && scene.ambient[1][0]<88);
+  assert(sizeof(PicaTile)==80); /* Classification consumes old padding only. */
+  unsigned revision=atlas.contentRevision;
+  Frame(&f); assert(scene.lampAge==1 && !atlas.decodes &&
+      atlas.contentRevision==revision);
+  Frame(&f); assert(scene.lampAge==2);
+  Frame(&f); assert(scene.lampAge==3);
+  Frame(&f); assert(scene.lampAge==0);
+  p.cgram[1]=(31<<10)|(23<<5); Frame(&f); /* Bright cyan/blue core. */
+  assert(scene.lampAge==0 && scene.lamps[0].b>scene.lamps[0].g &&
+      atlas.contentRevision!=revision);
+  assert(scene.ambient[1][2]-121>scene.ambient[1][1]-101);
+  for (unsigned y=0;y<224;y++) lines[y].bg[0].hScroll=8;
+  Frame(&f); assert(scene.lampAge==0);
+  Frame(&f); assert(scene.lampAge==1);
+  for (unsigned y=0;y<224;y++) {
+    lines[y].screenWindowed[0]=1; lines[y].windowsel=2;
+    lines[y].window1left=0; lines[y].window1right=255;
+  }
+  Frame(&f); assert(scene.lampAge==0 && !scene.lampCount);
+  /* Undo the window and animate the core into a broad bright wall: no light
+   * survives after a reclassification, including reuse of atlas storage. */
+  for (unsigned y=0;y<224;y++) lines[y].screenWindowed[0]=0;
+  for (unsigned i=0;i<8;i++) p.vram[16+i]=0xff;
+  Frame(&f); assert(!scene.lampCount);
+  revision=atlas.contentRevision;
+  PicaAtlasInit(&atlas,pixels);
+  assert(atlas.contentRevision!=revision);
+  Frame(&f); assert(!scene.lampCount);
   puts("Environment: live colored caps, opened doors, lava/acid/water, bounds, light budget and lamp cores passed.");
 }
