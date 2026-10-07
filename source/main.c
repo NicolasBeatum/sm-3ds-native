@@ -796,15 +796,15 @@ int main(int argc, char** argv) {
           timing.lighting_applied, true, timing.light_prepare,
           timing.shadow_submit, glow.submit_ticks,
           timing.bg_main + timing.obj_main + timing.bg_sub + timing.obj_sub + timing.compose,
-          timing.light_sources, timing.shadow_quads, glow.quads,
+          timing.light_sources, timing.shadow_quads, glow.quads, timing.background_sources,
           timing.light_field_rebuilt);
     } else {
       FrameDiagnostics_RecordLighting(frameLightingRequested, false, false,
-          0, 0, 0, 0, 0, 0, 0, false);
+          0, 0, 0, 0, 0, 0, 0, 0, false);
     }
 #else
     FrameDiagnostics_RecordLighting(frameLightingRequested, false, false,
-        0, 0, 0, 0, 0, 0, 0, false);
+        0, 0, 0, 0, 0, 0, 0, 0, false);
 #endif
 
 #ifdef SM3DS_PROFILE

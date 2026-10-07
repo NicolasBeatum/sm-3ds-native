@@ -119,5 +119,25 @@ int main(void) {
   for (unsigned i=0;i<8;i++) p.vram[16+i]=0xff;
   Frame(&f); assert(scene.count==1);
   PicaAtlasInit(&atlas,pixels); Frame(&f); assert(scene.count==1);
+  /* Unused bright palette entries cannot determine the room color. */
+  p.cgram[1]=31<<5; p.cgram[15]=31|(31<<10);
+  Frame(&f);
+  assert(scene.ambient[1][1]==125 && scene.ambient[1][0]==64);
+  /* Actual BG2 pixels take precedence over a differently colored BG1. */
+  for(unsigned y=0;y<224;y++) {
+    lines[y].screenEnabled[0]=3;
+    lines[y].bg[1].tilemapAdr=0x4400;
+    lines[y].bg[1].tileAdr=0x2000;
+  }
+  for(unsigned i=0;i<1024;i++) p.vram[0x4400+i]=0xc01;
+  for(unsigned i=0;i<8;i++) p.vram[0x2010+i]=0xff;
+  p.cgram[1]=31; p.cgram[49]=31<<10;
+  Frame(&f);
+  assert(scene.count==1 && !scene.backgroundCount);
+  assert(scene.ambient[1][2]==145 && scene.ambient[1][0]==64);
+  /* Transparent BG2 rows fall back to the visible foreground hue. */
+  memset(&p.vram[0x2010],0,16*sizeof(uint16_t));
+  Frame(&f);
+  assert(scene.ambient[1][0]==112 && scene.ambient[1][2]==97);
   puts("Environment: colored caps, opened doors, liquids, bounds and no texture-generated lights passed.");
 }

@@ -1,5 +1,75 @@
 # Global lighting and depth trial
 
+## Background-guided lighting
+
+Latest trial: `output-lighting-background-trial/`, based on `0717f62`.
+Ambient hue samples six actual eight-pixel tile rows per layer (48 pixels),
+excluding transparent/unused palette entries. Colored BG2 samples determine
+the hue; BG1 is a fallback. Existing bounded foreground/background modulation
+and contact depth remain. Landing Site's normal appearance is byte-identical.
+
+Local BG2 lights require fingerprints of complete known art, not brightness:
+two 16×16 blue organic motifs from Green Brinstar (an artistic interpretation
+as bioluminescence), and red/blue 8×8 machinery status icons from Tourian.
+Indices alone are not sufficient; all motif graphics and map parts/flips must
+match. Identical adjacent LED icons form one panel. Live CGRAM supplies color
+and intensity, so unpowered/faded palettes cease emission. BG2 tilemap banks,
+flips, viewport bounds and its own parallax position determine placement.
+Full native collision blocks conservatively reject a buried source center.
+
+At most the nearest two background emitters are selected, within the existing
+8-source total; native doors/liquids and player lights keep their budget first.
+Most tilesets exit after four short graphics fingerprint checks. The same
+assets are recognized wherever these descriptors/graphics occur, without room
+IDs; this does not recognize every lamp or every tileset in the whole game.
+No normal maps, ray tracing, extra texture or new rendering pass is added.
+Up to two more halos use the existing glow texture/pass. The approximation can
+still illuminate across obstacles or change nearest sources while moving.
+Scanline-warped/disabled BG2 skips local motif sources, retaining ambience.
+
+Diagnostics advance to schema 6, appending `background_sources` to CSV and
+`*_background_sources_total` to summary cohorts. All prior columns remain in
+order. Existing `light_prepare_us` includes motif lookup; full model/ON-OFF spans
+include the color field and tile modulation. No per-tile timing calls are added.
+Model tag: `cached-color-grid-16px-background-motifs-v3`. ARM lighting state
+7052→7056 bytes; the 120-frame diagnostic ring 13920→14400 bytes. These are
+individual allocations, not total memory/stack/code measurements.
+
+Validation and artifacts:
+
+- Ten native scenes × two viewports: HUD exact, all OFF renders exact versus
+  the previous trial, Landing Site ON exact. Two BG2 sources in Green Brinstar
+  and Tourian; no BG2 points in the other eight scenes. Comparisons are host
+  software renders of native snapshots, not device GPU captures.
+- Twenty scene/viewport pairs × ten cold/warm double-atlas frames: quad bytes
+  stable and instrumented/plain results identical. Positive native motif
+  regression additionally tests mirrored/complete flowers, paired LEDs,
+  palette-off, changed art at identical indices, parallax/origin, solid-block
+  occlusion, warped registers, BG2 bounds and the total source budget. It reads
+  local native snapshots, storing no ROM graphics in tracked source.
+- Unit checks for unused palette colors, BG2 precedence/fallback, lighting,
+  environment, widescreen, diagnostic schema/totals and model counters pass.
+- The existing 106-frame native AC83→AC5A door route is checked again in both
+  viewports for retained lighting, unchanged HUD and byte-identical OFF output.
+- CPU model/vertex benchmark versus `0717f62`: six scenes × stationary/moving
+  synthetic camera, width 400, median nine measured 400-frame batches after
+  warmup. Two motif scenes add about 0.010–0.012 ms (+7–8.3% model work). Others
+  range -2.7% to +0.7%; raw data in `performance-host.json` / `.txt`. This excludes
+  GPU/glow drawing, audio, upload and whole-game FPS; Old 3DS matched dumps are
+  needed to measure the physical device cost.
+- CIA/3DSX retain FULL_NATIVE/LTO, OLD3DS, PHASE_DIAG, LIGHTING_TRIAL and
+  `SM3DS_SYSTEM_CORE_PERCENT=30`. Game timing, clocks, physics and lifecycle
+  remain unchanged. The user previously reported suspension working.
+
+Reproduce the native motif checks with existing local fixtures:
+
+```sh
+cc -O2 -w -iquote sm -Isource tools/lighting_background_check.c \
+  source/scene_lighting.c source/ppu_gpu_model.c -o /tmp/sm-background-check
+/tmp/sm-background-check output-lighting-biomes/brinstar-verde \
+  output-lighting-biomes/tourian
+```
+
 ## Continuous door lighting and contact depth
 
 Latest trial: `output-lighting-transition-trial/`, based on `6434e33`.

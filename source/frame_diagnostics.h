@@ -31,7 +31,8 @@ void FrameDiagnostics_RecordLighting(bool requested, bool applied, bool profiled
                                      uint32_t glow_submit_ticks,
                                      uint32_t model_build_ticks,
                                      unsigned sources, unsigned shadow_quads,
-                                     unsigned glow_quads, bool field_rebuilt);
+                                     unsigned glow_quads, unsigned background_sources,
+                                     bool field_rebuilt);
 
 /* Writes session/recent totals and recent individual samples at dump time. */
 bool FrameDiagnostics_WriteSummary(FILE *out);

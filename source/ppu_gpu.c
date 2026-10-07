@@ -536,6 +536,7 @@ PpuGpuTiming PpuGpuGetTiming(void) {
                         g_pica_build_timing.shadow_submit,
                         g_pica_build_timing.light_sources,
                         g_pica_build_timing.shadow_quads,
+                        g_pica_build_timing.background_sources,
                         g_pica_build_timing.lighting_applied,
                         g_pica_build_timing.light_field_rebuilt};
 }

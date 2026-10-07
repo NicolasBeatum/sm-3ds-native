@@ -1027,10 +1027,11 @@ static bool Compose(PicaFrame *f) {
   return true;
 }
 
-/* Emitters come from native doors/liquids and authored ship lamps.
+/* Emitters come from native doors/liquids, verified BG2 art and ship lamps.
  * Bright texture pixels alone never create a light. */
 static void PrepareLights(PicaFrame *f) {
   SceneLighting_AddRoomSources(f);
+  SceneLighting_AddBackgroundSources(f);
   SceneLighting_Prepare(f);
 }
 
@@ -1083,6 +1084,7 @@ static bool BuildFrame(PicaFrame *f) {
     g_pica_build_timing.light_prepare = SDL_GetPerformanceCounter() - before;
     g_pica_build_timing.lighting_applied = true;
     g_pica_build_timing.light_sources = f->lighting->count;
+    g_pica_build_timing.background_sources = f->lighting->backgroundCount;
   }
   if (!Backgrounds(f, 0)) return false;
   uint64_t after = SDL_GetPerformanceCounter();

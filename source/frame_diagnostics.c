@@ -16,7 +16,7 @@ typedef struct FrameSample {
   bool sector_changed, scroll_changed, bottom_redrawn;
   bool lighting_requested, lighting_applied, lighting_profile, light_field_rebuilt;
   uint32_t light_prepare_ticks, shadow_submit_ticks, glow_submit_ticks, model_build_ticks;
-  unsigned light_sources, shadow_quads, glow_quads;
+  unsigned light_sources, shadow_quads, glow_quads, background_sources;
 } FrameSample;
 
 static FrameSample g_samples[kRecentFrameCount];
@@ -33,7 +33,7 @@ typedef struct SessionTiming {
   uint32_t max_interval, max_work;
   uint64_t lighting_frames, lighting_active_frames, light_field_rebuilds;
   uint64_t light_prepare_ticks, shadow_submit_ticks, glow_submit_ticks, model_build_ticks;
-  uint64_t light_sources, shadow_quads, glow_quads;
+  uint64_t light_sources, shadow_quads, glow_quads, background_sources;
   uint32_t max_light_prepare, max_model_build;
 } SessionTiming;
 static SessionTiming g_session[3]; /* all, gameplay standard, gameplay wide */
@@ -165,6 +165,7 @@ static void RecordLightingTotals(SessionTiming *t, const FrameSample *s) {
   t->glow_submit_ticks += s->glow_submit_ticks;
   t->model_build_ticks += s->model_build_ticks;
   t->light_sources += s->light_sources;
+  t->background_sources += s->background_sources;
   t->shadow_quads += s->shadow_quads;
   t->glow_quads += s->glow_quads;
   if (s->light_prepare_ticks > t->max_light_prepare) t->max_light_prepare = s->light_prepare_ticks;
@@ -177,7 +178,8 @@ void FrameDiagnostics_RecordLighting(bool requested, bool applied, bool profiled
                                      uint32_t glow_submit_ticks,
                                      uint32_t model_build_ticks,
                                      unsigned sources, unsigned shadow_quads,
-                                     unsigned glow_quads, bool field_rebuilt) {
+                                     unsigned glow_quads, unsigned background_sources,
+                                     bool field_rebuilt) {
   if (!g_count) return;
   FrameSample *s = &g_samples[(g_next + kRecentFrameCount - 1) % kRecentFrameCount];
   s->lighting_requested = requested;
@@ -190,6 +192,7 @@ void FrameDiagnostics_RecordLighting(bool requested, bool applied, bool profiled
       s->shadow_submit_ticks = shadow_submit_ticks;
       s->glow_submit_ticks = glow_submit_ticks;
       s->light_sources = sources;
+      s->background_sources = background_sources;
       s->shadow_quads = shadow_quads;
       s->glow_quads = glow_quads;
       s->light_field_rebuilt = field_rebuilt;
@@ -217,13 +220,14 @@ static bool WriteLighting(FILE *out, const char *prefix, const SessionTiming *t)
       "%s_avg_shadow_submit_us=%" PRIu64 "\n%s_avg_glow_submit_us=%" PRIu64 "\n"
       "%s_avg_model_build_us=%" PRIu64 "\n%s_max_model_build_us=%" PRIu64 "\n"
       "%s_light_sources_total=%" PRIu64 "\n%s_shadow_quads_total=%" PRIu64 "\n"
-      "%s_glow_quads_total=%" PRIu64 "\n",
+      "%s_glow_quads_total=%" PRIu64 "\n%s_background_sources_total=%" PRIu64 "\n",
       prefix, t->lighting_frames, prefix, t->lighting_active_frames,
       prefix, t->light_field_rebuilds,
       prefix, AsUs(t->light_prepare_ticks) / active, prefix, AsUs(t->max_light_prepare),
       prefix, AsUs(t->shadow_submit_ticks) / active, prefix, AsUs(t->glow_submit_ticks) / active,
       prefix, AsUs(t->model_build_ticks) / profiled, prefix, AsUs(t->max_model_build),
-      prefix, t->light_sources, prefix, t->shadow_quads, prefix, t->glow_quads) > 0 && !ferror(out);
+      prefix, t->light_sources, prefix, t->shadow_quads, prefix, t->glow_quads,
+      prefix, t->background_sources) > 0 && !ferror(out);
 }
 
 static bool WriteEvent(FILE *out, const char *name, const SessionTiming *t) {
@@ -321,7 +325,7 @@ bool FrameDiagnostics_WriteSummary(FILE *out) {
   uint64_t interval_us = AsUs(interval_sum);
   uint64_t fps_x100 = interval_us ? (uint64_t)intervals * 100000000 / interval_us : 0;
   int result = fprintf(out,
-      "timing_schema=5\n"
+      "timing_schema=6\n"
       "recent_timing_scope=last_120_rendered_frames\n"
       "recent_frames=%u\nvalid_intervals=%u\n"
       "measured_fps=%" PRIu64 ".%02" PRIu64 "\n"
@@ -382,7 +386,7 @@ bool FrameDiagnostics_WriteCsv(FILE *out) {
             "scroll_block_y,map_sector_changed,scroll_block_changed,bottom_redrawn,"
             "lighting_requested,lighting_applied,lighting_profile,light_prepare_us,"
             "shadow_submit_us,glow_submit_us,model_build_us,light_sources,shadow_quads,"
-            "glow_quads,light_field_rebuilt\n",
+            "glow_quads,light_field_rebuilt,background_sources\n",
             out) < 0) return false;
   for (unsigned i = 0; i < g_count; i++) {
     const FrameSample *s = SampleAt(i);
@@ -404,12 +408,12 @@ bool FrameDiagnostics_WriteCsv(FILE *out) {
                 s->scroll_changed, s->bottom_redrawn) < 0)
       return false;
     if (fprintf(out, ",%u,%u,%u,%" PRIu64 ",%" PRIu64 ",%" PRIu64
-                     ",%" PRIu64 ",%u,%u,%u,%u\n",
+                     ",%" PRIu64 ",%u,%u,%u,%u,%u\n",
                 s->lighting_requested, s->lighting_applied, s->lighting_profile,
                 AsUs(s->light_prepare_ticks), AsUs(s->shadow_submit_ticks),
                 AsUs(s->glow_submit_ticks), AsUs(s->model_build_ticks),
                 s->light_sources, s->shadow_quads, s->glow_quads,
-                s->light_field_rebuilt) < 0) return false;
+                s->light_field_rebuilt, s->background_sources) < 0) return false;
   }
   return !ferror(out);
 }

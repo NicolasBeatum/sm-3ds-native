@@ -20,7 +20,7 @@ enum {
 typedef struct PicaBuildTiming {
   uint64_t bg_main, obj_main, bg_sub, obj_sub, compose;
   uint64_t light_prepare, shadow_submit;
-  unsigned light_sources, shadow_quads;
+  unsigned light_sources, shadow_quads, background_sources;
   bool lighting_applied, light_field_rebuilt;
 } PicaBuildTiming;
 extern PicaBuildTiming g_pica_build_timing;

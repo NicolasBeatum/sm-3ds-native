@@ -17,7 +17,7 @@ void SceneLighting_Begin(SceneLighting *s, bool enabled, unsigned room,
                          unsigned state, int cameraX, int cameraY,
                          int samusX, int samusY, unsigned origin,
                          unsigned charge) {
-  s->count = s->shadowCount = s->environmentStart = 0;
+  s->count = s->shadowCount = s->environmentStart = s->backgroundCount = 0;
   s->castShadow = false;
   s->liquidType = 0;
   /* Door/elevator transitions fade palettes while remaining in states 9-11.
@@ -146,14 +146,145 @@ void SceneLighting_AddRoomSources(PicaFrame *f) {
   }
 }
 
+/* Resolve the live 8x8 map, including both extra tilemap banks. Coordinates
+ * are screen-relative, so background lamps follow BG2 parallax, not BG1. */
+static unsigned BackgroundTile(const PicaFrame *f, const BgLayer *bg, int x, int y) {
+  unsigned wx=(x-(int)f->originX+bg->hScroll)&(bg->tilemapWider?511:255);
+  unsigned wy=(y+bg->vScroll)&(bg->tilemapHigher?511:255);
+  unsigned map=bg->tilemapAdr+((wy>>3)&31)*32+((wx>>3)&31)+
+      (wx>=256?0x400:0)+(wy>=256?(bg->tilemapWider?0x800:0x400):0);
+  return f->memory->vram[map&0x7fff];
+}
+
+static uint32_t BackgroundHash(const PicaFrame *f, const BgLayer *bg, unsigned id) {
+  uint32_t hash=2166136261u;
+  for (unsigned i=0;i<16;i++)
+    hash=(hash^f->memory->vram[(bg->tileAdr+id*16+i)&0x7fff])*16777619u;
+  return hash;
+}
+
+typedef struct BackgroundMotif {
+  uint16_t ids[4];
+  uint32_t hashes[4];
+  uint8_t size, color, radius;
+} BackgroundMotif;
+
+/* Art fingerprints, not a brightness heuristic or a room whitelist. The two
+ * organic motifs are interpreted as bioluminescence; the other two are the
+ * complete red/blue status-light icons in Tourian machinery. Matching all
+ * tiles prevents these shared indices becoming lamps in another tileset. */
+static const BackgroundMotif kBackgroundMotifs[] = {
+  {{0xec,0xed,0xfc,0xfd},{0x97469c3d,0x2051f0ef,0xda492305,0xd809cf01},2,1,80},
+  {{0xee,0xef,0xfe,0xff},{0x0bbd809c,0x1435066d,0x839b9a65,0x35e56785},2,1,80},
+  {{0x23},{0x188a690d},1,8,72},
+  {{0x33},{0xe5efd179},1,10,72},
+};
+
+static bool BackgroundExposed(const PicaFrame *f, int x, int y) {
+  const PicaWideRoomLayer *room=&f->wideRoom[0];
+  if (!room->blocks || !f->wideRoomWidth || !f->wideRoomHeight) return true;
+  int wx=room->cameraX+x-(int)f->originX,wy=room->cameraY+y;
+  if (wx<0 || wy<0 || wx>=(int)f->wideRoomWidth*16 || wy>=(int)f->wideRoomHeight*16)
+    return false;
+  unsigned type=room->blocks[(wy/16)*f->wideRoomWidth+wx/16]>>12;
+  /* Conservative full-block occlusion; slopes/extensions can contain gaps. */
+  return !((0xd700u>>type)&1u);
+}
+
+void SceneLighting_AddBackgroundSources(PicaFrame *f) {
+  SceneLighting *s=f->lighting;
+  if (!s || !s->enabled || s->ship || s->count>=SCENE_MAX_LIGHTS ||
+      !f->memory || !f->lines || f->hudEndY>=f->height) return;
+  unsigned first=f->hudEndY;
+  while (first<f->height && f->lines[first].forcedBlank) first++;
+  if (first==f->height) return;
+  const BgLayer *bg=&f->lines[first].bg[1];
+  if (bg->bigTiles || !((f->lines[first].screenEnabled[0] |
+      (f->lines[first].addSubscreen?f->lines[first].screenEnabled[1]:0))&2)) return;
+  bool available[4]={0};
+  bool any=false;
+  for (unsigned i=0;i<4;i++) {
+    const BackgroundMotif *m=&kBackgroundMotifs[i];
+    available[i]=true;
+    for (unsigned j=0;j<m->size*m->size;j++)
+      if (BackgroundHash(f,bg,m->ids[j])!=m->hashes[j]) {available[i]=false;break;}
+    any|=available[i];
+  }
+  if (!any) return; /* Most tilesets need only four small fingerprint checks. */
+  /* Unsupported scanline-warped backgrounds cannot give stable lamp positions. */
+  for (unsigned y=first;y<f->height;y++) {
+    const PicaLine *line=&f->lines[y];
+    if (line->forcedBlank) continue;
+    const BgLayer *b=&line->bg[1];
+    if (b->tileAdr!=bg->tileAdr || b->tilemapAdr!=bg->tilemapAdr ||
+        b->hScroll!=bg->hScroll || b->vScroll!=bg->vScroll ||
+        b->tilemapWider!=bg->tilemapWider || b->tilemapHigher!=bg->tilemapHigher ||
+        b->bigTiles || !((line->screenEnabled[0] |
+        (line->addSubscreen?line->screenEnabled[1]:0))&2)) return;
+  }
+  int left=f->worldLeft,right=f->worldRight;
+  if (f->boundBg2) {
+    if (left<f->bg2Left) left=f->bg2Left;
+    if (right>f->bg2Right) right=f->bg2Right;
+  }
+  int x0=left-((left-(int)f->originX+bg->hScroll)&7);
+  int y0=(int)first-((first+bg->vScroll)&7);
+  SceneLight nearest[2]={{0}};
+  int distance[2]={0x7fffffff,0x7fffffff};
+  unsigned count=0;
+  for (int y=y0;y<(int)f->height;y+=8) for (int x=x0;x<right;x+=8) {
+    unsigned tile=BackgroundTile(f,bg,x,y);
+    for (unsigned i=0;i<4;i++) if (available[i]) {
+      const BackgroundMotif *m=&kBackgroundMotifs[i];
+      unsigned hf=(tile>>14)&1,vf=(tile>>15)&1;
+      unsigned corner=m->size==2?vf*2+hf:0;
+      if ((tile&1023)!=m->ids[corner]) continue;
+      bool complete=true;
+      for (unsigned yy=0;yy<m->size;yy++) for (unsigned xx=0;xx<m->size;xx++) {
+        unsigned expected=m->ids[(yy^(m->size==2?vf:0))*m->size+(xx^(m->size==2?hf:0))];
+        unsigned t=BackgroundTile(f,bg,x+xx*8,y+yy*8);
+        if ((t&0xdc00)!=(tile&0xdc00) || (t&1023)!=expected) complete=false;
+      }
+      if (!complete) continue;
+      int cx=x+m->size*4,cy=y+m->size*4;
+      if (m->size==1) {
+        /* Neighboring identical LED icons form one panel, not stacked halos. */
+        unsigned descriptor=tile&0xdfff;
+        if ((BackgroundTile(f,bg,x-8,y)&0xdfff)==descriptor ||
+            (BackgroundTile(f,bg,x,y-8)&0xdfff)==descriptor) continue;
+        if ((BackgroundTile(f,bg,x+8,y)&0xdfff)==descriptor) cx+=4;
+        if ((BackgroundTile(f,bg,x,y+8)&0xdfff)==descriptor) cy+=4;
+      }
+      if (cx<left || cx>=right || cy<(int)first || cy>=(int)f->height ||
+          !BackgroundExposed(f,cx,cy)) continue;
+      unsigned c=f->memory->cgram[((tile>>10)&7)*16+m->color];
+      unsigned r=c&31,g=(c>>5)&31,b=(c>>10)&31;
+      unsigned high=r>g?r:g;high=high>b?high:b;
+      if (high<3) continue; /* Unpowered/faded icons do not light the room. */
+      int dx=cx-s->samusX,dy=cy-s->samusY,d=dx*dx+dy*dy;
+      unsigned place=d<distance[0]?0:1;
+      if (d>=distance[place]) continue;
+      if (!place) {nearest[1]=nearest[0];distance[1]=distance[0];}
+      nearest[place]=(SceneLight){cx,cy,m->radius,r*180/31,g*180/31,b*180/31};
+      distance[place]=d;
+      if (count<2) count++;
+    }
+  }
+  for (unsigned i=0;i<count && s->count<SCENE_MAX_LIGHTS;i++) {
+    const SceneLight *l=&nearest[i];
+    SceneLighting_AddLight(s,l->x,l->y,l->radius,l->r,l->g,l->b);
+    s->backgroundCount++;
+  }
+}
+
 void SceneLighting_Ambient(PicaFrame *f) {
   SceneLighting *s=f->lighting;
   if (!s || s->ship || !f->memory || !f->lines ||
       f->worldLeft>=f->worldRight || f->hudEndY>=f->height) return;
-  /* Six palette samples per scenery layer, not the HUD or sprite colors.
-   * Broad vegetation/cavern color is diffuse ambience, never a fake lamp.
-   * Each of the eight BG palettes is examined at most once per frame. */
-  unsigned palettes[2]={0};
+  /* Six tile-row samples per layer: 48 actual pixels, not entire palettes.
+   * A colored wall contributes diffuse ambience, never a local point light.
+   * BG2 sets the room hue; BG1 is a fallback when BG2 has no colored samples. */
+  unsigned rgb[2][3]={{0}},weight[2]={0};
   for (unsigned layer=0;layer<2;layer++)
   for (unsigned row=0;row<2;row++) {
     unsigned y=f->hudEndY+(f->height-f->hudEndY)*(row?3:1)/4;
@@ -161,36 +292,37 @@ void SceneLighting_Ambient(PicaFrame *f) {
     if (p->forcedBlank || !((p->screenEnabled[0] |
         (p->addSubscreen?p->screenEnabled[1]:0))&(1u<<layer))) continue;
     const BgLayer *bg=&p->bg[layer];
-    unsigned wy=(y+bg->vScroll)&(bg->tilemapHigher?511:255);
+    if (bg->bigTiles) continue;
+    unsigned wy=y+bg->vScroll;
     for (unsigned col=0;col<3;col++) {
-      /* Keep samples in the native VRAM center; side room blocks may differ. */
       int x=(int)f->originX+16+col*112;
-      if (x<f->worldLeft || x>=f->worldRight) continue;
-      unsigned wx=(x-(int)f->originX+bg->hScroll)&(bg->tilemapWider?511:255);
-      unsigned map=bg->tilemapAdr+((wy>>3)&31)*32+((wx>>3)&31)+
-        (wx>=256?0x400:0)+(wy>=256?(bg->tilemapWider?0x800:0x400):0);
-      unsigned tile=f->memory->vram[map&0x7fff];
-      if (tile&1023) palettes[layer]|=1u<<((tile>>10)&7);
+      if (x<f->worldLeft || x>=f->worldRight || (layer==1 && f->boundBg2 &&
+          (x<f->bg2Left || x>=f->bg2Right))) continue;
+      unsigned tile=BackgroundTile(f,bg,x,y);
+      unsigned ty=(wy&7)^((tile&0x8000)?7:0);
+      unsigned addr=bg->tileAdr+(tile&1023)*16+ty;
+      unsigned a=f->memory->vram[addr&0x7fff],b=f->memory->vram[(addr+8)&0x7fff];
+      for (unsigned bit=0;bit<8;bit++) {
+        unsigned index=((a>>bit)&1)|(((a>>(bit+8))&1)<<1)|
+            (((b>>bit)&1)<<2)|(((b>>(bit+8))&1)<<3);
+        if (!index) continue;
+        unsigned c=f->memory->cgram[((tile>>10)&7)*16+index];
+        unsigned r=c&31,g=(c>>5)&31,blue=(c>>10)&31;
+        unsigned high=r>g?r:g; high=high>blue?high:blue;
+        unsigned low=r<g?r:g; low=low<blue?low:blue;
+        if (high<8 || high-low<6) continue;
+        unsigned w=high-low;
+        rgb[layer][0]+=r*w;rgb[layer][1]+=g*w;rgb[layer][2]+=blue*w;weight[layer]+=w;
+      }
     }
   }
-  unsigned rgb[3]={0},weight=0;
-  for (unsigned palette=0;palette<8;palette++) if ((palettes[0]|palettes[1])&(1u<<palette))
-    for (unsigned i=1;i<16;i++) {
-      unsigned c=f->memory->cgram[palette*16+i];
-      unsigned r=c&31,g=(c>>5)&31,b=(c>>10)&31;
-      unsigned high=r>g?r:g; high=high>b?high:b;
-      unsigned low=r<g?r:g; low=low<b?low:b;
-      if (high<8 || high-low<6) continue;
-      unsigned w=(high-low)*((palettes[1]&(1u<<palette))?2:1);
-      rgb[0]+=r*w; rgb[1]+=g*w; rgb[2]+=b*w; weight+=w;
-    }
-  if (!weight) return;
-  unsigned high=rgb[0]>rgb[1]?rgb[0]:rgb[1]; high=high>rgb[2]?high:rgb[2];
-  /* Stronger colored bounce in the distant layer, with a small foreground
-   * influence. Bounded brightness keeps interiors dark and objects readable. */
+  unsigned layer=weight[1]?1:0;
+  if (!weight[layer]) return;
+  unsigned high=rgb[layer][0]>rgb[layer][1]?rgb[layer][0]:rgb[layer][1];
+  high=high>rgb[layer][2]?high:rgb[layer][2];
   const uint8_t base[2][3]={{150,158,170},{88,101,121}};
   for (unsigned c=0;c<3;c++) {
-    int tint=(int)(rgb[c]*48/high)-24;
+    int tint=(int)(rgb[layer][c]*48/high)-24;
     s->ambient[0][c]=base[0][c]+tint/2;
     s->ambient[1][c]=base[1][c]+tint;
   }

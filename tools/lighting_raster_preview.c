@@ -141,6 +141,6 @@ int main(int argc,char **argv) {
   FILE *file=fopen(path,"wb");assert(file);
   fprintf(file,"P6\n%u 224\n255\n",width);
   fwrite(output,1,width*224*3,file);fclose(file);
-  printf("%s: lights=%u shadows=%u/%u affected-shadow-pixels=%u/%u\n",
-         path,lighting.count,count[21],count[22],shadowPixels[0],shadowPixels[1]);
+  printf("%s: lights=%u background=%u shadows=%u/%u affected-shadow-pixels=%u/%u\n",
+         path,lighting.count,lighting.backgroundCount,count[21],count[22],shadowPixels[0],shadowPixels[1]);
 }

@@ -45,6 +45,7 @@ int main(void) {
     assert(PicaBuildFrame(&frame));
     assert(g_pica_build_timing.lighting_applied);
     assert(g_pica_build_timing.light_sources == 4);
+    assert(!g_pica_build_timing.background_sources);
     assert(g_pica_build_timing.light_field_rebuilt == (pass == 0));
     assert(g_pica_build_timing.light_prepare > 0);
     assert(g_pica_build_timing.shadow_submit > 0);

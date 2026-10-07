@@ -24,7 +24,7 @@ typedef struct SceneLighting {
   bool transition;
   uint8_t glowAlpha;
   int samusX, samusY;
-  unsigned count, shadowCount, environmentStart, room;
+  unsigned count, shadowCount, environmentStart, room, backgroundCount;
   SceneLight lights[SCENE_MAX_LIGHTS];
   PicaQuad shadows[SCENE_MAX_SHADOWS];
   int shadowX, shadowY;
@@ -55,8 +55,10 @@ void SceneLighting_Begin(SceneLighting *scene, bool enabled, unsigned room,
 void SceneLighting_AddLight(SceneLighting *scene, int x, int y, int radius,
                             unsigned r, unsigned g, unsigned b);
 void SceneLighting_Prepare(PicaFrame *frame);
-/* Diffuse room color from visible BG palettes; no extra point lights/passes. */
+/* Diffuse room color from sampled tile pixels, excluding unused palette colors. */
 void SceneLighting_Ambient(PicaFrame *frame);
+/* Recognized BG2 motifs only: live graphics, palette and parallax position. */
+void SceneLighting_AddBackgroundSources(PicaFrame *frame);
 /* Liquid Y is screen-relative; room blocks identify the live door caps. */
 void SceneLighting_AddRoomSources(PicaFrame *frame);
 void SceneLighting_Tile(PicaFrame *frame, unsigned group, unsigned slot,

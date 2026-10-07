@@ -48,7 +48,7 @@ int main(void) {
   ReadFile(csv, text, sizeof(text));
   assert(strstr(text, "\n1,20000,") == NULL);
   assert(strstr(text, "\n2,20000,"));
-  assert(strstr(text, "\n121,10000,2000,700,1200,3000,1000,1000,7000,0,0,1,1,20,30,40,50,60,70,1,8,37629,11,4,21,2,1,1,1,0,0,0,0,0,0,0,0,0,0,0\n"));
+  assert(strstr(text, "\n121,10000,2000,700,1200,3000,1000,1000,7000,0,0,1,1,20,30,40,50,60,70,1,8,37629,11,4,21,2,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0\n"));
   FILE *session = tmpfile();
   assert(session && FrameDiagnostics_WriteSummary(session));
   ReadFile(session, text, sizeof(text));
@@ -83,24 +83,24 @@ int main(void) {
    * CPU fallback: only actual GPU gameplay contributes to comparison cohorts.
    * Use a non-microsecond clock to verify conversion, and overflow the ring. */
   FrameDiagnostics_Init(2000000);
-  FrameDiagnostics_RecordLighting(true, true, true, 99, 99, 99, 99, 8, 8, 8, true);
+  FrameDiagnostics_RecordLighting(true, true, true, 99, 99, 99, 99, 8, 8, 8, 2, true);
   for (unsigned frame = 1; frame <= 125; frame++) {
     bool gpu = frame != 4;
     FrameDiagnostics_Record(frame, 40000, 10000, 4000, 6000, 14000, 4000,
                             2000, true, gpu, true, true, true);
     FrameDiagnostics_RecordScene(8, 0x91f8, 0, 0, 0, 0, false);
     if (frame == 2)
-      FrameDiagnostics_RecordLighting(false, false, true, 99, 99, 99, 10000, 8, 8, 8, true);
+      FrameDiagnostics_RecordLighting(false, false, true, 99, 99, 99, 10000, 8, 8, 8, 2, true);
     else if (frame == 3)
-      FrameDiagnostics_RecordLighting(true, false, true, 99, 99, 99, 8000, 8, 8, 8, true);
+      FrameDiagnostics_RecordLighting(true, false, true, 99, 99, 99, 8000, 8, 8, 8, 2, true);
     else
-      FrameDiagnostics_RecordLighting(true, true, true, 400, 60, 80, 12000, 4, 10, 3, frame == 1);
+      FrameDiagnostics_RecordLighting(true, true, true, 400, 60, 80, 12000, 4, 10, 3, 2, frame == 1);
   }
   summary = tmpfile(); csv = tmpfile();
   assert(summary && csv);
   assert(FrameDiagnostics_WriteSummary(summary) && FrameDiagnostics_WriteCsv(csv));
   ReadFile(summary, text, sizeof(text));
-  assert(strstr(text, "timing_schema=5\n"));
+  assert(strstr(text, "timing_schema=6\n"));
   assert(strstr(text, "recent_lighting_active_frames=120\n"));
   assert(strstr(text, "recent_light_field_rebuilds=0\n"));
   assert(strstr(text, "session_lighting_profile_frames=124\n"));
@@ -116,16 +116,18 @@ int main(void) {
   assert(strstr(text, "lighting_off_avg_light_prepare_us=0\n"));
   assert(strstr(text, "lighting_on_shadow_quads_total=1220\n"));
   assert(strstr(text, "lighting_on_glow_quads_total=366\n"));
+  assert(strstr(text, "lighting_on_background_sources_total=244\n"));
+  assert(strstr(text, "lighting_off_background_sources_total=0\n"));
   ReadFile(csv, text, sizeof(text));
   assert(strstr(text, "lighting_requested,lighting_applied,lighting_profile,light_prepare_us"));
-  assert(strstr(text, ",1,1,1,200,30,40,6000,4,10,3,0\n"));
+  assert(strstr(text, ",1,1,1,200,30,40,6000,4,10,3,0,2\n"));
   fclose(summary); fclose(csv);
 
   /* No instrumentation is reported as unavailable, rather than timed OFF. */
   FrameDiagnostics_Init(1000000);
   FrameDiagnostics_Record(1, 16000, 10000, 0, 0, 1000, 0, 0,
                           false, true, true, false, true);
-  FrameDiagnostics_RecordLighting(true, true, false, 99, 99, 99, 99, 8, 8, 8, true);
+  FrameDiagnostics_RecordLighting(true, true, false, 99, 99, 99, 99, 8, 8, 8, 2, true);
   summary = tmpfile();
   assert(summary && FrameDiagnostics_WriteSummary(summary));
   ReadFile(summary, text, sizeof(text));
