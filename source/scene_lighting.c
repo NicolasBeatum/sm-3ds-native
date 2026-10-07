@@ -20,7 +20,11 @@ void SceneLighting_Begin(SceneLighting *s, bool enabled, unsigned room,
   s->count = s->shadowCount = s->environmentStart = 0;
   s->castShadow = false;
   s->liquidType = 0;
-  s->enabled = enabled && state == 8;
+  /* Door/elevator transitions fade palettes while remaining in states 9-11.
+   * Keep the same modulation throughout instead of flashing back to unlit. */
+  s->enabled = enabled && state >= 8 && state <= 11;
+  s->transition = state >= 9 && state <= 11;
+  s->glowAlpha = 65;
   s->ship = room == 0x91f8;
   s->room = room;
   if (!s->enabled) { s->fieldValid=false; return; }
@@ -146,16 +150,17 @@ void SceneLighting_Ambient(PicaFrame *f) {
   SceneLighting *s=f->lighting;
   if (!s || s->ship || !f->memory || !f->lines ||
       f->worldLeft>=f->worldRight || f->hudEndY>=f->height) return;
-  /* Six palette samples in foreground scenery, not the HUD or sprite colors.
+  /* Six palette samples per scenery layer, not the HUD or sprite colors.
    * Broad vegetation/cavern color is diffuse ambience, never a fake lamp.
    * Each of the eight BG palettes is examined at most once per frame. */
-  unsigned palettes=0;
+  unsigned palettes[2]={0};
+  for (unsigned layer=0;layer<2;layer++)
   for (unsigned row=0;row<2;row++) {
     unsigned y=f->hudEndY+(f->height-f->hudEndY)*(row?3:1)/4;
     const PicaLine *p=&f->lines[y];
     if (p->forcedBlank || !((p->screenEnabled[0] |
-        (p->addSubscreen?p->screenEnabled[1]:0))&1)) continue;
-    const BgLayer *bg=&p->bg[0];
+        (p->addSubscreen?p->screenEnabled[1]:0))&(1u<<layer))) continue;
+    const BgLayer *bg=&p->bg[layer];
     unsigned wy=(y+bg->vScroll)&(bg->tilemapHigher?511:255);
     for (unsigned col=0;col<3;col++) {
       /* Keep samples in the native VRAM center; side room blocks may differ. */
@@ -165,18 +170,18 @@ void SceneLighting_Ambient(PicaFrame *f) {
       unsigned map=bg->tilemapAdr+((wy>>3)&31)*32+((wx>>3)&31)+
         (wx>=256?0x400:0)+(wy>=256?(bg->tilemapWider?0x800:0x400):0);
       unsigned tile=f->memory->vram[map&0x7fff];
-      if (tile&1023) palettes|=1u<<((tile>>10)&7);
+      if (tile&1023) palettes[layer]|=1u<<((tile>>10)&7);
     }
   }
   unsigned rgb[3]={0},weight=0;
-  for (unsigned palette=0;palette<8;palette++) if (palettes&(1u<<palette))
+  for (unsigned palette=0;palette<8;palette++) if ((palettes[0]|palettes[1])&(1u<<palette))
     for (unsigned i=1;i<16;i++) {
       unsigned c=f->memory->cgram[palette*16+i];
       unsigned r=c&31,g=(c>>5)&31,b=(c>>10)&31;
       unsigned high=r>g?r:g; high=high>b?high:b;
       unsigned low=r<g?r:g; low=low<b?low:b;
       if (high<8 || high-low<6) continue;
-      unsigned w=high-low;
+      unsigned w=(high-low)*((palettes[1]&(1u<<palette))?2:1);
       rgb[0]+=r*w; rgb[1]+=g*w; rgb[2]+=b*w; weight+=w;
     }
   if (!weight) return;
@@ -191,9 +196,66 @@ void SceneLighting_Ambient(PicaFrame *f) {
   }
 }
 
+static int FloorBlock(int pixel) {
+  return pixel>=0 ? pixel/16 : -((-pixel+15)/16);
+}
+
+static void ContactCells(const PicaFrame *f, SceneFieldKey *key) {
+  const PicaWideRoomLayer *room=&f->wideRoom[0];
+  if (f->lighting->ship || !room->blocks || !f->wideRoomWidth || !f->wideRoomHeight) return;
+  unsigned cols=(f->width+15)/16,rows=(f->height+15)/16;
+  for (unsigned y=0;y<rows+2;y++) {
+    int by=FloorBlock(room->cameraY+(int)y*16-8);
+    if (by<0 || by>=(int)f->wideRoomHeight) continue;
+    for (unsigned x=0;x<cols+2;x++) {
+      int bx=FloorBlock(room->cameraX+(int)x*16-8-(int)f->originX);
+      if (bx<0 || bx>=(int)f->wideRoomWidth) continue;
+      unsigned type=room->blocks[by*f->wideRoomWidth+bx]>>12;
+      /* Full solid/shootable/spike/bomb blocks and door triggers. Do not
+       * invent full walls from air, slopes or unresolvable BTS extensions. */
+      key->occupied[y][x]=(0xd700u>>type)&1u;
+    }
+  }
+}
+
+static unsigned ContactShade(const SceneFieldKey *key, unsigned x, unsigned y,
+                             unsigned layer) {
+  if (layer==2) return 0; /* Samus and enemies retain their readability. */
+  const uint8_t (*cells)[SCENE_FIELD_W+2]=key->occupied;
+  x++; y++;
+  if (cells[y][x]) return layer==1 ? 36 : 0;
+  unsigned edges=cells[y-1][x]+cells[y+1][x]+cells[y][x-1]+cells[y][x+1];
+  unsigned corners=cells[y-1][x-1]+cells[y-1][x+1]+
+                   cells[y+1][x-1]+cells[y+1][x+1];
+  return Clamp(edges*9+corners*3,0,layer==1?42:30);
+}
+
+static void GlowVisibility(PicaFrame *f) {
+  SceneLighting *s=f->lighting;
+  if (!f->memory || !f->lines) return;
+  bool visible=false;
+  for (unsigned y=f->hudEndY;y<f->height;y++)
+    if (!f->lines[y].forcedBlank && f->lines[y].brightness) {visible=true;break;}
+  if (!visible) {s->glowAlpha=0;return;}
+  if (!s->transition) return;
+  /* BG palette 0/1 contains HUD and colors deliberately kept during door
+   * fades. Use the fading scenery and Samus palette, never those HUD colors. */
+  unsigned high=0;
+  for (unsigned i=32;i<208;i++) {
+    if (i>=128 && i<192) continue;
+    unsigned color=f->memory->cgram[i];
+    for (unsigned shift=0;shift<15;shift+=5) {
+      unsigned channel=(color>>shift)&31;
+      if (channel>high) high=channel;
+    }
+  }
+  s->glowAlpha=65*high/31;
+}
+
 void SceneLighting_Prepare(PicaFrame *f) {
   SceneLighting *s = f->lighting;
   SceneLighting_Ambient(f);
+  GlowVisibility(f);
   /* One projection per frame: cast away from the nearest environmental
    * source, never from Samus's own fill/charge. Keep a stable diagonal in
    * unlit corridors. This remains a bounded sprite silhouette, not geometry. */
@@ -221,6 +283,7 @@ void SceneLighting_Prepare(PicaFrame *f) {
   memset(&key,0,sizeof(key));
   key.count=s->count; key.width=f->width; key.height=f->height;
   key.hudEndY=f->hudEndY;
+  ContactCells(f,&key);
   for (unsigned i=0;i<s->count;i++) {
     const SceneLight *l=&s->lights[i];
     key.lights[i][0]=l->x; key.lights[i][1]=l->y;
@@ -266,10 +329,13 @@ void SceneLighting_Prepare(PicaFrame *f) {
     }
   }
   for (unsigned layer=0;layer<3;layer++)
-    for (unsigned y=0;y<rows;y++) for (unsigned x=0;x<cols;x++)
+    for (unsigned y=0;y<rows;y++) for (unsigned x=0;x<cols;x++) {
+      unsigned shade=ContactShade(&key,x,y,layer);
       for (unsigned c=0;c<3;c++)
         s->color[layer][y][x][c]=Clamp(key.base[layer][c]+
-            (layer==1?field[y][x][c]*3/4:field[y][x][c]),0,255);
+            (layer==1?field[y][x][c]*3/4:field[y][x][c])-
+            shade,0,255);
+    }
 }
 
 void SceneLighting_Tile(PicaFrame *f, unsigned group, unsigned slot,

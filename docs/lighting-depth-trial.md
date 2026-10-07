@@ -1,5 +1,86 @@
 # Global lighting and depth trial
 
+## Continuous door lighting and contact depth
+
+Latest trial: `output-lighting-transition-trial/`, based on `6434e33`.
+The reported bright flash has a direct cause: `SceneLighting_Begin` previously
+accepted only gameplay state 8, so entering door states 9-11 restored the
+original unlit render. The native door coroutine fades palettes and returns to
+state 8 only after the new room's palette has finished appearing. Lighting is
+now retained through states 9-11. Samus physics, game logic and frame timing
+are unchanged; unsupported PPU modes/brightness fades and X-ray still keep
+their existing fallbacks.
+
+Halo opacity follows the fading scenery/Samus palette during these states,
+excluding the HUD palettes and their deliberately preserved door-fade colors.
+It is zero for blank playfields or a fully faded scenery palette. Colored
+modulation remains applied to the original fading tile colors, so it does not
+replace the game's fade with an invented transition animation.
+
+For depth outside Landing Site, the existing cached color grid now includes a
+small contact-shading mask from native room collision blocks and their immediate
+neighbors. Background art near full solid blocks/corners is darker, and the
+distant layer behind foreground solids receives a bounded extra reduction.
+Sprite readability and the normal Landing Site look are preserved. BG2 palette
+samples also contribute to colored diffuse ambience, weighted more than BG1
+samples. There are no new point emitters, texture-brightness classifications,
+normal maps, per-pixel light rays or extra normal-gameplay render passes.
+
+This is a coarse 16-pixel approximation of local contact depth, not a physical
+shadow solver: slopes and BTS extension blocks are conservatively ignored;
+lights can still reach across obstacles. Dynamic full-block/door changes are
+part of the cache key, so opening/destroying a block updates immediately. A
+one-cell occupancy border is bounded by room dimensions, including negative
+camera coordinates. The compiled lighting state grows from 6,592 to 7,052
+bytes (+460); this figure excludes stack, code and existing textures.
+
+Research references: [Godot's 2D lighting documentation](https://docs.godotengine.org/en/4.5/tutorials/2d/2d_lights_and_shadows.html)
+separates ambient modulation, light sources, layers and occluders;
+[GPU Gems' ambient occlusion chapter](https://developer.nvidia.com/gpugems/gpugems/part-iii-materials/chapter-17-ambient-occlusion)
+describes geometry-dependent visibility and reusable shading. These principles
+motivate the bounded contact approximation; those engines' shader algorithms
+are not implemented here.
+
+Validation:
+
+- Native AC83 → AC5A door route: 106 captured frames, including state 9, 104
+  frames of state 11, and return to state 8. State 10 completes within the
+  native coroutine tick; the separate state-guard test covers it. Both 256/400
+  model renders retain applied lighting throughout, preserve HUD rows 0-30,
+  and match the previous unlit render byte-for-byte when disabled. Halo opacity
+  traverses 13 levels from 65 to zero and back. No model fallback occurred on
+  this captured route; this is not a device GPU/sleep validation.
+- Tracked `door-left` preview mode reproduces WRAM, captured lines and state
+  exactly; PPU snapshots agree after ignoring their three process pointers.
+  The route uses diagnostic positioning/health only in host RAM and writes to
+  a separate preview SRAM path, leaving the original save unchanged.
+- Ten biome scenes × two widths × ON/OFF: HUD unchanged, all OFF images exact,
+  and Landing Site ON exact. Visual improvements vary by room; Green Brinstar
+  is subtler than contact edges in Maridia. Software comparisons and the native
+  route GIF are in the output folder, not hardware screenshots.
+- 22 scene/viewport pairs × ten cold/warm frames: instrumented/plain quad
+  output equal; cache and shadow counters agree. Lighting/environment,
+  widescreen, diagnostic summaries and model instrumentation tests pass.
+- Host CPU model/vertex benchmark versus `6434e33`: four scenes, stationary
+  and synthetic camera motion at width 400, nine measured 400-frame batches
+  after warmup. Median changes range from -0.8% to +2.0%. Raw data is
+  `performance-host.json` / `performance-host.txt`. It excludes device GPU,
+  audio, cache-clean services and total game speed.
+- FULL_NATIVE/LTO CIA/3DSX builds retain OLD3DS, PHASE_DIAG, LIGHTING_TRIAL and
+  `SM3DS_SYSTEM_CORE_PERCENT=30`. Dumps retain schema 5, with the model tag
+  `cached-color-grid-16px-contact-depth-v2`; obtain matched device ON/OFF dumps
+  to measure the actual cost.
+
+To reproduce the native route with a fresh output directory:
+
+```sh
+python3 tools/build_lighting_preview.py
+mkdir -p output-lighting-transition-trial/door-new
+output-lighting-trial/lighting-preview USER_ROM USER_SRAM \
+  output-lighting-transition-trial/door-new door-left
+python3 tools/build_lighting_benchmark.py --reference 6434e33
+```
+
 ## Hardware lighting measurements (schema v5)
 
 `output-lighting-diagnostics-trial/` extends the lean trial with lighting

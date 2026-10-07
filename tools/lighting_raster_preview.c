@@ -130,7 +130,7 @@ int main(int argc,char **argv) {
       float dx=(x-l->x)/radius,dy=(y-l->y)/radius;
       float a=1-dx*dx-dy*dy;
       if(a<=0)continue;
-      float w=a*a*a*65/255;
+      float w=a*a*a*lighting.glowAlpha/255;
       output[pos*3]=Clamp(output[pos*3]+l->r*w);
       output[pos*3+1]=Clamp(output[pos*3+1]+l->g*w);
       output[pos*3+2]=Clamp(output[pos*3+2]+l->b*w);

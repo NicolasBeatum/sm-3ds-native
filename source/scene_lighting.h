@@ -14,10 +14,15 @@ typedef struct SceneFieldKey {
   int lights[SCENE_MAX_LIGHTS][6];
   unsigned count, width, height, hudEndY;
   uint8_t base[3][3];
+  /* Visible collision cells plus a one-block border. Changes to doors and
+   * destructible blocks invalidate contact shading without texture probes. */
+  uint8_t occupied[SCENE_FIELD_H + 2][SCENE_FIELD_W + 2];
 } SceneFieldKey;
 /* Initialize to zero once; colors are rebuilt only when this key changes. */
 typedef struct SceneLighting {
   bool enabled, castShadow, ship, fieldValid;
+  bool transition;
+  uint8_t glowAlpha;
   int samusX, samusY;
   unsigned count, shadowCount, environmentStart, room;
   SceneLight lights[SCENE_MAX_LIGHTS];

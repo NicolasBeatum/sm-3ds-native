@@ -204,7 +204,7 @@ bool GpuPresenter_DrawBottom(const uint8_t *pixels, bool upload) {
  * Texture bytes are Morton tiled RGBA8 (ABGR in little endian). */
 static void DrawSceneGlow(const TopVideoLayout *layout) {
   const SceneLighting *s = PpuGpuLighting();
-  if (!s->enabled) return;
+  if (!s->enabled || !s->glowAlpha) return;
   if (!g_glow_ready) {
     if (!C3D_TexInit(&g_glow_texture, 64, 64, GPU_RGBA8)) return;
     uint32_t *pixels = g_glow_texture.data;
@@ -242,7 +242,7 @@ static void DrawSceneGlow(const TopVideoLayout *layout) {
         l->y + radius <= kHudEndLine || l->y - radius >= kSnesHeight)
       continue;
     C2D_ImageTint tint;
-    C2D_PlainImageTint(&tint, C2D_Color32(l->r, l->g, l->b, 65), 1.0f);
+    C2D_PlainImageTint(&tint, C2D_Color32(l->r, l->g, l->b, s->glowAlpha), 1.0f);
     C2D_DrawImageAt(image,
         layout->x + (l->x - layout->source_x - radius) * sx,
         layout->y + (l->y - radius) * sy, 0.0f, &tint,

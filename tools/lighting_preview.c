@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 
 bool g_debug_flag, g_other_image, g_new_ppu = true;
 int g_got_mismatch_count;
@@ -40,8 +41,44 @@ void RtlApuLock(void) {}
 void RtlApuUnlock(void) {}
 void Die(const char *s) { fprintf(stderr, "%s\n", s); exit(1); }
 
+static void CaptureDoorRoute(Snes *s, const char *root) {
+  /* Diagnostic positioning into AC83's real left-door corridor, followed
+   * exclusively by native movement/shooting and the normal room coroutine. */
+  samus_x_pos=samus_prev_x_pos=64;
+  samus_y_pos=samus_prev_y_pos=128;
+  bool saw=false,finished=false;
+  for (unsigned step=0;step<800;step++) {
+    unsigned input=button_config_left | ((step%12<2)?button_config_shoot_x:0),bits=0;
+    for (unsigned j=0;j<16;j++,input>>=1) bits=(bits<<1)|(input&1);
+    RtlRunFrame(bits);
+    if (game_state>=9 && game_state<=11) saw=true;
+    if (!(game_state>=9 && game_state<=11) && !(saw && game_state==8)) continue;
+    char directory[1024],path[1200];
+    snprintf(directory,sizeof(directory),"%s/door-%03u",root,step);
+    if (mkdir(directory,0755)!=0) Die("Door capture directory must not exist");
+    const char *names[]={"landing-wram.bin","landing-lines.bin","landing-ppu.bin"};
+    const void *data[]={g_ram,captured,s->ppu};
+    const size_t sizes[]={sizeof(g_ram),sizeof(captured),sizeof(*s->ppu)};
+    for (unsigned i=0;i<3;i++) {
+      snprintf(path,sizeof(path),"%s/%s",directory,names[i]);
+      FILE *file=fopen(path,"wb");
+      if (!file || fwrite(data[i],1,sizes[i],file)!=sizes[i]) Die("Door capture write failed");
+      fclose(file);
+    }
+    snprintf(path,sizeof(path),"%s/state.txt",directory);
+    FILE *file=fopen(path,"w");if (!file) Die("Door state write failed");
+    fprintf(file,"frame=%u state=%u room=%04x step=%04x\n",
+        step,game_state,room_ptr,door_transition_function);fclose(file);
+    if (game_state==8) {
+      printf("door returned to gameplay step=%u room=%04x\n",step,room_ptr);
+      finished=true;break;
+    }
+  }
+  if (!saw || !finished) Die("Native door route did not complete");
+}
+
 int main(int argc, char **argv) {
-  if (argc != 4 && argc != 5) { fprintf(stderr,"usage: %s ROM SRAM output-directory [fire|jump|move|slot1|slot1-move|acid|lava|station:AREA:INDEX]\n",argv[0]); return 1; }
+  if (argc != 4 && argc != 5) { fprintf(stderr,"usage: %s ROM SRAM output-directory [fire|jump|move|slot1|slot1-move|acid|lava|door-left|station:AREA:INDEX]\n",argv[0]); return 1; }
   /* Never permit game SRAM writes to the source save. */
   char path[1024];
   snprintf(path,sizeof(path),"%s/preview-only.srm",argv[3]);
@@ -63,7 +100,8 @@ int main(int argc, char **argv) {
   printf("slot %u: area=%u station=%u health=%u\n",slot+1,area_index,load_station_index,samus_health);
   selected_save_slot = slot;
   bool acid = argc==5 && !strcmp(argv[4],"acid");
-  lavaFixture = argc==5 && !strcmp(argv[4],"lava");
+  bool doorFixture = argc==5 && !strcmp(argv[4],"door-left");
+  lavaFixture = doorFixture || (argc==5 && !strcmp(argv[4],"lava"));
   bool stationFixture = argc==5 && !strncmp(argv[4],"station:",8);
   unsigned fixtureArea=0, fixtureIndex=0, fixtureRoom=0;
   if (stationFixture) {
@@ -145,6 +183,7 @@ int main(int argc, char **argv) {
     fwrite(rgb,1,3,file);
   }
   fclose(file);
+  if (doorFixture) CaptureDoorRoute(s,argv[3]);
   snes_free(s);
   return 0;
 }

@@ -29,7 +29,7 @@ int main(void) {
   assert(!memcmp(&q,&original,sizeof(q)));
   for(unsigned state=0;state<44;state++) {
     SceneLighting_Begin(&s,true,0x91f8,state,1024,1024,1152,1140,0,0);
-    assert(s.enabled == (state == 8));
+    assert(s.enabled == (state >= 8 && state <= 11));
   }
   SceneLighting_Begin(&s,true,0x92fd,8,1024,1024,1152,1140,0,0);
   assert(s.enabled && !s.ship && s.count==1);
@@ -143,5 +143,56 @@ int main(void) {
   assert(!PicaBuildFrame(&f) && f.emit==Capture && f.context==&s && f.lighting==&s);
   f.xrayActive=true;
   assert(!PicaBuildFrame(&f) && !s.enabled && f.emit==Capture && f.context==&s);
+
+  /* Contact shading follows actual solid blocks, not texture highlights.
+   * Opening/destroying a block updates even when camera/lights stay still. */
+  uint16_t blocks[16]={0}; blocks[5]=0x8000;
+  PicaFrame contact={.width=64,.height=64,.worldRight=64,.lighting=&s,
+    .wideRoom={ {.blocks=blocks} },.wideRoomWidth=4,.wideRoomHeight=4};
+  SceneLighting_Begin(&s,true,0xa70b,8,0,0,512,512,0,0); s.count=0;
+  SceneLighting_Prepare(&contact);
+  assert(s.color[0][1][1][0]==150 && s.color[1][1][1][0]==52);
+  assert(s.color[0][1][2][0]==141 && s.color[0][2][2][0]==147);
+  assert(s.color[2][1][2][0]==188); /* No extra darkening of sprites. */
+  blocks[5]=0;
+  SceneLighting_Prepare(&contact);
+  assert(s.color[0][1][2][0]==150 && s.color[1][1][1][0]==88);
+  blocks[5]=0x1000; /* A slope is not a whole opaque wall. */
+  SceneLighting_Prepare(&contact);
+  assert(s.color[0][1][2][0]==150);
+  contact.wideRoom[0].cameraX=-32;contact.wideRoom[0].cameraY=-32;
+  SceneLighting_Prepare(&contact);
+  assert(s.color[0][0][0][0]==150);
+
+  /* The distant background contributes color even when foreground palettes
+   * differ. Transition halos follow fading scenery, excluding bright HUD. */
+  static Ppu memory;
+  PicaLine lines[64]={0};
+  for(unsigned y=0;y<64;y++) {
+    lines[y].mode=1;lines[y].brightness=15;lines[y].screenEnabled[0]=3;
+    lines[y].bg[0].tilemapAdr=0x1000;lines[y].bg[1].tilemapAdr=0x1800;
+  }
+  for(unsigned i=0;i<1024;i++) {
+    memory.vram[0x1000+i]=1|(1<<10);memory.vram[0x1800+i]=1|(2<<10);
+  }
+  memory.cgram[17]=31;memory.cgram[33]=31<<5;
+  contact.memory=&memory;contact.lines=lines;contact.wideRoom[0].blocks=NULL;
+  SceneLighting_Begin(&s,true,0xa70b,8,0,0,512,512,0,0);
+  SceneLighting_Prepare(&contact);
+  assert(s.ambient[1][1]>s.ambient[1][0] && s.glowAlpha==65);
+  SceneFieldKey normalKey=s.fieldKey;
+  for(unsigned state=9;state<=11;state++) {
+    SceneLighting_Begin(&s,true,0xa70b,state,0,0,512,512,0,0);
+    SceneLighting_Prepare(&contact);
+    assert(s.enabled && s.glowAlpha==65);
+    assert(!memcmp(&s.fieldKey,&normalKey,sizeof(normalKey)));
+  }
+  memory.cgram[33]=15<<5;
+  SceneLighting_Prepare(&contact);assert(s.glowAlpha==65*15/31);
+  memory.cgram[33]=0;
+  SceneLighting_Prepare(&contact);assert(s.glowAlpha==0); /* HUD still bright. */
+  for(unsigned y=0;y<64;y++)lines[y].forcedBlank=true;
+  SceneLighting_Begin(&s,true,0xa70b,8,0,0,512,512,0,0);
+  SceneLighting_Prepare(&contact);assert(s.glowAlpha==0);
   puts("Lighting: global rooms, state guards, shared field, camera, HUD/weather, source bounds and shadows passed.");
 }
