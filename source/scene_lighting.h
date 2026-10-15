@@ -2,13 +2,26 @@
 #include "ppu_gpu_model.h"
 
 enum { SCENE_MAX_LIGHTS = 8, SCENE_MAX_SHADOWS = 128,
+       SCENE_MAX_SCENERY_LIGHTS = 4, SCENE_EMITTER_CACHE = 64,
        SCENE_FIELD_SHIFT = 4, SCENE_FIELD_CELL = 1 << SCENE_FIELD_SHIFT,
        SCENE_FIELD_W = (400 + SCENE_FIELD_CELL - 1) / SCENE_FIELD_CELL,
        SCENE_FIELD_H = (PICA_MAX_LINES + SCENE_FIELD_CELL - 1) / SCENE_FIELD_CELL };
 typedef struct SceneLight {
   int x, y, radius;
   uint8_t r, g, b;
+  bool glow; /* Uses existing tail padding; diffuse-only scenery costs no halo. */
 } SceneLight;
+typedef struct SceneEmitter {
+  uint16_t x, y, tile;
+  uint8_t motif;
+} SceneEmitter;
+typedef struct SceneEmitterCache {
+  uint32_t mapHash;
+  uint16_t tileAdr, mapAdr;
+  uint8_t wider, higher, mask, count;
+  bool valid, overflow;
+  SceneEmitter entries[SCENE_EMITTER_CACHE];
+} SceneEmitterCache;
 /* Zero-initialized key has no dependence on atlas buffer addresses. */
 typedef struct SceneFieldKey {
   int lights[SCENE_MAX_LIGHTS][6];
@@ -26,6 +39,9 @@ typedef struct SceneLighting {
   int samusX, samusY;
   unsigned count, shadowCount, environmentStart, room, backgroundCount;
   SceneLight lights[SCENE_MAX_LIGHTS];
+  /* Native tilemap coordinates survive camera/parallax and atlas swaps.
+   * Live palette and foreground visibility are still checked every frame. */
+  SceneEmitterCache emitters[2];
   PicaQuad shadows[SCENE_MAX_SHADOWS];
   int shadowX, shadowY;
   unsigned liquidType;
@@ -57,7 +73,7 @@ void SceneLighting_AddLight(SceneLighting *scene, int x, int y, int radius,
 void SceneLighting_Prepare(PicaFrame *frame);
 /* Diffuse room color from sampled tile pixels, excluding unused palette colors. */
 void SceneLighting_Ambient(PicaFrame *frame);
-/* Recognized BG2 motifs only: live graphics, palette and parallax position. */
+/* Recognized BG1/BG2 emitters: live graphics, palette and layer scroll. */
 void SceneLighting_AddBackgroundSources(PicaFrame *frame);
 /* Liquid Y is screen-relative; room blocks identify the live door caps. */
 void SceneLighting_AddRoomSources(PicaFrame *frame);

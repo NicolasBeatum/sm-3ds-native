@@ -19,6 +19,7 @@ static bool Capture(void *context, unsigned group, const PicaQuad *q) {
 }
 int main(void) {
   SceneLighting s={0};
+  assert(sizeof(SceneLight)==16);
   uint32_t pixels[PICA_ATLAS_W * PICA_ATLAS_H] = {0};
   PicaFrame f = {.width=256,.height=224,.hudEndY=32,
                 .worldRight=256,.pixels=pixels,.lighting=&s,.emit=Capture};

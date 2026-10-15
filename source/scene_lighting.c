@@ -10,7 +10,7 @@ void SceneLighting_AddLight(SceneLighting *s, int x, int y, int radius,
                             unsigned r, unsigned g, unsigned b) {
   if (!s->enabled || s->count == SCENE_MAX_LIGHTS || radius <= 0) return;
   s->lights[s->count++] = (SceneLight){x,y,Clamp(radius,1,256),
-      Clamp(r,0,255),Clamp(g,0,255),Clamp(b,0,255)};
+      Clamp(r,0,255),Clamp(g,0,255),Clamp(b,0,255),true};
 }
 
 void SceneLighting_Begin(SceneLighting *s, bool enabled, unsigned room,
@@ -136,7 +136,7 @@ void SceneLighting_AddRoomSources(PicaFrame *f) {
     unsigned place=d<distance[0]?0:1;
     if (d>=distance[place]) continue;
     if (!place) {doors[1]=doors[0];distance[1]=distance[0];}
-    doors[place]=(SceneLight){sx,sy,88,rgb[color][0],rgb[color][1],rgb[color][2]};
+    doors[place]=(SceneLight){sx,sy,88,rgb[color][0],rgb[color][1],rgb[color][2],true};
     distance[place]=d;
     if (count<2) count++;
   }
@@ -146,16 +146,17 @@ void SceneLighting_AddRoomSources(PicaFrame *f) {
   }
 }
 
-/* Resolve the live 8x8 map, including both extra tilemap banks. Coordinates
- * are screen-relative, so background lamps follow BG2 parallax, not BG1. */
-static unsigned BackgroundTile(const PicaFrame *f, const BgLayer *bg, int x, int y) {
-  unsigned wx=(x-(int)f->originX+bg->hScroll)&(bg->tilemapWider?511:255);
-  unsigned wy=(y+bg->vScroll)&(bg->tilemapHigher?511:255);
+/* Resolve live 8x8 map banks. Cache coordinates are in the native tilemap,
+ * independent of BG1/BG2 scroll, viewport origin and the two atlas buffers. */
+static unsigned MapTile(const PicaFrame *f, const BgLayer *bg, int x, int y) {
+  unsigned wx=x&(bg->tilemapWider?511:255),wy=y&(bg->tilemapHigher?511:255);
   unsigned map=bg->tilemapAdr+((wy>>3)&31)*32+((wx>>3)&31)+
       (wx>=256?0x400:0)+(wy>=256?(bg->tilemapWider?0x800:0x400):0);
   return f->memory->vram[map&0x7fff];
 }
-
+static unsigned BackgroundTile(const PicaFrame *f, const BgLayer *bg, int x, int y) {
+  return MapTile(f,bg,x-(int)f->originX+bg->hScroll,y+bg->vScroll);
+}
 static uint32_t BackgroundHash(const PicaFrame *f, const BgLayer *bg, unsigned id) {
   uint32_t hash=2166136261u;
   for (unsigned i=0;i<16;i++)
@@ -166,19 +167,21 @@ static uint32_t BackgroundHash(const PicaFrame *f, const BgLayer *bg, unsigned i
 typedef struct BackgroundMotif {
   uint16_t ids[4];
   uint32_t hashes[4];
-  uint8_t size, color, radius;
+  uint8_t size, color, radius, layer;
 } BackgroundMotif;
 
-/* Art fingerprints, not a brightness heuristic or a room whitelist. The two
- * organic motifs are interpreted as bioluminescence; the other two are the
- * complete red/blue status-light icons in Tourian machinery. Matching all
- * tiles prevents these shared indices becoming lamps in another tileset. */
+/* Complete art fingerprints, never arbitrary bright pixels. The organic
+ * motifs are interpreted as bioluminescence. BG1 adds actual machinery pilot
+ * lamps and the elevator's yellow indicators, shared by several biomes. */
 static const BackgroundMotif kBackgroundMotifs[] = {
-  {{0xec,0xed,0xfc,0xfd},{0x97469c3d,0x2051f0ef,0xda492305,0xd809cf01},2,1,80},
-  {{0xee,0xef,0xfe,0xff},{0x0bbd809c,0x1435066d,0x839b9a65,0x35e56785},2,1,80},
-  {{0x23},{0x188a690d},1,8,72},
-  {{0x33},{0xe5efd179},1,10,72},
+  {{0xec,0xed,0xfc,0xfd},{0x97469c3d,0x2051f0ef,0xda492305,0xd809cf01},2,1,80,1},
+  {{0xee,0xef,0xfe,0xff},{0x0bbd809c,0x1435066d,0x839b9a65,0x35e56785},2,1,80,1},
+  {{0x23},{0x188a690d},1,8,72,1},
+  {{0x33},{0xe5efd179},1,10,72,1},
+  {{0x26,0x27,0x36,0x37},{0x0e468161,0xc92c320b,0x6b486d43,0x16ccfb4f},2,8,96,0},
+  {{0x2ea,0x2eb,0x2f8,0x2f9},{0x8d1e64df,0x7c733a82,0xa2299402,0x435b87cd},2,1,96,0},
 };
+enum { kMotifs=sizeof(kBackgroundMotifs)/sizeof(kBackgroundMotifs[0]) };
 
 static bool BackgroundExposed(const PicaFrame *f, int x, int y) {
   const PicaWideRoomLayer *room=&f->wideRoom[0];
@@ -187,8 +190,123 @@ static bool BackgroundExposed(const PicaFrame *f, int x, int y) {
   if (wx<0 || wy<0 || wx>=(int)f->wideRoomWidth*16 || wy>=(int)f->wideRoomHeight*16)
     return false;
   unsigned type=room->blocks[(wy/16)*f->wideRoomWidth+wx/16]>>12;
-  /* Conservative full-block occlusion; slopes/extensions can contain gaps. */
   return !((0xd700u>>type)&1u);
+}
+
+/* Reject almost every tile with a single ID lookup, before checking a motif. */
+static int MotifAt(const PicaFrame *f, const BgLayer *bg, unsigned mask,
+                   int x, int y, SceneEmitter *e) {
+  unsigned tile=MapTile(f,bg,x,y),id=tile&1023;
+  unsigned i;
+  switch (id) {
+    case 0xec:case 0xed:case 0xfc:case 0xfd:i=0;break;
+    case 0xee:case 0xef:case 0xfe:case 0xff:i=1;break;
+    case 0x23:i=2;break;
+    case 0x33:i=3;break;
+    case 0x26:case 0x27:case 0x36:case 0x37:i=4;break;
+    case 0x2ea:case 0x2eb:case 0x2f8:case 0x2f9:i=5;break;
+    default:return -1;
+  }
+  if (!(mask&(1u<<i))) return -1;
+  const BackgroundMotif *m=&kBackgroundMotifs[i];
+  unsigned hf=(tile>>14)&1,vf=(tile>>15)&1;
+  unsigned corner=m->size==2?vf*2+hf:0;
+  if (id!=m->ids[corner]) return -1;
+  for (unsigned yy=0;yy<m->size;yy++) for (unsigned xx=0;xx<m->size;xx++) {
+    unsigned expected=m->ids[(yy^(m->size==2?vf:0))*m->size+(xx^(m->size==2?hf:0))];
+    unsigned t=MapTile(f,bg,x+xx*8,y+yy*8);
+    if ((t&0xdc00)!=(tile&0xdc00) || (t&1023)!=expected) return -1;
+  }
+  int cx=x+m->size*4,cy=y+m->size*4;
+  if (m->size==1) {
+    unsigned descriptor=tile&0xdfff;
+    if ((MapTile(f,bg,x-8,y)&0xdfff)==descriptor ||
+        (MapTile(f,bg,x,y-8)&0xdfff)==descriptor) return -1;
+    if ((MapTile(f,bg,x+8,y)&0xdfff)==descriptor) cx+=4;
+    if ((MapTile(f,bg,x,y+8)&0xdfff)==descriptor) cy+=4;
+  }
+  /* The two mirrored halves of an elevator make one central warm light. */
+  if (i==5) {
+    if (hf) return -1;
+    unsigned partner=MapTile(f,bg,x+16,y);
+    if ((partner&0xdc00)!=((tile&0xdc00)|0x4000) || (partner&1023)!=m->ids[1]) return -1;
+    for (unsigned yy=0;yy<2;yy++) for (unsigned xx=0;xx<2;xx++) {
+      unsigned t=MapTile(f,bg,x+16+xx*8,y+yy*8);
+      if ((t&0xdc00)!=((tile&0xdc00)|0x4000) || (t&1023)!=m->ids[yy*2+(xx^1)]) return -1;
+    }
+    cx+=8;
+  }
+  *e=(SceneEmitter){cx,cy,tile,i};
+  return i;
+}
+
+static bool StableScenery(const PicaFrame *f,unsigned first,unsigned layer) {
+  const BgLayer *bg=&f->lines[first].bg[layer];
+  for (unsigned y=first;y<f->height;y++) {
+    const PicaLine *line=&f->lines[y];
+    if (line->forcedBlank) continue;
+    const BgLayer *b=&line->bg[layer];
+    if (b->tileAdr!=bg->tileAdr || b->tilemapAdr!=bg->tilemapAdr ||
+        b->hScroll!=bg->hScroll || b->vScroll!=bg->vScroll ||
+        b->tilemapWider!=bg->tilemapWider || b->tilemapHigher!=bg->tilemapHigher ||
+        b->bigTiles || !((line->screenEnabled[0] |
+        (line->addSubscreen?line->screenEnabled[1]:0))&(1u<<layer))) return false;
+  }
+  return true;
+}
+
+static void CacheEmitters(const PicaFrame *f,const BgLayer *bg,unsigned mask,
+                          SceneEmitterCache *cache) {
+  unsigned words=1024u<<(bg->tilemapWider+bg->tilemapHigher);
+  uint32_t hash=2166136261u;
+  for (unsigned i=0;i<words;i++)
+    hash=(hash^f->memory->vram[(bg->tilemapAdr+i)&0x7fff])*16777619u;
+  if (cache->valid && cache->mapHash==hash && cache->mask==mask &&
+      cache->tileAdr==bg->tileAdr && cache->mapAdr==bg->tilemapAdr &&
+      cache->wider==bg->tilemapWider && cache->higher==bg->tilemapHigher) return;
+  cache->mapHash=hash;cache->mask=mask;cache->tileAdr=bg->tileAdr;
+  cache->mapAdr=bg->tilemapAdr;cache->wider=bg->tilemapWider;cache->higher=bg->tilemapHigher;
+  cache->valid=true;cache->overflow=false;cache->count=0;
+  unsigned width=bg->tilemapWider?512:256,height=bg->tilemapHigher?512:256;
+  for (unsigned y=0;y<height;y+=8) for (unsigned x=0;x<width;x+=8) {
+    SceneEmitter e;
+    if (MotifAt(f,bg,mask,x,y,&e)<0) continue;
+    if (cache->count==SCENE_EMITTER_CACHE) {cache->overflow=true;return;}
+    cache->entries[cache->count++]=e;
+  }
+}
+
+typedef struct SceneryChoice {
+  SceneLight light;
+  unsigned motif;
+  int distance;
+} SceneryChoice;
+
+/* Streaming selection: cap work and spread the pools of light across the
+ * view. A nearby icon cannot crowd out all the lamps farther along a wall. */
+static void ChooseScenery(const PicaFrame *f,const SceneEmitter *e,int x,int y,
+                           unsigned first,int left,int right,
+                           SceneryChoice choices[SCENE_MAX_SCENERY_LIGHTS],unsigned *count) {
+  const BackgroundMotif *m=&kBackgroundMotifs[e->motif];
+  if (x<left || x>=right || y<(int)first || y>=(int)f->height ||
+      (m->layer && !BackgroundExposed(f,x,y))) return;
+  unsigned c=f->memory->cgram[((e->tile>>10)&7)*16+m->color];
+  unsigned r=c&31,g=(c>>5)&31,b=(c>>10)&31;
+  unsigned high=r>g?r:g;high=high>b?high:b;
+  if (high<3) return;
+  int dx=x-f->lighting->samusX,dy=y-f->lighting->samusY,d=dx*dx+dy*dy;
+  SceneryChoice candidate={{x,y,m->radius,r*180/31,g*180/31,b*180/31,false},e->motif,d};
+  for (unsigned i=0;i<*count;i++) {
+    dx=x-choices[i].light.x;dy=y-choices[i].light.y;
+    /* Keep different hues/lamp kinds even when adjacent. */
+    if (choices[i].motif!=e->motif || dx*dx+dy*dy>=48*48) continue;
+    if (d<choices[i].distance) choices[i]=candidate;
+    return;
+  }
+  if (*count<SCENE_MAX_SCENERY_LIGHTS) {choices[(*count)++]=candidate;return;}
+  unsigned worst=0;
+  for (unsigned i=1;i<*count;i++) if (choices[i].distance>choices[worst].distance) worst=i;
+  if (d<choices[worst].distance) choices[worst]=candidate;
 }
 
 void SceneLighting_AddBackgroundSources(PicaFrame *f) {
@@ -198,81 +316,61 @@ void SceneLighting_AddBackgroundSources(PicaFrame *f) {
   unsigned first=f->hudEndY;
   while (first<f->height && f->lines[first].forcedBlank) first++;
   if (first==f->height) return;
-  const BgLayer *bg=&f->lines[first].bg[1];
-  if (bg->bigTiles || !((f->lines[first].screenEnabled[0] |
-      (f->lines[first].addSubscreen?f->lines[first].screenEnabled[1]:0))&2)) return;
-  bool available[4]={0};
-  bool any=false;
-  for (unsigned i=0;i<4;i++) {
-    const BackgroundMotif *m=&kBackgroundMotifs[i];
-    available[i]=true;
-    for (unsigned j=0;j<m->size*m->size;j++)
-      if (BackgroundHash(f,bg,m->ids[j])!=m->hashes[j]) {available[i]=false;break;}
-    any|=available[i];
-  }
-  if (!any) return; /* Most tilesets need only four small fingerprint checks. */
-  /* Unsupported scanline-warped backgrounds cannot give stable lamp positions. */
-  for (unsigned y=first;y<f->height;y++) {
-    const PicaLine *line=&f->lines[y];
-    if (line->forcedBlank) continue;
-    const BgLayer *b=&line->bg[1];
-    if (b->tileAdr!=bg->tileAdr || b->tilemapAdr!=bg->tilemapAdr ||
-        b->hScroll!=bg->hScroll || b->vScroll!=bg->vScroll ||
-        b->tilemapWider!=bg->tilemapWider || b->tilemapHigher!=bg->tilemapHigher ||
-        b->bigTiles || !((line->screenEnabled[0] |
-        (line->addSubscreen?line->screenEnabled[1]:0))&2)) return;
-  }
-  int left=f->worldLeft,right=f->worldRight;
-  if (f->boundBg2) {
-    if (left<f->bg2Left) left=f->bg2Left;
-    if (right>f->bg2Right) right=f->bg2Right;
-  }
-  int x0=left-((left-(int)f->originX+bg->hScroll)&7);
-  int y0=(int)first-((first+bg->vScroll)&7);
-  SceneLight nearest[2]={{0}};
-  int distance[2]={0x7fffffff,0x7fffffff};
-  unsigned count=0;
-  for (int y=y0;y<(int)f->height;y+=8) for (int x=x0;x<right;x+=8) {
-    unsigned tile=BackgroundTile(f,bg,x,y);
-    for (unsigned i=0;i<4;i++) if (available[i]) {
+  SceneryChoice choices[SCENE_MAX_SCENERY_LIGHTS];unsigned count=0;
+  for (unsigned layer=0;layer<2;layer++) {
+    const BgLayer *bg=&f->lines[first].bg[layer];
+    if (bg->bigTiles) continue;
+    unsigned mask=0;
+    for (unsigned i=0;i<kMotifs;i++) {
       const BackgroundMotif *m=&kBackgroundMotifs[i];
-      unsigned hf=(tile>>14)&1,vf=(tile>>15)&1;
-      unsigned corner=m->size==2?vf*2+hf:0;
-      if ((tile&1023)!=m->ids[corner]) continue;
-      bool complete=true;
-      for (unsigned yy=0;yy<m->size;yy++) for (unsigned xx=0;xx<m->size;xx++) {
-        unsigned expected=m->ids[(yy^(m->size==2?vf:0))*m->size+(xx^(m->size==2?hf:0))];
-        unsigned t=BackgroundTile(f,bg,x+xx*8,y+yy*8);
-        if ((t&0xdc00)!=(tile&0xdc00) || (t&1023)!=expected) complete=false;
+      if (m->layer!=layer) continue;
+      bool match=true;
+      for (unsigned j=0;j<m->size*m->size;j++)
+        if (BackgroundHash(f,bg,m->ids[j])!=m->hashes[j]) {match=false;break;}
+      if (match) mask|=1u<<i;
+    }
+    if (!mask || !StableScenery(f,first,layer)) continue;
+    int left=f->worldLeft,right=f->worldRight;
+    if (layer==1 && f->boundBg2) {
+      if (left<f->bg2Left) left=f->bg2Left;
+      if (right>f->bg2Right) right=f->bg2Right;
+    }
+    SceneEmitterCache *cache=&s->emitters[layer];
+    CacheEmitters(f,bg,mask,cache);
+    if (cache->overflow) {
+      /* Unusually dense/custom maps must not lose visible lamps to the cap. */
+      int x0=left-((left-(int)f->originX+bg->hScroll)&7);
+      int y0=(int)first-((first+bg->vScroll)&7);
+      for (int y=y0;y<(int)f->height;y+=8) for (int x=x0;x<right;x+=8) {
+        SceneEmitter e;
+        int mx=(x-(int)f->originX+bg->hScroll)&(bg->tilemapWider?511:255);
+        int my=(y+bg->vScroll)&(bg->tilemapHigher?511:255);
+        if (MotifAt(f,bg,mask,mx,my,&e)<0) continue;
+        int cx=x+e.x-mx,cy=y+e.y-my;
+        ChooseScenery(f,&e,cx,cy,first,left,right,choices,&count);
       }
-      if (!complete) continue;
-      int cx=x+m->size*4,cy=y+m->size*4;
-      if (m->size==1) {
-        /* Neighboring identical LED icons form one panel, not stacked halos. */
-        unsigned descriptor=tile&0xdfff;
-        if ((BackgroundTile(f,bg,x-8,y)&0xdfff)==descriptor ||
-            (BackgroundTile(f,bg,x,y-8)&0xdfff)==descriptor) continue;
-        if ((BackgroundTile(f,bg,x+8,y)&0xdfff)==descriptor) cx+=4;
-        if ((BackgroundTile(f,bg,x,y+8)&0xdfff)==descriptor) cy+=4;
+    } else {
+      int w=bg->tilemapWider?512:256,h=bg->tilemapHigher?512:256;
+      for (unsigned i=0;i<cache->count;i++) {
+        const SceneEmitter *e=&cache->entries[i];
+        int cx=((e->x-bg->hScroll)&(w-1))+(int)f->originX;
+        int cy=(e->y-bg->vScroll)&(h-1);
+        while (cx>left) cx-=w;
+        while (cy>(int)first) cy-=h;
+        for (int y=cy;y<(int)f->height;y+=h) for (int x=cx;x<right;x+=w)
+          ChooseScenery(f,e,x,y,first,left,right,choices,&count);
       }
-      if (cx<left || cx>=right || cy<(int)first || cy>=(int)f->height ||
-          !BackgroundExposed(f,cx,cy)) continue;
-      unsigned c=f->memory->cgram[((tile>>10)&7)*16+m->color];
-      unsigned r=c&31,g=(c>>5)&31,b=(c>>10)&31;
-      unsigned high=r>g?r:g;high=high>b?high:b;
-      if (high<3) continue; /* Unpowered/faded icons do not light the room. */
-      int dx=cx-s->samusX,dy=cy-s->samusY,d=dx*dx+dy*dy;
-      unsigned place=d<distance[0]?0:1;
-      if (d>=distance[place]) continue;
-      if (!place) {nearest[1]=nearest[0];distance[1]=distance[0];}
-      nearest[place]=(SceneLight){cx,cy,m->radius,r*180/31,g*180/31,b*180/31};
-      distance[place]=d;
-      if (count<2) count++;
     }
   }
+  /* Give the two nearest selected sources halos; others only affect the
+   * cached modulation grid. Existing ship/door/liquid/player bloom is intact. */
   for (unsigned i=0;i<count && s->count<SCENE_MAX_LIGHTS;i++) {
-    const SceneLight *l=&nearest[i];
+    unsigned nearest=i;
+    for (unsigned j=i+1;j<count;j++) if (choices[j].distance<choices[nearest].distance) nearest=j;
+    SceneryChoice swap=choices[i];choices[i]=choices[nearest];choices[nearest]=swap;
+    const SceneLight *l=&choices[i].light;
     SceneLighting_AddLight(s,l->x,l->y,l->radius,l->r,l->g,l->b);
+    s->lights[s->count-1].glow=i<2;
     s->backgroundCount++;
   }
 }

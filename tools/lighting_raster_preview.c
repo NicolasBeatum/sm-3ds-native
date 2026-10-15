@@ -126,7 +126,9 @@ int main(int argc,char **argv) {
   if(lighting.enabled) for(unsigned y=frame.hudEndY;y<224;y++)for(unsigned x=0;x<width;x++) {
     unsigned pos=y*width+x;
     for(unsigned i=0;i<lighting.count;i++) {
-      SceneLight *l=&lighting.lights[i]; float radius=l->radius*.55f;
+      SceneLight *l=&lighting.lights[i];
+      if (!l->glow) continue;
+      float radius=l->radius*.55f;
       float dx=(x-l->x)/radius,dy=(y-l->y)/radius;
       float a=1-dx*dx-dy*dy;
       if(a<=0)continue;
@@ -141,6 +143,17 @@ int main(int argc,char **argv) {
   FILE *file=fopen(path,"wb");assert(file);
   fprintf(file,"P6\n%u 224\n255\n",width);
   fwrite(output,1,width*224*3,file);fclose(file);
+  char metadata[1024];
+  snprintf(metadata,sizeof(metadata),"%s/%s-%s-lights.json",argv[1],
+      width==400?"wide":"standard",lighting.enabled?"on":"off");
+  file=fopen(metadata,"w");assert(file);
+  fprintf(file,"{\"count\":%u,\"scenery\":%u,\"sources\":[",lighting.count,lighting.backgroundCount);
+  for(unsigned i=0;i<lighting.count;i++) {
+    const SceneLight *l=&lighting.lights[i];
+    fprintf(file,"%s{\"x\":%d,\"y\":%d,\"radius\":%d,\"rgb\":[%u,%u,%u],\"glow\":%s}",
+        i?",":"",l->x,l->y,l->radius,l->r,l->g,l->b,l->glow?"true":"false");
+  }
+  fputs("]}\n",file);fclose(file);
   printf("%s: lights=%u background=%u shadows=%u/%u affected-shadow-pixels=%u/%u\n",
          path,lighting.count,lighting.backgroundCount,count[21],count[22],shadowPixels[0],shadowPixels[1]);
 }

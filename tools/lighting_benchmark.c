@@ -23,14 +23,17 @@ static int Compare(const void *a,const void *b) {
   double x=*(const double *)a,y=*(const double *)b;return (x>y)-(x<y);
 }
 int main(int argc,char **argv) {
-  if(argc!=5){fprintf(stderr,"usage: %s capture-directory lights:0|1 camera:0|1 width:256|400\n",argv[0]);return 1;}
-  bool lit=atoi(argv[2])!=0,moving=atoi(argv[3])!=0;
+  if(argc!=5){fprintf(stderr,"usage: %s capture-directory lights:0|1 camera:0|1|2 width:256|400\n",argv[0]);return 1;}
+  unsigned cameraMode=atoi(argv[3]);
+  bool lit=atoi(argv[2])!=0,moving=cameraMode!=0;
   unsigned width=atoi(argv[4]),origin=width==400?72:0;
   assert(width==256||width==400);
   Read(argv[1],"landing-wram.bin",g_ram,sizeof(g_ram));
   Read(argv[1],"landing-ppu.bin",&memory,sizeof(memory));
   Read(argv[1],"landing-lines.bin",lines,sizeof(lines));
   PicaLine originalLines[224];memcpy(originalLines,lines,sizeof(lines));
+  unsigned streamAdr=lines[kHudEndLine].bg[0].tilemapAdr&0x7fff;
+  unsigned streamWord=memory.vram[streamAdr];
   for(unsigned i=0;i<2;i++)PicaAtlasInit(&buffers[i],bufferPixels[i]);
   PicaFrame f={.memory=&memory,.lines=lines,.width=width,.height=224,
     .originX=origin,.hudEndY=kHudEndLine,.worldRight=width,
@@ -39,12 +42,15 @@ int main(int argc,char **argv) {
     .wideTileTable=(const uint16_t *)(g_ram+0xA000),
     .wideRoomWidth=room_width_in_blocks,.wideRoomHeight=room_height_in_blocks,
     .emit=Pack};
-  double trials[9];
+  double trials[9],cold=0;
   for(unsigned rep=0;rep<10;rep++) {
     double start=Now();
     for(unsigned it=0;it<400;it++) {
       memset(count,0,sizeof(count));vertexCount=0;
       unsigned dx=moving?(it%64)*2:0;
+      /* Mode 2 also invalidates the scenery map every four frames, like a
+       * streamed column update. Synthetic stress, not a gameplay recording. */
+      if(cameraMode==2) memory.vram[streamAdr]=streamWord^((it&4)?0x2000:0);
       for(unsigned y=kHudEndLine;y<224;y++) for(unsigned layer=0;layer<2;layer++)
         lines[y].bg[layer].hScroll=originalLines[y].bg[layer].hScroll+dx;
       f.wideRoom[0].cameraX=layer1_x_pos+dx;
@@ -56,12 +62,15 @@ int main(int argc,char **argv) {
       for(unsigned i=0;i<10;i++) if(projectile_type[i]&&lighting.count<(lighting.ship?6u:4u))
         SceneLighting_AddLight(&lighting,(int16_t)(projectile_x_pos[i]-layer1_x_pos-dx)+origin,
           (int16_t)(projectile_y_pos[i]-layer1_y_pos),48,88,62,28);
-      f.lighting=lit?&lighting:NULL;assert(PicaBuildFrame(&f));
+      f.lighting=lit?&lighting:NULL;
+      double first=(!rep && !it)?Now():0;
+      assert(PicaBuildFrame(&f));
+      if(first) cold=(Now()-first)*1000;
     }
     if(rep)trials[rep-1]=(Now()-start)*1000/400;
   }
   qsort(trials,9,sizeof(double),Compare);
-  printf("{\"scene\":\"%s\",\"width\":%u,\"lit\":%u,\"moving\":%u,\"cpu_ms\":%.6f,\"min_ms\":%.6f,\"max_ms\":%.6f,\"lights\":%u,\"quads\":%u,\"shadows\":%u,\"scene_bytes\":%zu}\n",
+  printf("{\"scene\":\"%s\",\"width\":%u,\"lit\":%u,\"moving\":%u,\"cpu_ms\":%.6f,\"min_ms\":%.6f,\"max_ms\":%.6f,\"lights\":%u,\"quads\":%u,\"shadows\":%u,\"scene_bytes\":%zu,\"camera_mode\":%u,\"cold_model_ms\":%.6f}\n",
       argv[1],width,lit,moving,trials[4],trials[0],trials[8],lit?lighting.count:0,
-      vertexCount/4,count[21]+count[22],sizeof(SceneLighting));
+      vertexCount/4,count[21]+count[22],sizeof(SceneLighting),cameraMode,cold);
 }

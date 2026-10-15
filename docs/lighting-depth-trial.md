@@ -1,5 +1,69 @@
 # Global lighting and depth trial
 
+## More atmospheric lights with bounded bloom
+
+Latest trial: `output-lighting-atmosphere-trial/`, based on `f69c976`.
+The scenery budget increases from two to four sources, within the existing
+8-source total. Nearby instances of the same motif are clustered using a 48-pixel
+neighborhood, and native doors/liquids/player sources retain budget priority.
+Recognized BG1 graphics now include complete Tourian red pilot lamps and the
+shared elevator's yellow indicators. Both mirrored elevator halves must be
+present; they create one central warm pool. Existing blue organic/LED motifs,
+ambient tint, contact depth and Landing Site appearance remain.
+
+Only the nearest two selected scenery sources receive glow quads. The others
+contribute to the cached modulation grid, avoiding extra halo overdraw. Ship,
+door, liquid and player halos retain their existing behavior. `SceneLight` uses
+its existing tail padding for a bloom flag and remains 16 bytes. No new glow
+texture or rendering pass is added, and the total source limit stays eight.
+
+Two fixed 64-entry emitter caches store native map coordinates/descriptors.
+Graphics fingerprints and tilemap checksums validate these each frame; unchanged
+maps reuse detection across camera/parallax motion and atlas swaps. Palette
+color/intensity and foreground visibility are evaluated live. Changed maps/art
+invalidate detection; unusually dense custom maps use a bounded visible scan
+instead of silently losing emitters beyond cache capacity. BG1 lamps embedded
+in machinery are allowed; BG2 motifs behind complete solid blocks are rejected.
+Warped/disabled layers retain their prior conservative behavior.
+
+ARM lighting state grows 7056→8112 bytes (+1056 for both caches); the diagnostic
+ring stays 14400 bytes. No heap allocations, per-tile clock calls, physics,
+game clocks, frame pacing or suspend/audio configuration changes are introduced.
+`SM3DS_SYSTEM_CORE_PERCENT=30` remains. Dumps retain schema 6 and source/time
+columns; `background_sources` now counts recognized scenery from either BG1 or
+BG2. Model tag: `cached-color-grid-16px-spread-emitters-v4`.
+
+Validation:
+
+- Ten native biome captures × 256/400 pixels: all HUD rows and OFF renders are
+  byte-identical to the previous trial; Landing Site ON is also identical.
+  Green Brinstar and Tourian have four scenery lights; Red Brinstar has one
+  newly recognized warm elevator light. Other sampled rooms retain their
+  existing sources. This recognizes shared assets, not every light in the game.
+- Twenty scene/viewport pairs × ten cold/warm double-atlas frames: identical
+  quad bytes with/without timing instrumentation; field/source/shadow counters
+  agree. Native motif regression covers map invalidation, scrolling cache
+  reuse, flipped/incomplete motifs, palette-off, changed graphics, dense-map
+  overflow, large wrapped scrolls, HUD/world bounds and the two-halo budget.
+- Lighting/environment/widescreen/model timing and diagnostic summary tests
+  pass. Optional ASan/UBSan could not link because the host sanitizer runtimes
+  are missing; regular regression builds and strict source warnings pass.
+- Native AC83→AC5A door sequence: all 106 captured frames at both viewports keep
+  lighting applied, HUD exact and OFF output identical. Previews replay native
+  snapshots in host software, not the physical 3DS GPU.
+- PC model + vertex packing versus `f69c976`: 30 scenario pairs, median nine
+  400-frame batches after warmup. Seven scenes at width 400 and three changed
+  scenes at width 256, each stationary, synthetic camera motion, and motion
+  with a BG1 map descriptor invalidated every four frames. Median changes range
+  -2.82% to +7.21% (-0.0031 to +0.0085 ms). The stress mode approximates map
+  invalidation, not a native traversal recording. First-build timings are also
+  recorded separately but are single cold samples including atlas decoding.
+  GPU/glow draw, upload, audio and whole-game timing are excluded. Matched Old
+  3DS dumps are still needed for device cost/FPS.
+- CIA/3DSX build succeeds with FULL_NATIVE/LTO, OLD3DS, PHASE_DIAG, LIGHTING_TRIAL
+  and SYSTEM_CORE_PERCENT=30. Logs, software comparisons, raw performance data
+  and checksums are saved beside the packages.
+
 ## Background-guided lighting
 
 Latest trial: `output-lighting-background-trial/`, based on `0717f62`.

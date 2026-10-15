@@ -236,6 +236,7 @@ static void DrawSceneGlow(const TopVideoLayout *layout) {
       layout->x + layout->width);
   for (unsigned i = 0; i < s->count; i++) {
     const SceneLight *l = &s->lights[i];
+    if (!l->glow) continue;
     float radius = l->radius * 0.55f;
     if (l->x + radius <= layout->source_x ||
         l->x - radius >= layout->source_x + layout->source_width ||
