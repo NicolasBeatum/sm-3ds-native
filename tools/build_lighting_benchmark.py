@@ -14,7 +14,7 @@ parser.add_argument('--reference', default='d8e57b8')
 args = parser.parse_args()
 out = root / 'build-lighting-benchmark'
 out.mkdir(exist_ok=True)
-flags = ['cc', '-O3', '-std=c11', '-iquote', str(root / 'sm')]
+flags = ['cc', '-O3', '-fno-strict-aliasing', '-std=c11', '-iquote', str(root / 'sm')]
 for label, revision in [('previous', args.reference), ('current', None)]:
     if revision:
         src = out / label

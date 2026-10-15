@@ -66,7 +66,9 @@ RSF := $(TOPDIR)/$(RESOURCES)/template.rsf
 #---------------------------------------------------------------------------------
 ARCH := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mfpu=vfp
 
-COMMON_FLAGS := -Wall -Wno-strict-aliasing -Wno-unused-value -Wno-unused-const-variable -Wno-unused-but-set-variable \
+# The native engine overlays g_ram through several struct/word views. Match
+# sm/Makefile: disabling alias assumptions is required for correct AI under LTO.
+COMMON_FLAGS := -Wall -Wno-strict-aliasing -fno-strict-aliasing -Wno-unused-value -Wno-unused-const-variable -Wno-unused-but-set-variable \
 	-O3 -Ofast -mword-relocations -fomit-frame-pointer \
 	-ffast-math $(ARCH) $(INCLUDE) -D__3DS__ -mno-unaligned-access $(BUILD_FLAGS)
 # 	-flto -fwhole-program \

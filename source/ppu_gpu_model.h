@@ -10,6 +10,8 @@ enum {
   PICA_ATLAS_W = 1024,
   PICA_ATLAS_H = 512,
   PICA_SLOTS = 8192,
+  PICA_REPEAT_FIRST = 128, PICA_REPEAT_SLOTS = 512,
+  PICA_REPEAT_PATTERNS = 8, /* Eight 512x8 strips in the existing atlas. */
   PICA_HASH = 16384,
   PICA_MAX_LINES = 240,
   PICA_MAX_VERTICES = 174760, /* Same 43,690 quads, four shared vertices each. */
@@ -50,15 +52,23 @@ typedef struct PicaTile {
   uint32_t key, checked, used;
   uint16_t source[16], palette[16];
   bool valid, opaque;
-  /* Preserve the atlas layout; lighting no longer classifies texture pixels. */
-  uint16_t reserved;
+  /* Low bits: uniform RGBA rows; high bits: rows with any opaque pixel.
+   * Reuses the atlas padding; unrelated to light-source recognition. */
+  uint16_t rowFlags;
 } PicaTile;
+
+typedef struct PicaRepeat {
+  uint16_t tileBase, tiles[4];
+  uint32_t frame;
+  bool valid;
+} PicaRepeat;
 
 typedef struct PicaAtlas {
   PicaTile tile[PICA_SLOTS];
   uint16_t hash[PICA_HASH];
   uint32_t frame, cursor, hits, decodes, live;
   uint32_t contentRevision;
+  PicaRepeat repeats[PICA_REPEAT_PATTERNS];
   uint32_t dirty[PICA_SLOTS / 32];
   uint8_t objectColumns[128][PICA_MAX_LINES];
   /* Resolve each BG tile/palette descriptor once per frame. Priority and

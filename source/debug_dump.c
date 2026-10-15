@@ -85,7 +85,7 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
       "dump_id=%s\nrom=%s\nframe=%lu\n"
       "app_version=%s\nbuild_flags=%s\nfull_native=%u\n"
       "session_log_path=%s\n"
-      "build_lto=%u\nppu_bg_lookup=inline-band-v3\n"
+      "build_lto=%u\nppu_bg_lookup=bg3-repeat-strips-v4\n"
       "ppu_geometry=indexed-quads-v1\n"
       "xray_render=translated-native-window-v1\n"
       "enemy_viewport=visible-spritemap-v1\npipe_movement=native-through-blocks\n"

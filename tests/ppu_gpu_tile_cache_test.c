@@ -102,6 +102,14 @@ int main(void) {
   assert(samples.main[0] == Color(0x7fff));
   assert(!memcmp(samples.main, samples.sub, sizeof(samples.main)));
 
+  // Normal decoded tiles must skip the horizontal BG3 strip storage.
+  PicaAtlasInit(atlas,pixels);
+  atlas->cursor=PICA_REPEAT_FIRST-1;
+  Build(&f,&samples);
+  assert(atlas->tile[PICA_REPEAT_FIRST+PICA_REPEAT_SLOTS].valid);
+  for(unsigned i=PICA_REPEAT_FIRST;i<PICA_REPEAT_FIRST+PICA_REPEAT_SLOTS;i++)
+    assert(!atlas->tile[i].valid);
+
   free(ppu); free(atlas); free(pixels);
   return 0;
 }

@@ -48,12 +48,14 @@ void PicaAtlasInit(PicaAtlas *a, uint32_t *pixels) {
   for (unsigned i = 0; i < 64; i++) pixels[i] = 0xffffffffu;
   a->tile[0].valid = true;
   a->tile[0].opaque = true;
+  a->tile[0].rowFlags = 0xffff;
   a->dirty[0] = 1;
 }
 
 void PicaAtlasBegin(PicaAtlas *a) {
   if (++a->frame == 0) {
     a->frame = 1;
+    for (unsigned i = 0; i < PICA_REPEAT_PATTERNS; i++) a->repeats[i].frame = 0;
     memset(a->bgFrame, 0, sizeof(a->bgFrame));
     for (unsigned i = 1; i < PICA_SLOTS; i++)
       a->tile[i].used = a->tile[i].checked = 0;
@@ -120,8 +122,10 @@ static int Tile(PicaFrame *f, unsigned address, unsigned palette, unsigned bpp) 
     unsigned scanned = 0;
     do {
       a->cursor = a->cursor % (PICA_SLOTS - 1) + 1;
+      if (a->cursor >= PICA_REPEAT_FIRST && a->cursor < PICA_REPEAT_FIRST + PICA_REPEAT_SLOTS)
+        a->cursor = PICA_REPEAT_FIRST + PICA_REPEAT_SLOTS;
       slot = a->cursor;
-    } while (a->tile[slot].used == a->frame && ++scanned < PICA_SLOTS - 1);
+    } while (a->tile[slot].used == a->frame && ++scanned < PICA_SLOTS - PICA_REPEAT_SLOTS - 1);
     if (a->tile[slot].used == a->frame) {
       f->failure = "atlas-live-capacity";
       return -1;
@@ -156,20 +160,29 @@ static int Tile(PicaFrame *f, unsigned address, unsigned palette, unsigned bpp) 
   memcpy(t->palette, pal, colors * 2);
   t->valid = true;
   t->opaque = false;
+  t->rowFlags = 0;
   a->contentRevision=NextContentRevision();
   a->decodes++;
   a->dirty[slot / 32] |= 1u << (slot & 31);
   uint32_t *dest = f->pixels + slot * 64;
   for (unsigned y = 0; y < 8; y++) {
+    uint32_t first = 0;
+    bool uniform = true, present = false;
     uint32_t bits = src[y];
     if (bpp == 4) bits |= (uint32_t)src[y + 8] << 16;
     for (unsigned x = 0; x < 8; x++) {
       unsigned i = 7 - x;
       unsigned p = ((bits >> i) & 1) | ((bits >> (i + 7)) & 2) |
                    ((bits >> (i + 14)) & 4) | ((bits >> (i + 21)) & 8);
-      dest[kMorton[y * 8 + x]] = p ? Encode(pal[p], 255) : 0;
+      uint32_t rgba = p ? Encode(pal[p], 255) : 0;
+      dest[kMorton[y * 8 + x]] = rgba;
+      if (!x) first = rgba;
+      else if (rgba != first) uniform = false;
+      present |= p != 0;
       t->opaque |= p != 0;
     }
+    if (uniform) t->rowFlags |= 1u << y;
+    if (present) t->rowFlags |= 1u << (y + 8);
   }
   return t->opaque ? (int)slot : -2;
 }
@@ -338,6 +351,77 @@ static bool TileQuad(PicaFrame *f, unsigned group, unsigned slot,
   return Emit(f, group, q);
 }
 
+/* Horizontally uniform BG3 rows (water/sand tint) need one strip rather
+ * than dozens of identical tile slices. Keep native vertical texels/alpha,
+ * priority and color math; U stays at a texel center to avoid atlas seams. */
+static bool RowStrip(PicaFrame *f, unsigned group, unsigned slot,
+                     int x, int y, int w, int h, unsigned sy, bool vf,
+                     unsigned depth, unsigned alpha) {
+  unsigned col = slot % (PICA_ATLAS_W / 8), row = slot / (PICA_ATLAS_W / 8);
+  int v0 = row * 8 + (vf ? 8 - sy : sy), v1 = v0 + (vf ? -h : h);
+  PicaQuad q = {x,y,x+w,y+h,col*32+2,4096-v0*8,col*32+2,4096-v1*8,
+                depth,255,255,255,alpha};
+  return Emit(f, group, q);
+}
+
+/* Cache up to eight canonical 32x8 BG3 patterns in reserved atlas strips.
+ * Four-tile water patterns retain all native colors/dither and H/V flips.
+ * Each strip is pinned for the frame; excess patterns keep normal tiles. */
+static int RepeatedPattern(PicaFrame *f, uint16_t *slots, unsigned base,
+                           const uint16_t tiles[4]) {
+  PicaAtlas *a = f->atlas;
+  int selected = -1;
+  for (unsigned i = 0; i < PICA_REPEAT_PATTERNS; i++) {
+    PicaRepeat *r = &a->repeats[i];
+    if (r->valid && r->tileBase == base && !memcmp(r->tiles, tiles, sizeof(r->tiles))) {
+      selected = i;
+      break;
+    }
+    if (selected < 0 && r->frame != a->frame) selected = i;
+  }
+  if (selected < 0) return -2;
+  PicaRepeat *repeat = &a->repeats[selected];
+  bool match = repeat->valid && repeat->tileBase == base &&
+               !memcmp(repeat->tiles, tiles, sizeof(repeat->tiles));
+  if (match && repeat->frame == a->frame) return selected;
+  unsigned first = PICA_REPEAT_FIRST + selected * 64;
+  bool changed = false;
+  for (unsigned i = 0; i < 4; i++) {
+    int slot = BackgroundTile(f, slots, tiles[i], base, 8, 8, 2);
+    if (slot == -1) return -1;
+    uint32_t oriented[64];
+    for (unsigned y = 0; y < 8; y++) for (unsigned x = 0; x < 8; x++) {
+      unsigned sx = (tiles[i] & 0x4000) ? 7 - x : x;
+      unsigned sy = (tiles[i] & 0x8000) ? 7 - y : y;
+      oriented[kMorton[y*8+x]] = slot < 0 ? 0 :
+          f->pixels[slot*64+kMorton[sy*8+sx]];
+    }
+    uint32_t *dest = f->pixels + (first + i) * 64;
+    if (memcmp(dest, oriented, sizeof(oriented))) {
+      changed = true;
+      memcpy(dest, oriented, sizeof(oriented));
+    }
+  }
+  if (changed) {
+    for (unsigned i = 4; i < 64; i++)
+      memcpy(f->pixels + (first+i)*64, f->pixels + (first+(i&3))*64, 64*sizeof(uint32_t));
+    for (unsigned i = first; i < first + 64; i++) a->dirty[i/32] |= 1u << (i&31);
+  }
+  repeat->valid = true; repeat->frame = a->frame; repeat->tileBase = base;
+  memcpy(repeat->tiles, tiles, sizeof(repeat->tiles));
+  return selected;
+}
+
+static bool RepeatedStrip(PicaFrame *f, unsigned group, unsigned pattern,
+                          int x, int y, int w, int h, unsigned sx, unsigned sy,
+                          unsigned depth, unsigned alpha) {
+  unsigned slot = PICA_REPEAT_FIRST + pattern * 64;
+  unsigned col = slot % (PICA_ATLAS_W / 8), row = slot / (PICA_ATLAS_W / 8);
+  int u0 = col*8 + sx, v0 = row*8 + sy;
+  PicaQuad q = {x,y,x+w,y+h,u0*4,4096-v0*8,(u0+w)*4,4096-(v0+h)*8,
+                depth,255,255,255,alpha};
+  return Emit(f, group, q);
+}
 
 
 static bool HasLayer(const PicaFrame *f, unsigned sub, unsigned mask) {
@@ -639,6 +723,71 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
             int slot = BackgroundTile(f, slots, tile, tileBase, tileWords,
                                       paletteShift, bpp);
             if (slot == -1) return false;
+            if (layer == 2 && slot >= 0) {
+              unsigned sy = wy & 7;
+              bool vf = (tile & 0x8000) != 0;
+              unsigned rows = ((1u << h) - 1) << (vf ? 8 - sy - h : sy);
+              unsigned flags = f->atlas->tile[slot].rowFlags;
+              if (!((flags >> 8) & rows)) { x += w; continue; }
+              bool uniform = (flags & rows) == rows;
+              int right = x + w;
+              while (right < end) {
+                unsigned nextX = (right + scrollX) & scrollMask;
+                unsigned nextMap = (mapRow + ((nextX >> 3) & 31) +
+                                    (nextX >= 256 ? 0x400 : 0)) & 0x7fff;
+                unsigned mask = uniform ? 0xbfff : 0xffff;
+                /* Only uniform rows can ignore horizontal flips. */
+                if ((f->memory->vram[nextMap] & mask) != (tile & mask)) break;
+                right += Min(8 - (nextX & 7), end - right);
+              }
+              if (uniform) {
+                if (!RowStrip(f, group, slot, x, y, right - x, h, sy, vf,
+                              (tile & 0x2000) ? zHigh : zLow, tileAlpha)) return false;
+                x = right;
+                continue;
+              }
+              if (y >= f->hudEndY && end - x >= 64) {
+                uint16_t pattern[4];
+                bool priority = true;
+                for (unsigned part = 0; part < 4; part++) {
+                  unsigned px = (wx + part*8) & scrollMask;
+                  unsigned pm = (mapRow + ((px>>3)&31) + (px>=256?0x400:0)) & 0x7fff;
+                  pattern[part] = f->memory->vram[pm];
+                  if ((pattern[part]^tile)&0x2000) priority = false;
+                }
+                right = x + w;
+                unsigned part = 1;
+                while (priority && right < end) {
+                  unsigned px = (right + scrollX) & scrollMask;
+                  unsigned pm = (mapRow + ((px>>3)&31) + (px>=256?0x400:0)) & 0x7fff;
+                  if (f->memory->vram[pm] != pattern[part&3]) break;
+                  right += Min(8-(px&7),end-right);
+                  part++;
+                }
+                if (priority && right - x >= 64) {
+                  /* Canonical rotation shares a strip across scroll phases. */
+                  unsigned rotation = 0;
+                  for (unsigned r = 1; r < 4; r++) {
+                    for (unsigned j = 0; j < 4; j++) {
+                      if (pattern[(r+j)&3] == pattern[(rotation+j)&3]) continue;
+                      if (pattern[(r+j)&3] < pattern[(rotation+j)&3]) rotation = r;
+                      break;
+                    }
+                  }
+                  uint16_t canonical[4];
+                  for (unsigned j=0;j<4;j++) canonical[j]=pattern[(rotation+j)&3];
+                  int repeat = RepeatedPattern(f,slots,tileBase,canonical);
+                  if (repeat == -1) return false;
+                  if (repeat >= 0) {
+                    if (!RepeatedStrip(f, group, repeat, x, y, right-x, h,
+                                       ((4-rotation)&3)*8+pixelX, sy,
+                                       (tile&0x2000)?zHigh:zLow,tileAlpha)) return false;
+                    x = right;
+                    continue;
+                  }
+                }
+              }
+            }
             if (slot >= 0 &&
                 !TileQuad(f, group, slot, x, y, w, h, pixelX, wy & 7,
                           tile & 0x4000, tile & 0x8000,

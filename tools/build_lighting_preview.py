@@ -13,11 +13,12 @@ sources += list((root / 'sm/src/snes').glob('*.c'))
 sources += [root / 'tools/lighting_preview.c', root / 'source/ppu_gpu_model.c',
             root / 'source/scene_lighting.c']
 headers = list((root / 'sm/src').rglob('*.h')) + list((root / 'source').glob('*.h'))
-header_mtime = max(p.stat().st_mtime for p in headers)
+# Compiler flags in this script also invalidate previously built objects.
+header_mtime = max(p.stat().st_mtime for p in [Path(__file__), *headers])
 def compile_source(source):
     obj = out / (source.stem + '.o')
     if not obj.exists() or obj.stat().st_mtime < max(source.stat().st_mtime, header_mtime):
-        subprocess.run(['cc', '-O2', '-w', '-DFULL_NATIVE', '-I', str(root / 'sm'),
+        subprocess.run(['cc', '-O2', '-fno-strict-aliasing', '-w', '-DFULL_NATIVE', '-I', str(root / 'sm'),
                         '-I', str(root / 'source'), '-c', str(source), '-o', str(obj)], check=True)
     return str(obj)
 with ThreadPoolExecutor(max_workers=4) as pool:

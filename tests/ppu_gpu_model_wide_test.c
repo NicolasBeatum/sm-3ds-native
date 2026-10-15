@@ -43,7 +43,8 @@ static bool CaptureQuad(void *context, unsigned group, const PicaQuad *quad) {
 }
 
 static unsigned SampleQuads(const PicaQuad *quads, unsigned count,
-                            const PicaAtlas *atlas, unsigned x, unsigned y) {
+                            const PicaAtlas *atlas, const uint32_t *pixels,
+                            unsigned x, unsigned y) {
   const PicaQuad *top = NULL;
   for (unsigned i = 0; i < count; i++) {
     const PicaQuad *q = &quads[i];
@@ -60,12 +61,20 @@ static unsigned SampleQuads(const PicaQuad *quads, unsigned count,
                 (top->v1 - top->v0) / (top->y1 - top->y0))) / 8;
   unsigned slot = (v / 8) * (PICA_ATLAS_W / 8) + u / 8;
   assert(slot < PICA_SLOTS);
+  if (pixels) {
+    /* BG3 strips can use different UVs for identical colors. Compare the
+     * resulting pixel rather than the cache slot or source coordinate. */
+    unsigned sx=u&7,sy=v&7;
+    unsigned morton=(sx&1)|((sy&1)<<1)|((sx&2)<<1)|((sy&2)<<2)|
+                    ((sx&4)<<2)|((sy&4)<<3);
+    return pixels[slot*64+morton];
+  }
   return 1 + (atlas->tile[slot].key << 6) + (v % 8) * 8 + u % 8;
 }
 
 static unsigned Sample(const Capture *capture, const PicaAtlas *atlas,
                        unsigned x, unsigned y) {
-  return SampleQuads(capture->quads, capture->count, atlas, x, y);
+  return SampleQuads(capture->quads, capture->count, atlas, NULL, x, y);
 }
 
 static void BuildWithBounds(PicaFrame *frame, PicaAtlas *atlas,
@@ -167,6 +176,9 @@ int main(void) {
   assert(wide->colorWindowSide);
   frame.extendEyeBeam = false;
   frame.height = kSnesHeight;
+  ppu->cgram[1]=31;ppu->cgram[2]=31<<5;ppu->cgram[3]=31<<10;
+  for(unsigned tile=1;tile<=4;tile++)for(unsigned y=0;y<8;y++)
+    ppu->vram[tile*8+y]=tile%3==0?0xffff:tile%3==1?0x00ff:0xff00;
   for (unsigned y = 0; y < kSnesHeight; y++) {
     lines[y].mode = 1;
     lines[y].brightness = 15;
@@ -185,14 +197,14 @@ int main(void) {
   frame.extendEyeBeam = true;
   Build(&frame, wideAtlas, widePixels, wide, kWideWidth, kWideExtraX);
   assert(wide->subCount < beamBaselineQuads / 2);
-  assert(SampleQuads(normal->subQuads, normal->subCount, normalAtlas,
+  assert(SampleQuads(normal->subQuads, normal->subCount, normalAtlas, normalPixels,
                      kWideWidth - 20, 180) !=
-         SampleQuads(wide->subQuads, wide->subCount, wideAtlas,
+         SampleQuads(wide->subQuads, wide->subCount, wideAtlas, widePixels,
                      kWideWidth - 20, 180));
   for (unsigned y = 16; y < kSnesHeight; y += 7)
     for (unsigned x = kWideExtraX; x < kWideExtraX + kSnesWidth; x += 5)
-      assert(SampleQuads(normal->subQuads, normal->subCount, normalAtlas, x, y) ==
-             SampleQuads(wide->subQuads, wide->subCount, wideAtlas, x, y));
+      assert(SampleQuads(normal->subQuads, normal->subCount, normalAtlas, normalPixels, x, y) ==
+             SampleQuads(wide->subQuads, wide->subCount, wideAtlas, widePixels, x, y));
   BuildWithBounds(&frame, wideAtlas, widePixels, wide, kWideWidth,
                   kWideExtraX, 0, kWideExtraX + kSnesWidth);
   assert(wide->blackMaskRight);

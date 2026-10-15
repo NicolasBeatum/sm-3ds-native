@@ -5,6 +5,7 @@
 #include "src/ida_types.h"
 #include "src/variables.h"
 #include "src/funcs.h"
+#include "src/enemy_types.h"
 #include "src/snes/ppu.h"
 #include "src/spc_player.h"
 #include "scene_lighting.h"
@@ -19,9 +20,16 @@ int g_got_mismatch_count;
 SpcPlayer *g_spc_player;
 static PicaLine captured[224];
 static bool lavaFixture;
+static bool shaktoolFixture;
 void __real_LoadFromLoadStation(void);
 void __wrap_LoadFromLoadStation(void) {
   __real_LoadFromLoadStation();
+  if (shaktoolFixture) {
+    room_ptr=0xd8c5;door_def_ptr=0xa798;
+    bg1_x_offset=layer1_x_pos=0;bg1_y_offset=layer1_y_pos=0;
+    samus_x_pos=samus_prev_x_pos=96;samus_y_pos=samus_prev_y_pos=160;
+    return;
+  }
   if (!lavaFixture) return;
   /* Host-only diagnostic entry into the real Norfair room AC83. Its ROM
    * header selects FX type 2 with surface Y=198; do not synthesize the FX. */
@@ -78,7 +86,7 @@ static void CaptureDoorRoute(Snes *s, const char *root) {
 }
 
 int main(int argc, char **argv) {
-  if (argc != 4 && argc != 5) { fprintf(stderr,"usage: %s ROM SRAM output-directory [fire|jump|move|slot1|slot1-move|acid|lava|door-left|station:AREA:INDEX]\n",argv[0]); return 1; }
+  if (argc != 4 && argc != 5) { fprintf(stderr,"usage: %s ROM SRAM output-directory [fire|jump|move|slot1|slot1-move|acid|lava|shaktool|door-left|station:AREA:INDEX]\n",argv[0]); return 1; }
   /* Never permit game SRAM writes to the source save. */
   char path[1024];
   snprintf(path,sizeof(path),"%s/preview-only.srm",argv[3]);
@@ -99,6 +107,7 @@ int main(int argc, char **argv) {
   if (LoadFromSram(slot)) Die("Save slot has an invalid checksum");
   printf("slot %u: area=%u station=%u health=%u\n",slot+1,area_index,load_station_index,samus_health);
   selected_save_slot = slot;
+  shaktoolFixture=argc==5 && !strcmp(argv[4],"shaktool");
   bool acid = argc==5 && !strcmp(argv[4],"acid");
   bool doorFixture = argc==5 && !strcmp(argv[4],"door-left");
   lavaFixture = doorFixture || (argc==5 && !strcmp(argv[4],"lava"));
@@ -117,12 +126,13 @@ int main(int argc, char **argv) {
         get_RoomDefHeader(fixtureRoom)->area_index_!=fixtureArea)
       Die("Diagnostic station does not point to a room in that area");
   }
-  if(acid || lavaFixture || stationFixture) {
-    /* Host-only diagnostic spawn via a real ROM load station, or the lava
-     * wrapper. Only local preview SRAM is a write destination. */
-    area_index=stationFixture?fixtureArea:2;
-    load_station_index=stationFixture?fixtureIndex:10;
-    equipped_items|=0x21;
+  if(acid || lavaFixture || stationFixture || shaktoolFixture) {
+    /* Host-only diagnostic spawn via a real ROM load station, or a diagnostic
+     * room wrapper. Only local preview SRAM is a write destination. */
+    area_index=shaktoolFixture?4:stationFixture?fixtureArea:2;
+    load_station_index=stationFixture?fixtureIndex:shaktoolFixture?0:10;
+    equipped_items|=shaktoolFixture?0x25:0x21;
+    if(shaktoolFixture) samus_power_bombs=samus_max_power_bombs=50;
     samus_health=samus_max_health=9999;
   }
   loading_game_state = 5;
@@ -131,11 +141,11 @@ int main(int argc, char **argv) {
   for (unsigned i = 0; i < 1200; i++) RtlRunFrame(0);
   printf("room=%04x state=%u samus=(%u,%u) camera=(%u,%u)\n",
           room_ptr,game_state,samus_x_pos,samus_y_pos,layer1_x_pos,layer1_y_pos);
-  if (game_state != 8 || (!acid && !lavaFixture && !stationFixture &&
+  if (game_state != 8 || (!acid && !lavaFixture && !stationFixture && !shaktoolFixture &&
       slot == 1 && room_ptr != 0x91f8)) Die("Preview did not reach expected gameplay");
   if (stationFixture && (room_ptr!=fixtureRoom || area_index!=fixtureArea))
     Die("Diagnostic station did not reach the selected room and area");
-  if (argc == 5 && (slot == 1 || slot1Move) && !acid && !lavaFixture && !stationFixture) {
+  if (argc == 5 && (slot == 1 || slot1Move) && !acid && !lavaFixture && !stationFixture && !shaktoolFixture) {
     unsigned input, frames;
     if (!strcmp(argv[4],"fire")) { input=button_config_shoot_x; frames=10; }
     else if (!strcmp(argv[4],"jump")) { input=button_config_jump_a; frames=12; }
@@ -158,6 +168,43 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[4],"jump") && samus_y_pos>=initialY) Die("Jump did not move Samus upward");
     if ((!strcmp(argv[4],"move") || slot1Move) && samus_x_pos<=initialX) Die("Right input did not move Samus");
     if (game_state!=8 || room_ptr!=(slot1Move?0xa70b:0x91f8)) Die("Action left the trial scene");
+  }
+  if(shaktoolFixture) {
+    if(room_ptr!=0xd8c5) Die("Shaktool fixture loaded wrong room");
+    RtlSetSpriteViewportMargin(72);
+    unsigned jump=0,jumpConfig=button_config_jump_a;
+    for(unsigned i=0;i<16;i++,jumpConfig>>=1)jump=(jump<<1)|(jumpConfig&1);
+    unsigned shoot=0,encoded=button_config_shoot_x;
+    for(unsigned i=0;i<16;i++,encoded>>=1)shoot=(shoot<<1)|(encoded&1);
+    for(unsigned i=0;i<12;i++)RtlRunFrame(0x20);
+    for(unsigned i=0;i<12;i++)RtlRunFrame(0);
+    for(unsigned i=0;i<12;i++)RtlRunFrame(0x20);
+    for(unsigned i=0;i<20;i++)RtlRunFrame(0);
+    hud_item_index=3;
+    printf("PB start pose=%04x move=%04x ammo=%u shoot=%04x\n",samus_pose,samus_movement_type,samus_power_bombs,shoot);
+    for(unsigned i=0;i<10;i++)RtlRunFrame(shoot);
+    for(unsigned i=0;i<350;i++)RtlRunFrame(0);
+    printf("PB end pose=%04x ammo=%u explosion=%04x\n",samus_pose,samus_power_bombs,power_bomb_explosion_status);
+    // Return to standing after the native explosion.
+    for(unsigned i=0;i<20;i++)RtlRunFrame(0x10);
+    for(unsigned i=0;i<4000;i++) {
+      RtlRunFrame(0x80 | (i%120<20?jump:0) | (samus_x_pos>940 && i%24<8?shoot:0));
+      if(i%120==0) {
+        Enemy_Shaktool *h=Get_Shaktool(384);
+        printf("route step=%u room=%04x samus=%u,%u head=%u,%u angles=%04x/%04x step=%04x param=%04x instr=%04x\n",i,room_ptr,samus_x_pos,samus_y_pos,h->base.x_pos,h->base.y_pos,h->shakt_var_A,h->shakt_var_B,h->shakt_var_F,h->shakt_parameter_1,h->base.current_instruction);
+      }
+      if(room_ptr!=0xd8c5)break;
+    }
+    for(unsigned i=0;i<300 && game_state!=8;i++)RtlRunFrame(0);
+    printf("Shaktool exit room=%04x state=%u samus=%u,%u spring=%u\n",room_ptr,game_state,samus_x_pos,samus_y_pos,!!(collected_items&2));
+    if(room_ptr==0xd8c5) {
+      for(unsigned i=0;i<7;i++) {
+        Enemy_Shaktool *e=Get_Shaktool(i*64);
+        printf("Shaktool part=%u enemy=%04x pos=%u,%u angle=%04x/%04x step=%04x param=%04x instr=%04x props=%04x\n",i,e->base.enemy_ptr,e->base.x_pos,e->base.y_pos,e->shakt_var_A,e->shakt_var_B,e->shakt_var_F,e->shakt_parameter_1,e->base.current_instruction,e->base.properties);
+      }
+    }
+    if(room_ptr!=0xd6d0 || game_state!=8)
+      Die("Shaktool route did not reach the Spring Ball room");
   }
   printf("FX type=%u liquid_y=%u screen_y=%d\n",fx_type,lava_acid_y_pos,(int16_t)(lava_acid_y_pos-layer1_y_pos));
   if(acid && fx_type!=4) Die("Diagnostic spawn did not reach the acid scene");
