@@ -22,7 +22,10 @@ header_mtime = max(p.stat().st_mtime for p in [Path(__file__), root / 'tools/lig
 def compile_source(source):
     obj = out / (source.stem + '.o')
     if not obj.exists() or obj.stat().st_mtime < max(source.stat().st_mtime, header_mtime):
-        subprocess.run(['cc', '-O2', '-fno-strict-aliasing', '-w', '-DFULL_NATIVE',
+        # Match the trial's optimized audio translation units; keep the rest of
+        # the host frontend at O2, as in the independent audio comparisons.
+        optimization = ['-O3', '-Ofast', '-flto'] if args.audio and source.stem in ('sm_rtl', 'spc_player', 'dsp') else ['-O2']
+        subprocess.run(['cc', *optimization, '-fno-strict-aliasing', '-w', '-DFULL_NATIVE',
                         *(['-DSM3DS_SPLIT_APU_QUEUE'] if args.audio else []), '-I', str(root / 'sm'),
                         '-I', str(root / 'source'), '-c', str(source), '-o', str(obj)], check=True)
     return str(obj)
@@ -31,6 +34,6 @@ with ThreadPoolExecutor(max_workers=4) as pool:
 binary = root / ('output-dump-oct15-trial/audio-preview' if args.audio else
                  'output-lighting-trial/lighting-preview')
 binary.parent.mkdir(exist_ok=True)
-subprocess.run(['cc', *objects, '-Wl,--wrap=ppu_runLine',
+subprocess.run(['cc', *(['-O3', '-Ofast', '-flto'] if args.audio else []), *objects, '-Wl,--wrap=ppu_runLine',
                 '-Wl,--wrap=LoadFromLoadStation', '-lm', '-o', str(binary)], check=True)
 print(binary)
