@@ -1,5 +1,8 @@
 # Global lighting and depth trial
 
+Latest measured trial: [15 October dumps, direct color submission and original
+audio queue](dumps-2026-10-15.md), packages in `output-dump-oct15-trial/`.
+
 Latest compatibility/performance package: `output-maridia-fix-trial/`. See
 [Shaktool and liquid rendering](maridia-shaktool-trial.md) for the compiler fix,
 BG3 strip optimization, exact raster checks and host measurements.

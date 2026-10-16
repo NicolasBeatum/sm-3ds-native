@@ -2,6 +2,7 @@
 #include "wide_config.h"
 #include <assert.h>
 #include <stdlib.h>
+#include <string.h>
 
 #ifndef SM3DS_PHASE_DIAG
 #error This test requires SM3DS_PHASE_DIAG
@@ -12,7 +13,15 @@ uint64_t SDL_GetPerformanceCounter(void) {
   return ++ticks;
 }
 
-static unsigned shadow_quads;
+static unsigned shadow_quads,colored_calls;
+static bool reject_color;
+static unsigned color_context;
+static bool CaptureColored(void *context,unsigned group,const PicaQuad *q,const uint8_t rgb[3]) {
+  assert(context==&color_context && (group==0 || group==2));
+  assert(q->r==255 && q->g==255 && q->b==255);
+  assert(rgb && q->y0>=kHudEndLine);colored_calls++;
+  return !reject_color;
+}
 static bool Capture(void *context, unsigned group, const PicaQuad *q) {
   (void)context; (void)q;
   if (group == 21 || group == 22) shadow_quads++;
@@ -51,6 +60,15 @@ int main(void) {
     assert(g_pica_build_timing.shadow_submit > 0);
     assert(shadow_quads && g_pica_build_timing.shadow_quads == shadow_quads);
   }
+  frame.emitColored=CaptureColored;frame.context=&color_context;
+  PicaAtlasBegin(atlas);shadow_quads=0;
+  SceneLighting_Begin(&lighting,true,0x91f8,8,0,0,100,100,0,0);
+  assert(PicaBuildFrame(&frame) && colored_calls);
+  assert(frame.emit==Capture && frame.context==&color_context && frame.lighting==&lighting);
+  reject_color=true;PicaAtlasBegin(atlas);
+  assert(!PicaBuildFrame(&frame) && !strcmp(frame.failure,"vertex-capacity"));
+  assert(frame.emit==Capture && frame.context==&color_context && frame.lighting==&lighting);
+  reject_color=false;
   SceneLighting_Begin(&lighting, false, 0x91f8, 8, 0, 0, 100, 100, 0, 0);
   PicaAtlasBegin(atlas);
   assert(PicaBuildFrame(&frame));

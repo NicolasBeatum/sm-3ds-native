@@ -89,15 +89,31 @@ static void ResetRanges(unsigned width, unsigned height) {
   g.invHeight = 2.0f / height;
 }
 
-static bool Emit(void *context, unsigned group, const PicaQuad *q) {
-  (void)context;
-  if (g.count + 4 > PICA_MAX_VERTICES) return false;
+static Vertex *AppendQuad(unsigned group) {
+  if (g.count + 4 > PICA_MAX_VERTICES) return NULL;
   Range *range = &g.ranges[group];
   if (!range->count) range->first = g.count;
-  if (range->first + range->count != g.count) return false;
-  PicaQuadVertices(&g.vertices[g.count], q);
+  if (range->first + range->count != g.count) return NULL;
+  Vertex *vertices=&g.vertices[g.count];
   g.count += 4;
   range->count += 4;
+  return vertices;
+}
+
+static bool Emit(void *context, unsigned group, const PicaQuad *q) {
+  (void)context;
+  Vertex *vertices=AppendQuad(group);
+  if (!vertices) return false;
+  PicaQuadVertices(vertices,q);
+  return true;
+}
+
+static bool EmitColored(void *context, unsigned group, const PicaQuad *q,
+                         const uint8_t color[3]) {
+  (void)context;
+  Vertex *vertices=AppendQuad(group);
+  if (!vertices) return false;
+  PicaQuadVerticesColor(vertices,q,color[0],color[1],color[2]);
   return true;
 }
 
@@ -428,7 +444,7 @@ bool PpuGpuFinish(Ppu *p) {
                      .wideTileTable=(const uint16_t *)(g_ram + 0xA000),
                      .wideRoomWidth=room_width_in_blocks,
                      .wideRoomHeight=room_height_in_blocks,
-                     .emit=Emit};
+                     .emit=Emit,.emitColored=EmitColored};
   SceneLighting_Begin(&g_lighting,
       BottomScreen_SceneLightingEnabled() && !time_is_frozen_flag,
       room_ptr, game_state, (int16_t)layer1_x_pos, (int16_t)layer1_y_pos,

@@ -17,6 +17,8 @@ typedef struct FrameSample {
   bool lighting_requested, lighting_applied, lighting_profile, light_field_rebuilt;
   uint32_t light_prepare_ticks, shadow_submit_ticks, glow_submit_ticks, model_build_ticks;
   unsigned light_sources, shadow_quads, glow_quads, background_sources;
+  uint32_t apu_queue_ticks, apu_wait_ticks;
+  bool runtime_profile;
 } FrameSample;
 
 static FrameSample g_samples[kRecentFrameCount];
@@ -106,6 +108,15 @@ void FrameDiagnostics_Record(uint32_t frame, uint32_t interval_ticks,
   if (gameplay) RecordSession(&g_session[wide ? 2 : 1], sample);
   g_next = (g_next + 1) % kRecentFrameCount;
   if (g_count < kRecentFrameCount) g_count++;
+}
+
+void FrameDiagnostics_RecordRuntime(bool profiled, uint32_t apu_queue_ticks,
+                                    uint32_t apu_wait_ticks) {
+  if (!g_count) return;
+  FrameSample *s=&g_samples[(g_next+kRecentFrameCount-1)%kRecentFrameCount];
+  s->runtime_profile=profiled;
+  s->apu_queue_ticks=profiled?apu_queue_ticks:0;
+  s->apu_wait_ticks=profiled?apu_wait_ticks:0;
 }
 
 void FrameDiagnostics_RecordPpuDetail(uint32_t bg_main_ticks,
@@ -286,10 +297,15 @@ bool FrameDiagnostics_WriteSummary(FILE *out) {
   unsigned intervals = 0, interval_over = 0, work_over = 0;
   unsigned wide = 0, gpu = 0, presenter = 0, profiled = 0, detailed = 0;
   uint32_t max_interval = 0, max_work = 0;
+  uint64_t apu_queue_sum=0, apu_wait_sum=0;
+  unsigned runtime_frames=0;
   SessionTiming recent_lighting = {0};
   for (unsigned i = 0; i < g_count; i++) {
     const FrameSample *s = SampleAt(i);
     RecordLightingTotals(&recent_lighting, s);
+    if(s->runtime_profile) {
+      runtime_frames++;apu_queue_sum+=s->apu_queue_ticks;apu_wait_sum+=s->apu_wait_ticks;
+    }
     if (s->interval_ticks) {
       interval_sum += s->interval_ticks;
       intervals++;
@@ -325,7 +341,7 @@ bool FrameDiagnostics_WriteSummary(FILE *out) {
   uint64_t interval_us = AsUs(interval_sum);
   uint64_t fps_x100 = interval_us ? (uint64_t)intervals * 100000000 / interval_us : 0;
   int result = fprintf(out,
-      "timing_schema=6\n"
+      "timing_schema=7\n"
       "recent_timing_scope=last_120_rendered_frames\n"
       "recent_frames=%u\nvalid_intervals=%u\n"
       "measured_fps=%" PRIu64 ".%02" PRIu64 "\n"
@@ -364,6 +380,12 @@ bool FrameDiagnostics_WriteSummary(FILE *out) {
       AsUs(present_sum) / count, AsUs(work_sum) / count, AsUs(max_work), work_over,
       wide, gpu, presenter);
   return result > 0 && !ferror(out) &&
+      fprintf(out,"recent_runtime_profile_frames=%u\n"
+                  "recent_avg_apu_queue_us=%" PRIu64 "\n"
+                  "recent_avg_apu_lock_wait_us=%" PRIu64 "\n"
+                  "runtime_timing_note=queue publication is nested in game, outside logic/PPU; lock wait is nested in queue; neither measures audio generation CPU time\n",
+                  runtime_frames,runtime_frames?AsUs(apu_queue_sum)/runtime_frames:0,
+                  runtime_frames?AsUs(apu_wait_sum)/runtime_frames:0)>0 &&
       WriteLighting(out, "recent", &recent_lighting) &&
       fputs("session_timing_scope=since_launch; intervals exclude dump, suspend and pause gaps\n"
             "gameplay_timing_scope=game_states_7_to_11; grouped by widescreen mode\n", out) >= 0 &&
@@ -386,7 +408,7 @@ bool FrameDiagnostics_WriteCsv(FILE *out) {
             "scroll_block_y,map_sector_changed,scroll_block_changed,bottom_redrawn,"
             "lighting_requested,lighting_applied,lighting_profile,light_prepare_us,"
             "shadow_submit_us,glow_submit_us,model_build_us,light_sources,shadow_quads,"
-            "glow_quads,light_field_rebuilt,background_sources\n",
+            "glow_quads,light_field_rebuilt,background_sources,runtime_profile,apu_queue_us,apu_lock_wait_us\n",
             out) < 0) return false;
   for (unsigned i = 0; i < g_count; i++) {
     const FrameSample *s = SampleAt(i);
@@ -408,12 +430,13 @@ bool FrameDiagnostics_WriteCsv(FILE *out) {
                 s->scroll_changed, s->bottom_redrawn) < 0)
       return false;
     if (fprintf(out, ",%u,%u,%u,%" PRIu64 ",%" PRIu64 ",%" PRIu64
-                     ",%" PRIu64 ",%u,%u,%u,%u,%u\n",
+                     ",%" PRIu64 ",%u,%u,%u,%u,%u,%u,%" PRIu64 ",%" PRIu64 "\n",
                 s->lighting_requested, s->lighting_applied, s->lighting_profile,
                 AsUs(s->light_prepare_ticks), AsUs(s->shadow_submit_ticks),
                 AsUs(s->glow_submit_ticks), AsUs(s->model_build_ticks),
                 s->light_sources, s->shadow_quads, s->glow_quads,
-                s->light_field_rebuilt, s->background_sources) < 0) return false;
+                s->light_field_rebuilt, s->background_sources, s->runtime_profile,
+                AsUs(s->apu_queue_ticks),AsUs(s->apu_wait_ticks)) < 0) return false;
   }
   return !ferror(out);
 }

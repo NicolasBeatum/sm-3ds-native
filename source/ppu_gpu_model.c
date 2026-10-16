@@ -1269,17 +1269,23 @@ typedef struct LitEmitter {
 
 static bool EmitLit(void *context, unsigned group, const PicaQuad *quad) {
   LitEmitter *e = context;
-  if (group >= 4 || quad->depth == 1)
+  if (group >= 4 || quad->depth == 1 || quad->y0 < (int)e->frame->hudEndY)
     return e->emit(e->context, group, quad);
-  PicaQuad q = *quad;
-  if (q.y0 >= (int)e->frame->hudEndY) {
-    if (group & 1) SceneLighting_Tile(e->frame, group, 0, &q);
-    else if (q.depth == 0x8000 || q.depth == 0xc000)
-      SceneLighting_ApplyColor(e->frame->lighting, 0, &q);
-    else if (q.depth == 0x7100 || q.depth == 0xb100)
-      SceneLighting_ApplyColor(e->frame->lighting, 1, &q);
+  if (group & 1) {
+    PicaQuad q = *quad;
+    SceneLighting_Tile(e->frame, group, 0, &q);
+    return e->emit(e->context, group, &q);
   }
-  return e->emit(e->context, group, &q);
+  unsigned layer = quad->depth == 0x8000 || quad->depth == 0xc000 ? 0 :
+                   quad->depth == 0x7100 || quad->depth == 0xb100 ? 1 : 2;
+  /* Weather/BG3 is deliberately unmodulated. Pass it through unchanged. */
+  if (layer == 2) return e->emit(e->context, group, quad);
+  const uint8_t *color=SceneLighting_Color(e->frame->lighting,layer,quad);
+  if (e->frame->emitColored)
+    return e->frame->emitColored(e->context,group,quad,color);
+  PicaQuad q=*quad;
+  q.r=color[0];q.g=color[1];q.b=color[2];
+  return e->emit(e->context,group,&q);
 }
 
 bool PicaBuildFrame(PicaFrame *f) {

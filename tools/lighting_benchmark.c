@@ -15,6 +15,14 @@ static bool Pack(void *ctx,unsigned group,const PicaQuad *q) {
   if(vertexCount+4>PICA_MAX_VERTICES)return false;
   PicaQuadVertices(vertices+vertexCount,q); vertexCount+=4; return true;
 }
+#ifdef PICA_COLORED_EMIT
+static bool PackColored(void *ctx,unsigned group,const PicaQuad *q,const uint8_t color[3]) {
+  (void)ctx;count[group]++;
+  if(vertexCount+4>PICA_MAX_VERTICES)return false;
+  PicaQuadVerticesColor(vertices+vertexCount,q,color[0],color[1],color[2]);
+  vertexCount+=4;return true;
+}
+#endif
 static double Now(void) {
   struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);
   return t.tv_sec+t.tv_nsec*1e-9;
@@ -42,6 +50,9 @@ int main(int argc,char **argv) {
     .wideTileTable=(const uint16_t *)(g_ram+0xA000),
     .wideRoomWidth=room_width_in_blocks,.wideRoomHeight=room_height_in_blocks,
     .emit=Pack};
+#ifdef PICA_COLORED_EMIT
+  f.emitColored=PackColored;
+#endif
   double trials[9],cold=0;
   for(unsigned rep=0;rep<10;rep++) {
     double start=Now();

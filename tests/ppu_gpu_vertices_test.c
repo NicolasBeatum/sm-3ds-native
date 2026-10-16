@@ -42,6 +42,17 @@ int main(void) {
     }
     assert(first == groups[g] && triangles == groups[g] / 2);
   }
+  /* Direct color packing must retain exact bytes, including flipped UVs,
+   * depth clamps and alpha, without modifying the caller's quad. */
+  for(unsigned i=0;i<1000;i++) {
+    PicaQuad q={-72,1,328,224,3200,512,0,4096,i*61,255,255,255,i&255};
+    PicaQuad before=q,colored=q;
+    uint8_t r=i*17,g=i*31,b=i*47;
+    colored.r=r;colored.g=g;colored.b=b;
+    PicaVertex fast[4],ordinary[4];
+    PicaQuadVerticesColor(fast,&q,r,g,b);PicaQuadVertices(ordinary,&colored);
+    assert(!memcmp(fast,ordinary,sizeof(fast)) && !memcmp(&q,&before,sizeof(q)));
+  }
   assert(PICA_MAX_VERTICES / 4 == 262140 / 6);
   free(indices);
   puts("Indexed quads retain triangle bytes, winding, UV/depth/color and draw capacity.");

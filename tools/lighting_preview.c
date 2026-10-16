@@ -21,9 +21,24 @@ SpcPlayer *g_spc_player;
 static PicaLine captured[224];
 static bool lavaFixture;
 static bool shaktoolFixture;
+static bool dumpFixture;
+static void (*finishPreview)(void);
+static uint8 dumpRam[sizeof(g_ram)];
+static unsigned DumpWord(const void *address) {
+  size_t offset=(const uint8 *)address-g_ram;
+  return dumpRam[offset]|((unsigned)dumpRam[offset+1]<<8);
+}
+static void DumpPosition(void) {
+  room_ptr=DumpWord(&room_ptr);door_def_ptr=DumpWord(&door_def_ptr);
+  layer1_x_pos=DumpWord(&layer1_x_pos);layer1_y_pos=DumpWord(&layer1_y_pos);
+  bg1_x_offset=DumpWord(&bg1_x_offset);bg1_y_offset=DumpWord(&bg1_y_offset);
+  samus_x_pos=samus_prev_x_pos=DumpWord(&samus_x_pos);
+  samus_y_pos=samus_prev_y_pos=DumpWord(&samus_y_pos);
+}
 void __real_LoadFromLoadStation(void);
 void __wrap_LoadFromLoadStation(void) {
   __real_LoadFromLoadStation();
+  if(dumpFixture) {DumpPosition();return;}
   if (shaktoolFixture) {
     room_ptr=0xd8c5;door_def_ptr=0xa798;
     bg1_x_offset=layer1_x_pos=0;bg1_y_offset=layer1_y_pos=0;
@@ -47,6 +62,8 @@ void __wrap_ppu_runLine(Ppu *p, int line) {
 void Warning(const char *s) { fprintf(stderr,"%s\n",s); }
 void RtlApuLock(void) {}
 void RtlApuUnlock(void) {}
+void RtlApuQueueLock(void) {}
+void RtlApuQueueUnlock(void) {}
 void Die(const char *s) { fprintf(stderr, "%s\n", s); exit(1); }
 
 static void CaptureDoorRoute(Snes *s, const char *root) {
@@ -86,7 +103,7 @@ static void CaptureDoorRoute(Snes *s, const char *root) {
 }
 
 int main(int argc, char **argv) {
-  if (argc != 4 && argc != 5) { fprintf(stderr,"usage: %s ROM SRAM output-directory [fire|jump|move|slot1|slot1-move|acid|lava|shaktool|door-left|station:AREA:INDEX]\n",argv[0]); return 1; }
+  if (argc != 4 && argc != 5) { fprintf(stderr,"usage: %s ROM SRAM output-directory [fire|jump|move|slot1|slot1-move|acid|lava|shaktool|dump:WRAM|door-left|station:AREA:INDEX]\n",argv[0]); return 1; }
   /* Never permit game SRAM writes to the source save. */
   char path[1024];
   snprintf(path,sizeof(path),"%s/preview-only.srm",argv[3]);
@@ -108,6 +125,22 @@ int main(int argc, char **argv) {
   printf("slot %u: area=%u station=%u health=%u\n",slot+1,area_index,load_station_index,samus_health);
   selected_save_slot = slot;
   shaktoolFixture=argc==5 && !strcmp(argv[4],"shaktool");
+  dumpFixture=argc==5 && !strncmp(argv[4],"dump:",5);
+  if(dumpFixture) {
+    file=fopen(argv[4]+5,"rb");
+    if(!file || fread(dumpRam,1,sizeof(dumpRam),file)!=sizeof(dumpRam) || fgetc(file)!=EOF)
+      Die("Dump must be a complete 128 KiB WRAM file");
+    fclose(file);
+    if(DumpWord(&game_state)!=8 || DumpWord(&area_index)>5 ||
+        DumpWord(&room_ptr)<0x9000 || DumpWord(&room_ptr)>=0xe000)
+      Die("Dump fixture requires a native gameplay room");
+    /* Reconstruct room selection/progress, not a hardware savestate: PPU,
+     * audio and enemy timers are initialized normally from the local ROM. */
+    memcpy(&equipped_items,dumpRam+((uint8 *)&equipped_items-g_ram),96);
+    memcpy(events_that_happened,dumpRam+(events_that_happened-g_ram),
+        (uint8 *)&loading_game_state-events_that_happened);
+    area_index=DumpWord(&area_index);load_station_index=0;
+  }
   bool acid = argc==5 && !strcmp(argv[4],"acid");
   bool doorFixture = argc==5 && !strcmp(argv[4],"door-left");
   lavaFixture = doorFixture || (argc==5 && !strcmp(argv[4],"lava"));
@@ -138,14 +171,21 @@ int main(int argc, char **argv) {
   loading_game_state = 5;
   game_state = 6;
   coroutine_state_0 = coroutine_state_1 = coroutine_state_2 = coroutine_state_3 = 0;
-  for (unsigned i = 0; i < 1200; i++) RtlRunFrame(0);
+  for (unsigned i = 0; i < (dumpFixture?180u:1200u); i++) RtlRunFrame(0);
+  if(dumpFixture) {
+    if(room_ptr!=DumpWord(&room_ptr) || game_state!=8)
+      Die("Reconstructed dump left the requested room");
+    /* Keep the requested viewpoint while native scrolling/HDMA settles. */
+    for(unsigned i=0;i<4;i++) {DumpPosition();RtlRunFrame(0);}
+    printf("dump reconstruction room=%04x samus=%u,%u camera=%u,%u (not exact hardware state)\n",room_ptr,samus_x_pos,samus_y_pos,layer1_x_pos,layer1_y_pos);
+  }
   printf("room=%04x state=%u samus=(%u,%u) camera=(%u,%u)\n",
           room_ptr,game_state,samus_x_pos,samus_y_pos,layer1_x_pos,layer1_y_pos);
-  if (game_state != 8 || (!acid && !lavaFixture && !stationFixture && !shaktoolFixture &&
+  if (game_state != 8 || (!acid && !lavaFixture && !stationFixture && !shaktoolFixture && !dumpFixture &&
       slot == 1 && room_ptr != 0x91f8)) Die("Preview did not reach expected gameplay");
   if (stationFixture && (room_ptr!=fixtureRoom || area_index!=fixtureArea))
     Die("Diagnostic station did not reach the selected room and area");
-  if (argc == 5 && (slot == 1 || slot1Move) && !acid && !lavaFixture && !stationFixture && !shaktoolFixture) {
+  if (argc == 5 && (slot == 1 || slot1Move) && !acid && !lavaFixture && !stationFixture && !shaktoolFixture && !dumpFixture) {
     unsigned input, frames;
     if (!strcmp(argv[4],"fire")) { input=button_config_shoot_x; frames=10; }
     else if (!strcmp(argv[4],"jump")) { input=button_config_jump_a; frames=12; }
@@ -231,6 +271,7 @@ int main(int argc, char **argv) {
   }
   fclose(file);
   if (doorFixture) CaptureDoorRoute(s,argv[3]);
+  if(finishPreview) finishPreview();
   snes_free(s);
   return 0;
 }

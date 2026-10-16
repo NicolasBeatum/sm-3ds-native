@@ -25,6 +25,7 @@
 #include "rom_menu.h"
 #include "debug_dump.h"
 #include "frame_diagnostics.h"
+#include "audio_diagnostics.h"
 #include "storage_paths.h"
 #include "app_lifecycle.h"
 #include "video_layout.h"
@@ -143,7 +144,7 @@ static void DrawPpuFrame(void) {
     }
 }
 
-static SDL_mutex *g_audio_mutex;
+static SDL_mutex *g_audio_mutex, *g_apu_queue_mutex;
 static uint8 *g_audiobuffer, *g_audiobuffer_cur, *g_audiobuffer_end;
 static int g_frames_per_block;
 static uint8 g_audio_channels;
@@ -244,8 +245,14 @@ void RtlApuLock(void) {
 void RtlApuUnlock(void) {
   SDL_UnlockMutex(g_audio_mutex);
 }
+void RtlApuQueueLock(void) { SDL_LockMutex(g_apu_queue_mutex); }
+void RtlApuQueueUnlock(void) { SDL_UnlockMutex(g_apu_queue_mutex); }
 
 static void SDLCALL AudioCallback(void *userdata, Uint8 *stream, int len) {
+#ifdef SM3DS_PHASE_DIAG
+  Uint8 *original_stream=stream;
+  int original_bytes=len;
+#endif
 #ifdef SM3DS_PROFILE
   g_profile_audio_callbacks++;
 #endif
@@ -255,6 +262,10 @@ static void SDLCALL AudioCallback(void *userdata, Uint8 *stream, int len) {
       uint64_t profile_audio_before = SDL_GetPerformanceCounter();
 #endif
       RtlRenderAudio((int16 *)g_audiobuffer, g_frames_per_block, g_audio_channels);
+#ifdef SM3DS_PHASE_DIAG
+      AudioDiagnostics_Generated((const int16_t *)g_audiobuffer,
+          (size_t)g_frames_per_block*g_audio_channels);
+#endif
 #ifdef SM3DS_PROFILE
       g_profile_audio_ticks += SDL_GetPerformanceCounter() - profile_audio_before;
 #endif
@@ -281,6 +292,9 @@ static void SDLCALL AudioCallback(void *userdata, Uint8 *stream, int len) {
     stream += n;
     len -= n;
   }
+#ifdef SM3DS_PHASE_DIAG
+  AudioDiagnostics_Output((const int16_t *)original_stream,original_bytes/sizeof(int16_t));
+#endif
 }
 
 int idx_of_btn(enum Button b) {
@@ -522,7 +536,8 @@ int main(int argc, char** argv) {
 
   // Setup audio
   g_audio_mutex = SDL_CreateMutex();
-  if (!g_audio_mutex) Die("No mutex");
+  g_apu_queue_mutex = SDL_CreateMutex();
+  if (!g_audio_mutex || !g_apu_queue_mutex) Die("No audio mutex");
 
   g_spc_player = SpcPlayer_Create();
   SpcPlayer_Initialize(g_spc_player);
@@ -549,8 +564,12 @@ int main(int argc, char** argv) {
     g_audio_channels = 2;
     g_frames_per_block = (534 * have.freq) / 32000;
     g_audiobuffer = (uint8 *)malloc(g_frames_per_block * have.channels * sizeof(int16));
+    if (!g_audiobuffer) Die("Unable to allocate audio buffer");
+    g_audiobuffer_cur = g_audiobuffer_end = g_audiobuffer;
   }
 
+  AudioDiagnostics_Init(g_audio_device,have.freq,have.channels,have.samples,
+      have.format,g_sdl_audio_mixer_volume,g_audio_device?"":SDL_GetError());
   RtlReadSram();
   AppLifecycle_SetAudioDevice(g_audio_device);
 
@@ -786,6 +805,7 @@ int main(int argc, char** argv) {
         room_y_coordinate_on_map + (samus_y_pos >> 8) + 1,
         layer1_x_block, layer1_y_block, bottom_updated);
 #ifdef SM3DS_PHASE_DIAG
+    FrameDiagnostics_RecordRuntime(g_diag_phase_valid,g_diag_apu_queue_ticks,g_diag_apu_wait_ticks);
     if (pica_frame) {
       PpuGpuTiming timing = PpuGpuGetTiming();
       FrameDiagnostics_RecordPpuDetail(
@@ -958,6 +978,7 @@ int main(int argc, char** argv) {
   TraceExit(exit_trace, "audio closed");
 #endif
   SDL_DestroyMutex(g_audio_mutex);
+  SDL_DestroyMutex(g_apu_queue_mutex);
   free(g_audiobuffer);
   GpuPresenter_Fini();
   SessionLog_Record(osGetTime(), "shutdown_gpu_closed", "");

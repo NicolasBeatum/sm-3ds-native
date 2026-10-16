@@ -31,6 +31,10 @@ static bool Capture(void *ctx, unsigned group, const PicaQuad *q) {
   quads[group][count[group]++] = *q;
   return true;
 }
+static bool CaptureColored(void *ctx,unsigned group,const PicaQuad *q,const uint8_t rgb[3]) {
+  PicaQuad colored=*q;colored.r=rgb[0];colored.g=rgb[1];colored.b=rgb[2];
+  return Capture(ctx,group,&colored);
+}
 static int Clamp(int n) { return n<0?0:n>255?255:n; }
 static uint32_t Sample(const PicaQuad *q, int x, int y) {
   if (q->depth == 1) return (q->r<<24)|(q->g<<16)|(q->b<<8)|q->a;
@@ -90,7 +94,7 @@ int main(int argc,char **argv) {
       .scrollX=layer1_x_pos+bg1_x_offset,.scrollY=layer1_y_pos+bg1_y_offset,.followScroll=true}},
     .wideTileTable=(const uint16_t *)(g_ram+0xA000),
     .wideRoomWidth=room_width_in_blocks,.wideRoomHeight=room_height_in_blocks,
-    .lighting=&lighting,.emit=Capture};
+    .lighting=&lighting,.emit=Capture,.emitColored=CaptureColored};
   SceneLighting_Begin(&lighting,atoi(argv[3])!=0,room_ptr,game_state,
                       layer1_x_pos,layer1_y_pos,samus_x_pos,samus_y_pos,origin,flare_counter);
   if (lighting.enabled && (int16_t)lava_acid_y_pos>=0) {

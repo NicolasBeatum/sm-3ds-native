@@ -48,7 +48,7 @@ int main(void) {
   ReadFile(csv, text, sizeof(text));
   assert(strstr(text, "\n1,20000,") == NULL);
   assert(strstr(text, "\n2,20000,"));
-  assert(strstr(text, "\n121,10000,2000,700,1200,3000,1000,1000,7000,0,0,1,1,20,30,40,50,60,70,1,8,37629,11,4,21,2,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0\n"));
+  assert(strstr(text, "\n121,10000,2000,700,1200,3000,1000,1000,7000,0,0,1,1,20,30,40,50,60,70,1,8,37629,11,4,21,2,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n"));
   FILE *session = tmpfile();
   assert(session && FrameDiagnostics_WriteSummary(session));
   ReadFile(session, text, sizeof(text));
@@ -89,6 +89,7 @@ int main(void) {
     FrameDiagnostics_Record(frame, 40000, 10000, 4000, 6000, 14000, 4000,
                             2000, true, gpu, true, true, true);
     FrameDiagnostics_RecordScene(8, 0x91f8, 0, 0, 0, 0, false);
+    FrameDiagnostics_RecordRuntime(true,2400,1600);
     if (frame == 2)
       FrameDiagnostics_RecordLighting(false, false, true, 99, 99, 99, 10000, 8, 8, 8, 2, true);
     else if (frame == 3)
@@ -100,8 +101,11 @@ int main(void) {
   assert(summary && csv);
   assert(FrameDiagnostics_WriteSummary(summary) && FrameDiagnostics_WriteCsv(csv));
   ReadFile(summary, text, sizeof(text));
-  assert(strstr(text, "timing_schema=6\n"));
+  assert(strstr(text, "timing_schema=7\n"));
   assert(strstr(text, "recent_lighting_active_frames=120\n"));
+  assert(strstr(text,"recent_runtime_profile_frames=120\n"));
+  assert(strstr(text,"recent_avg_apu_queue_us=1200\n"));
+  assert(strstr(text,"recent_avg_apu_lock_wait_us=800\n"));
   assert(strstr(text, "recent_light_field_rebuilds=0\n"));
   assert(strstr(text, "session_lighting_profile_frames=124\n"));
   assert(strstr(text, "session_lighting_active_frames=122\n"));
@@ -120,7 +124,7 @@ int main(void) {
   assert(strstr(text, "lighting_off_background_sources_total=0\n"));
   ReadFile(csv, text, sizeof(text));
   assert(strstr(text, "lighting_requested,lighting_applied,lighting_profile,light_prepare_us"));
-  assert(strstr(text, ",1,1,1,200,30,40,6000,4,10,3,0,2\n"));
+  assert(strstr(text, ",1,1,1,200,30,40,6000,4,10,3,0,2,1,1200,800\n"));
   fclose(summary); fclose(csv);
 
   /* No instrumentation is reported as unavailable, rather than timed OFF. */
@@ -132,6 +136,8 @@ int main(void) {
   assert(summary && FrameDiagnostics_WriteSummary(summary));
   ReadFile(summary, text, sizeof(text));
   assert(strstr(text, "session_lighting_profile_frames=0\n"));
+  assert(strstr(text,"recent_runtime_profile_frames=0\n"));
+  assert(strstr(text,"recent_avg_apu_queue_us=0\n"));
   assert(strstr(text, "lighting_off_frames=0\n"));
   fclose(summary);
   return 0;

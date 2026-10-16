@@ -86,6 +86,11 @@ typedef struct PicaQuad {
 } PicaQuad;
 
 typedef bool PicaEmit(void *context, unsigned group, const PicaQuad *quad);
+#define PICA_COLORED_EMIT 1
+/* Optional consumer: pack an existing quad with its cached modulation color,
+ * without copying and editing the whole quad on the native tile hot path. */
+typedef bool PicaEmitColored(void *context, unsigned group, const PicaQuad *quad,
+                             const uint8_t color[3]);
 
 /* Room blocks provide side tiles without writing into the SNES's adjacent
  * 256-pixel BG tilemaps. The center keeps using the original VRAM image. */
@@ -118,6 +123,7 @@ typedef struct PicaFrame {
   const uint16_t *wideTileTable;
   unsigned wideRoomWidth, wideRoomHeight;
   PicaEmit *emit;
+  PicaEmitColored *emitColored;
   void *context;
   const char *failure;
   uint32_t quads[PICA_GROUPS];

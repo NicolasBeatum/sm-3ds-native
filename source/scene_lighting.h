@@ -54,11 +54,16 @@ typedef struct SceneLighting {
 
 /* The model has already clipped these quads to the viewport. Backgrounds use
  * this lookup directly; only objects need the separate shadow routine. */
-static inline void SceneLighting_ApplyColor(const SceneLighting *s,
-                                            unsigned layer, PicaQuad *q) {
+static inline const uint8_t *SceneLighting_Color(const SceneLighting *s,
+                                                  unsigned layer, const PicaQuad *q) {
   unsigned x=(q->x0+q->x1)>>(SCENE_FIELD_SHIFT+1);
   unsigned y=(q->y0+q->y1)>>(SCENE_FIELD_SHIFT+1);
-  const uint8_t *color=s->color[layer][y][x];
+  return s->color[layer][y][x];
+}
+
+static inline void SceneLighting_ApplyColor(const SceneLighting *s,
+                                            unsigned layer, PicaQuad *q) {
+  const uint8_t *color=SceneLighting_Color(s,layer,q);
   q->r=color[0]; q->g=color[1]; q->b=color[2];
 }
 
