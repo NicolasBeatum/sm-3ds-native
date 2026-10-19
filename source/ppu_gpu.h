@@ -20,6 +20,7 @@ bool PpuGpuDraw(void);
 C3D_Tex *PpuGpuOutput(void);
 unsigned PpuGpuOutputWidth(void);
 unsigned PpuGpuHudLines(void);
+bool PpuGpuHudExpanded(void);
 const char *PpuGpuReason(void);
 #ifdef SM3DS_PHASE_DIAG
 typedef struct PpuGpuTiming {

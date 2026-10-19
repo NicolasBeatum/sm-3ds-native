@@ -11,8 +11,7 @@ static unsigned Morton(unsigned x,unsigned y) {
 }
 static bool Capture(void *context, unsigned group, const PicaQuad *q) {
   (void)context;
-  assert(group == 21 && ((q->depth == 0x7200 && q->a == 78) ||
-                        (q->depth == 0x8100 && q->a == 96)));
+  assert(group == 21 && q->depth == 0x8100 && (q->a == 64 || q->a == 60));
   assert(q->x0 >= 0 && q->x1 <= 256 && q->y0 >= 32 && q->y1 <= 224);
   emitted++;
   return true;
@@ -23,6 +22,15 @@ int main(void) {
   uint32_t pixels[PICA_ATLAS_W * PICA_ATLAS_H] = {0};
   PicaFrame f = {.width=256,.height=224,.hudEndY=32,
                 .worldRight=256,.pixels=pixels,.lighting=&s,.emit=Capture};
+  static Ppu receiver;
+  PicaLine receiverLines[224]={0};
+  for(unsigned y=0;y<224;y++) {
+    receiverLines[y].brightness=15;
+    receiverLines[y].screenEnabled[0]=receiverLines[y].screenEnabled[1]=1;
+    receiverLines[y].bg[0].tilemapAdr=0x1000;
+  }
+  for(unsigned i=0;i<16;i++) receiver.vram[i]=0xffff;
+  f.memory=&receiver;f.lines=receiverLines;
   PicaQuad original = {100,100,108,108,0,4096,32,4032,0x8000,255,255,255,127};
   PicaQuad q = original;
   SceneLighting_Begin(&s,false,0x91f8,8,1024,1024,1152,1140,0,0);
@@ -34,15 +42,25 @@ int main(void) {
   }
   SceneLighting_Begin(&s,true,0x92fd,8,1024,1024,1152,1140,0,0);
   assert(s.enabled && !s.ship && s.count==1);
-  assert(s.lights[0].x==128 && s.lights[0].y==102);
+  assert(s.lights[0].x==128 && s.lights[0].y==102 && !s.lights[0].glow);
   SceneLighting_Prepare(&f);
   assert(s.color[0][6][8][1]>s.ambient[0][1]); /* Samus fill in another room. */
+  assert(s.color[1][6][8][1]>s.ambient[1][1]); /* Suit still illuminates interior walls. */
+  SceneLighting_SetTileset(&s,0xc1,0xb6f6);
+  SceneLighting_Prepare(&f);
+  assert(s.color[1][6][8][1]==s.ambient[1][1]); /* No suit light on distant clouds. */
   SceneLighting_AddLight(&s,220,44,48,88,62,28);
   SceneLighting_Prepare(&f);
   q=original; q.x0=216; q.x1=224; q.y0=40; q.y1=48;
   SceneLighting_Tile(&f,0,1,&q);
   assert(q.r>220 && q.g>210 && q.b>190 && q.r>q.g && q.g>q.b &&
          q.a==original.a);
+  unsigned near=s.color[0][2][13][0];
+  assert(s.color[1][2][13][0]>s.ambient[1][0]);
+  s.environmentStart=s.count;
+  SceneLighting_Prepare(&f);
+  assert(s.color[0][2][13][0]==near &&
+         s.color[1][2][13][0]==s.ambient[1][0]); /* Layer mask invalidates cache. */
   SceneLighting_Begin(&s,true,0x91f8,8,1024,1024,1152,1140,0,60);
   assert(s.count == 5 && s.samusX == 128 && s.samusY == 116);
   SceneLighting_Prepare(&f);
@@ -71,7 +89,7 @@ int main(void) {
   SceneLighting_Begin(&s,true,0x91f8,8,1024,1024,1152,1140,0,0);
   SceneLighting_Prepare(&f);
   s.castShadow=true; s.samusX=0;
-  q=original; q.x0=0; q.x1=8;
+  q=original; q.x0=0; q.x1=4;
   SceneLighting_Tile(&f,1,1,&q); /* Entire projected sprite falls outside. */
   assert(!s.shadowCount);
   q=original; SceneLighting_Tile(&f,1,1,&q);
@@ -96,20 +114,55 @@ int main(void) {
   assert(q.r==188 && q.g==196 && q.b==208);
   SceneLighting_Begin(&s,true,0xa70b,8,0,0,128,152,0,60);
   SceneLighting_Prepare(&f);
-  assert(s.shadowX==10 && s.shadowY==9); /* Own charge does not steer it. */
+  assert(s.shadowX==6 && s.shadowY==5); /* Own charge does not steer it. */
   SceneLighting_AddLight(&s,24,128,160,54,100,174);
   SceneLighting_Prepare(&f);
-  assert(s.shadowX==12 && s.shadowY==2);
+  assert(s.shadowX==8 && s.shadowY==1);
   s.castShadow=true;
   q=original; SceneLighting_Tile(&f,1,1,&q);
   assert(s.shadowCount==1 && s.shadows[0].depth>0x8000 &&
-         s.shadows[0].depth<0xc000 && s.shadows[0].a==96);
-  assert(s.shadows[0].x0==112 && s.shadows[0].y0==102);
+         s.shadows[0].depth<0xc000 && s.shadows[0].a==60);
+  assert(s.shadows[0].x0==108 && s.shadows[0].y0==101);
   assert(SceneLighting_EmitShadows(&f,0) && emitted==2 && !s.shadowCount);
   SceneLighting_Begin(&s,true,0xa70b,8,0,0,128,152,0,0);
   SceneLighting_AddLight(&s,128,200,160,154,72,24);
   SceneLighting_Prepare(&f);
-  assert(s.shadowX==0 && s.shadowY==-12); /* Lava illuminates from below. */
+  assert(s.shadowX==0 && s.shadowY==-8); /* Lava illuminates from below. */
+  /* A liquid surface gives the same diffuse color across the room, rather
+   * than moving circular patches as the widescreen camera pans. The emitter
+   * kind must invalidate an otherwise identical point-light cache entry. */
+  SceneLighting strip={0};
+  PicaFrame liquid={.width=400,.height=224,.hudEndY=32,
+    .worldRight=400,.lighting=&strip};
+  SceneLighting_Begin(&strip,true,0xaf14,8,0,0,2000,2000,72,0);
+  strip.liquidType=2;strip.liquidY=196;
+  SceneLighting_AddRoomSources(&liquid);
+  assert(strip.count==2 && strip.lights[1].surface);
+  SceneLighting_Prepare(&liquid);
+  for(unsigned x=1;x<SCENE_FIELD_W;x++)
+    assert(!memcmp(strip.color[0][11][0],strip.color[0][11][x],3));
+  assert(strip.color[0][11][0][0]>strip.color[0][5][0][0]);
+  assert(strip.color[0][11][0][0]>strip.color[0][11][0][1]);
+  uint8_t surfaceColor=strip.color[0][11][0][0];
+  strip.lights[1].x-=128;
+  SceneLighting_Prepare(&liquid);
+  assert(strip.color[0][11][0][0]==surfaceColor);
+  strip.lights[1].surface=false;
+  SceneLighting_Prepare(&liquid);
+  assert(strip.color[0][11][0][0]<surfaceColor);
+  /* No projected sprite on empty BG1 / distant sky. A single exposed
+   * corner also rejects the piece, including flipped tiles and subscreen. */
+  s.castShadow=true;
+  memset(receiver.vram,0,16*sizeof(uint16_t));
+  q=original;SceneLighting_Tile(&f,1,1,&q);assert(!s.shadowCount);
+  for(unsigned i=0;i<16;i++) receiver.vram[i]=0xffff;
+  q=original;SceneLighting_Tile(&f,1,1,&q);assert(s.shadowCount==1);
+  s.shadowCount=0;
+  receiverLines[100+s.shadowY].screenEnabled[0]=0;
+  q=original;SceneLighting_Tile(&f,1,1,&q);assert(!s.shadowCount);
+  receiverLines[100+s.shadowY].screenEnabled[0]=1;
+  q=original;SceneLighting_Tile(&f,3,1,&q);assert(s.shadowCount==1);
+  s.shadowCount=0;
   /* Exact light changes rebuild immediately; unrelated atlas changes and
    * buffer swaps reuse colors. Flips/cropped UVs cannot create fake light. */
   static PicaAtlas atlases[2];

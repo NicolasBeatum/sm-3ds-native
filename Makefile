@@ -182,30 +182,30 @@ OUTPUT_DIR := $(TOPDIR)/$(OUTPUT)
 #---------------------------------------------------------------------------------
 # Initial Targets
 #---------------------------------------------------------------------------------
-all: $(BUILD) $(OUTPUT_DIR)
+all: $(VERSION_H) $(BUILD) $(OUTPUT_DIR)
 	@make --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 3dsx: $(VERSION_H) $(BUILD) $(OUTPUT_DIR)
 # 	@echo $(CFILES)
 	@make --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile $@
 
-cia: $(BUILD) $(OUTPUT_DIR)
+cia: $(VERSION_H) $(BUILD) $(OUTPUT_DIR)
 	@echo $(BANNER_IMAGE_FILE)
 	@make --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile $@
 
-3ds: $(BUILD) $(OUTPUT_DIR)
+3ds: $(VERSION_H) $(BUILD) $(OUTPUT_DIR)
 	@make --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile $@
 
-elf: $(BUILD) $(OUTPUT_DIR)
+elf: $(VERSION_H) $(BUILD) $(OUTPUT_DIR)
 	@make --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile $@
 
-azahar: $(BUILD) $(OUTPUT_DIR)
+azahar: $(VERSION_H) $(BUILD) $(OUTPUT_DIR)
 	@make --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile $@
 
-hblauncher: $(BUILD) $(OUTPUT_DIR)
+hblauncher: $(VERSION_H) $(BUILD) $(OUTPUT_DIR)
 	@make --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile $@
 
-fbi: $(BUILD) $(OUTPUT_DIR)
+fbi: $(VERSION_H) $(BUILD) $(OUTPUT_DIR)
 	@make --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile $@
 
 $(BUILD):

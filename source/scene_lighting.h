@@ -9,7 +9,8 @@ enum { SCENE_MAX_LIGHTS = 8, SCENE_MAX_SHADOWS = 128,
 typedef struct SceneLight {
   int x, y, radius;
   uint8_t r, g, b;
-  bool glow; /* Uses existing tail padding; diffuse-only scenery costs no halo. */
+  uint8_t glow:1; /* Diffuse-only scenery costs no halo. */
+  uint8_t surface:1; /* Horizontal liquid emitter; shares the existing flag byte. */
 } SceneLight;
 typedef struct SceneEmitter {
   uint16_t x, y, tile;
@@ -22,10 +23,15 @@ typedef struct SceneEmitterCache {
   bool valid, overflow;
   SceneEmitter entries[SCENE_EMITTER_CACHE];
 } SceneEmitterCache;
+typedef struct SceneAmbientCache {
+  uint32_t hash;
+  uint16_t colors[128];
+  bool valid;
+} SceneAmbientCache;
 /* Zero-initialized key has no dependence on atlas buffer addresses. */
 typedef struct SceneFieldKey {
   int lights[SCENE_MAX_LIGHTS][6];
-  unsigned count, width, height, hudEndY;
+  unsigned count, environmentStart, width, height, hudEndY;
   uint8_t base[3][3];
   /* Visible collision cells plus a one-block border. Changes to doors and
    * destructible blocks invalidate contact shading without texture probes. */
@@ -34,7 +40,7 @@ typedef struct SceneFieldKey {
 /* Initialize to zero once; colors are rebuilt only when this key changes. */
 typedef struct SceneLighting {
   bool enabled, castShadow, ship, fieldValid;
-  bool transition;
+  bool transition, distantBackground;
   uint8_t glowAlpha;
   int samusX, samusY;
   unsigned count, shadowCount, environmentStart, room, backgroundCount;
@@ -42,6 +48,7 @@ typedef struct SceneLighting {
   /* Native tilemap coordinates survive camera/parallax and atlas swaps.
    * Live palette and foreground visibility are still checked every frame. */
   SceneEmitterCache emitters[2];
+  SceneAmbientCache materials[2];
   PicaQuad shadows[SCENE_MAX_SHADOWS];
   int shadowX, shadowY;
   unsigned liquidType;
@@ -51,6 +58,14 @@ typedef struct SceneLighting {
   uint8_t color[3][SCENE_FIELD_H][SCENE_FIELD_W][3];
   SceneFieldKey fieldKey;
 } SceneLighting;
+
+#define SCENE_LIGHTING_TILESET 1
+/* The native Crateria surface graphics share distant clouds/mountains.
+ * Interior BG2 wall art can receive the suit's diffuse fill instead. */
+static inline void SceneLighting_SetTileset(SceneLighting *s, unsigned bank,
+                                            unsigned tileTable) {
+  s->distantBackground=s->ship || (bank==0xc1 && tileTable==0xb6f6);
+}
 
 /* The model has already clipped these quads to the viewport. Backgrounds use
  * this lookup directly; only objects need the separate shadow routine. */
@@ -76,7 +91,7 @@ void SceneLighting_Begin(SceneLighting *scene, bool enabled, unsigned room,
 void SceneLighting_AddLight(SceneLighting *scene, int x, int y, int radius,
                             unsigned r, unsigned g, unsigned b);
 void SceneLighting_Prepare(PicaFrame *frame);
-/* Diffuse room color from sampled tile pixels, excluding unused palette colors. */
+/* Diffuse room color from native tilemap materials, independent of camera/pose. */
 void SceneLighting_Ambient(PicaFrame *frame);
 /* Recognized BG1/BG2 emitters: live graphics, palette and layer scroll. */
 void SceneLighting_AddBackgroundSources(PicaFrame *frame);

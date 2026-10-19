@@ -10,7 +10,7 @@ void SceneLighting_AddLight(SceneLighting *s, int x, int y, int radius,
                             unsigned r, unsigned g, unsigned b) {
   if (!s->enabled || s->count == SCENE_MAX_LIGHTS || radius <= 0) return;
   s->lights[s->count++] = (SceneLight){x,y,Clamp(radius,1,256),
-      Clamp(r,0,255),Clamp(g,0,255),Clamp(b,0,255),true};
+      Clamp(r,0,255),Clamp(g,0,255),Clamp(b,0,255),true,false};
 }
 
 void SceneLighting_Begin(SceneLighting *s, bool enabled, unsigned room,
@@ -26,6 +26,7 @@ void SceneLighting_Begin(SceneLighting *s, bool enabled, unsigned room,
   s->transition = state >= 9 && state <= 11;
   s->glowAlpha = 65;
   s->ship = room == 0x91f8;
+  s->distantBackground=s->ship;
   s->room = room;
   if (!s->enabled) { s->fieldValid=false; return; }
   const uint8_t interior[2][3]={{150,158,170},{88,101,121}};
@@ -44,6 +45,8 @@ void SceneLighting_Begin(SceneLighting *s, bool enabled, unsigned room,
   SceneLighting_AddLight(s, s->samusX, s->samusY - 14,
                           56, s->ship ? 26 : 42, s->ship ? 42 : 54,
                           s->ship ? 38 : 48);
+  /* Suit fill reveals nearby surfaces; it is not a luminous fog ball. */
+  s->lights[s->count-1].glow=false;
   if (charge >= 16)
     SceneLighting_AddLight(s, s->samusX + 10, s->samusY - 8,
                             48 + Clamp(charge, 0, 60), 88, 100, 62);
@@ -60,10 +63,9 @@ void SceneLighting_AddRoomSources(PicaFrame *f) {
   if (s->count==SCENE_MAX_LIGHTS) return;
   if ((s->liquidType == 2 || s->liquidType == 4) &&
       s->liquidY < (int)f->height + 64) {
-    unsigned n = f->width == 400 ? 3 : 2;
     int width = f->worldRight - f->worldLeft;
-    int y = s->liquidY < (int)f->hudEndY ? (int)f->hudEndY + 48 : s->liquidY + 16;
-    unsigned r=154,g=72,b=24;
+    int y = s->liquidY + 12;
+    unsigned r=200,g=92,b=28;
     /* Lava and acid can share orange graphics. Read the liquid's BG3 palette
      * rather than assuming acid is green; custom palettes follow their art. */
     if(f->memory && f->lines) {
@@ -82,13 +84,18 @@ void SceneLighting_AddRoomSources(PicaFrame *f) {
         unsigned low=cr<cg?cr:cg;low=low<cb?low:cb;
         unsigned luma=cr*3+cg*6+cb;
         if(high-low>=4 && luma>best) {
-          best=luma; r=cr*154/31;g=cg*154/31;b=cb*154/31;
+          best=luma; r=cr*200/31;g=cg*200/31;b=cb*200/31;
         }
       }
     }
-    for (unsigned i=0; i<n && width>0; i++)
-      SceneLighting_AddLight(s, f->worldLeft + width*(2*i+1)/(2*n), y,
-          160,r,g,b);
+    /* The whole surface emits, rather than screen-positioned circles. One
+     * cached strip replaces two/three point lights and their bloom quads.
+     * Its real Y also stays stable when the camera crosses the surface. */
+    if(width>0) {
+      SceneLighting_AddLight(s, f->worldLeft + width/2, y,112,r,g,b);
+      s->lights[s->count-1].surface=true;
+      s->lights[s->count-1].glow=false;
+    }
   }
   const PicaWideRoomLayer *room = &f->wideRoom[0];
   if (!room->blocks || !f->wideRoomWidth || !f->wideRoomHeight) return;
@@ -136,7 +143,7 @@ void SceneLighting_AddRoomSources(PicaFrame *f) {
     unsigned place=d<distance[0]?0:1;
     if (d>=distance[place]) continue;
     if (!place) {doors[1]=doors[0];distance[1]=distance[0];}
-    doors[place]=(SceneLight){sx,sy,88,rgb[color][0],rgb[color][1],rgb[color][2],true};
+    doors[place]=(SceneLight){sx,sy,88,rgb[color][0],rgb[color][1],rgb[color][2],true,false};
     distance[place]=d;
     if (count<2) count++;
   }
@@ -295,7 +302,7 @@ static void ChooseScenery(const PicaFrame *f,const SceneEmitter *e,int x,int y,
   unsigned high=r>g?r:g;high=high>b?high:b;
   if (high<3) return;
   int dx=x-f->lighting->samusX,dy=y-f->lighting->samusY,d=dx*dx+dy*dy;
-  SceneryChoice candidate={{x,y,m->radius,r*180/31,g*180/31,b*180/31,false},e->motif,d};
+  SceneryChoice candidate={{x,y,m->radius,r*180/31,g*180/31,b*180/31,false,false},e->motif,d};
   for (unsigned i=0;i<*count;i++) {
     dx=x-choices[i].light.x;dy=y-choices[i].light.y;
     /* Keep different hues/lamp kinds even when adjacent. */
@@ -375,43 +382,71 @@ void SceneLighting_AddBackgroundSources(PicaFrame *f) {
   }
 }
 
+static void AmbientMaterials(const PicaFrame *f, const BgLayer *bg,
+                             SceneAmbientCache *cache) {
+  /* Sample the native map, never screen positions: turning Samus also moves
+   * the camera and used to select a different handful of colored pixels.
+   * Spread 64 probes across both map pages, with staggered positions to avoid
+   * repeatedly hitting the same part of a repeating wall. Read complete tiles
+   * so thin details are included and flips cannot alter material coverage. */
+  uint16_t samples[64][17];
+  uint32_t hash=2166136261u;
+  unsigned sx=bg->tilemapWider?8:4,sy=bg->tilemapHigher?8:4;
+  for (unsigned row=0;row<8;row++) for (unsigned col=0;col<8;col++) {
+    unsigned i=row*8+col;
+    unsigned x=(col*sx+(row*3+col)%sx)*8;
+    unsigned y=(row*sy+(col*3+row)%sy)*8;
+    unsigned tile=MapTile(f,bg,x,y);
+    samples[i][0]=tile&0x1fff;
+    unsigned addr=bg->tileAdr+(tile&1023)*16;
+    for (unsigned ty=0;ty<8;ty++) {
+      samples[i][1+ty*2]=f->memory->vram[(addr+ty)&0x7fff];
+      samples[i][2+ty*2]=f->memory->vram[(addr+ty+8)&0x7fff];
+    }
+    for (unsigned j=0;j<17;j++) hash=(hash^samples[i][j])*16777619u;
+  }
+  if (cache->valid && cache->hash==hash) return;
+  cache->hash=hash;cache->valid=true;
+  memset(cache->colors,0,sizeof(cache->colors));
+  for (unsigned i=0;i<64;i++) for (unsigned r=0;r<8;r++) {
+    unsigned palette=((samples[i][0]>>10)&7)*16;
+    unsigned a=samples[i][1+r*2],b=samples[i][2+r*2];
+    for (unsigned bit=0;bit<8;bit++) {
+      unsigned index=((a>>bit)&1)|(((a>>(bit+8))&1)<<1)|
+          (((b>>bit)&1)<<2)|(((b>>(bit+8))&1)<<3);
+      if (index) cache->colors[palette+index]++;
+    }
+  }
+}
+
 void SceneLighting_Ambient(PicaFrame *f) {
   SceneLighting *s=f->lighting;
   if (!s || s->ship || !f->memory || !f->lines ||
       f->worldLeft>=f->worldRight || f->hudEndY>=f->height) return;
-  /* Six tile-row samples per layer: 48 actual pixels, not entire palettes.
-   * A colored wall contributes diffuse ambience, never a local point light.
-   * BG2 sets the room hue; BG1 is a fallback when BG2 has no colored samples. */
+  /* Cache material coverage; palette animations/fades remain live. No sprite
+   * palettes or unused palette entries can color the room. Rebuild coverage
+   * only when sampled map/graphics data changes, including streamed tiles. */
   unsigned rgb[2][3]={{0}},weight[2]={0};
-  for (unsigned layer=0;layer<2;layer++)
-  for (unsigned row=0;row<2;row++) {
-    unsigned y=f->hudEndY+(f->height-f->hudEndY)*(row?3:1)/4;
-    const PicaLine *p=&f->lines[y];
+  unsigned y=f->hudEndY;
+  while (y<f->height && f->lines[y].forcedBlank) y++;
+  if (y==f->height) return;
+  const PicaLine *p=&f->lines[y];
+  for (unsigned layer=0;layer<2;layer++) {
     if (p->forcedBlank || !((p->screenEnabled[0] |
         (p->addSubscreen?p->screenEnabled[1]:0))&(1u<<layer))) continue;
     const BgLayer *bg=&p->bg[layer];
     if (bg->bigTiles) continue;
-    unsigned wy=y+bg->vScroll;
-    for (unsigned col=0;col<3;col++) {
-      int x=(int)f->originX+16+col*112;
-      if (x<f->worldLeft || x>=f->worldRight || (layer==1 && f->boundBg2 &&
-          (x<f->bg2Left || x>=f->bg2Right))) continue;
-      unsigned tile=BackgroundTile(f,bg,x,y);
-      unsigned ty=(wy&7)^((tile&0x8000)?7:0);
-      unsigned addr=bg->tileAdr+(tile&1023)*16+ty;
-      unsigned a=f->memory->vram[addr&0x7fff],b=f->memory->vram[(addr+8)&0x7fff];
-      for (unsigned bit=0;bit<8;bit++) {
-        unsigned index=((a>>bit)&1)|(((a>>(bit+8))&1)<<1)|
-            (((b>>bit)&1)<<2)|(((b>>(bit+8))&1)<<3);
-        if (!index) continue;
-        unsigned c=f->memory->cgram[((tile>>10)&7)*16+index];
-        unsigned r=c&31,g=(c>>5)&31,blue=(c>>10)&31;
-        unsigned high=r>g?r:g; high=high>blue?high:blue;
-        unsigned low=r<g?r:g; low=low<blue?low:blue;
-        if (high<8 || high-low<6) continue;
-        unsigned w=high-low;
-        rgb[layer][0]+=r*w;rgb[layer][1]+=g*w;rgb[layer][2]+=blue*w;weight[layer]+=w;
-      }
+    SceneAmbientCache *cache=&s->materials[layer];
+    AmbientMaterials(f,bg,cache);
+    for (unsigned index=1;index<128;index++) {
+      if (!cache->colors[index]) continue;
+      unsigned c=f->memory->cgram[index];
+      unsigned r=c&31,g=(c>>5)&31,blue=(c>>10)&31;
+      unsigned high=r>g?r:g; high=high>blue?high:blue;
+      unsigned low=r<g?r:g; low=low<blue?low:blue;
+      if (high<8 || high-low<6) continue;
+      unsigned w=(high-low)*cache->colors[index];
+      rgb[layer][0]+=r*w;rgb[layer][1]+=g*w;rgb[layer][2]+=blue*w;weight[layer]+=w;
     }
   }
   unsigned layer=weight[1]?1:0;
@@ -486,22 +521,20 @@ void SceneLighting_Prepare(PicaFrame *f) {
   SceneLighting *s = f->lighting;
   SceneLighting_Ambient(f);
   GlowVisibility(f);
-  /* One projection per frame: cast away from the nearest environmental
-   * source, never from Samus's own fill/charge. Keep a stable diagonal in
-   * unlit corridors. This remains a bounded sprite silhouette, not geometry. */
-  s->shadowX = s->ship && s->samusX <= s->lights[0].x ? -10 : 10;
-  s->shadowY = 9;
+  /* A short silhouette on nearby BG1 art, never on distant BG2 scenery. */
+  s->shadowX = s->ship && s->samusX <= s->lights[0].x ? -6 : 6;
+  s->shadowY = 5;
   if (!s->ship) {
     int best = 0x7fffffff;
     for (unsigned i=s->environmentStart; i<s->count; i++) {
       const SceneLight *l=&s->lights[i];
       if (l->radius<64) continue;
-      int dx=s->samusX-l->x,dy=s->samusY-l->y;
+      int dx=l->surface?0:s->samusX-l->x,dy=s->samusY-l->y;
       int distance=dx*dx+dy*dy;
       if (distance<best && distance<l->radius*l->radius && (dx || dy)) {
         best=distance;
         int span=abs(dx)>abs(dy)?abs(dx):abs(dy);
-        s->shadowX=dx*12/span; s->shadowY=dy*12/span;
+        s->shadowX=dx*8/span; s->shadowY=dy*8/span;
       }
     }
   }
@@ -511,13 +544,15 @@ void SceneLighting_Prepare(PicaFrame *f) {
    * immediately; a stationary view reuses the grid across atlas swaps. */
   SceneFieldKey key;
   memset(&key,0,sizeof(key));
-  key.count=s->count; key.width=f->width; key.height=f->height;
+  key.count=s->count;
+  key.environmentStart=s->distantBackground?s->environmentStart:0;
+  key.width=f->width; key.height=f->height;
   key.hudEndY=f->hudEndY;
   ContactCells(f,&key);
   for (unsigned i=0;i<s->count;i++) {
     const SceneLight *l=&s->lights[i];
     key.lights[i][0]=l->x; key.lights[i][1]=l->y;
-    key.lights[i][2]=l->radius; key.lights[i][3]=l->r;
+    key.lights[i][2]=l->radius|(l->surface?512:0); key.lights[i][3]=l->r;
     key.lights[i][4]=l->g; key.lights[i][5]=l->b;
   }
   if (s->ship) {
@@ -526,35 +561,45 @@ void SceneLighting_Prepare(PicaFrame *f) {
   } else {
     memcpy(key.base,s->ambient,sizeof(s->ambient));
     key.base[2][0]=188; key.base[2][1]=196; key.base[2][2]=208;
+    /* A bright lava surface needs a darker surround, rather than washing
+     * every ledge in overlapping light. Leave its original pixels intact. */
+    if((s->liquidType==2 || s->liquidType==4) && s->liquidY<(int)f->height+64)
+      for(unsigned c=0;c<3;c++) {
+        key.base[0][c]-=24;key.base[1][c]-=18;
+      }
   }
   if (s->fieldValid && !memcmp(&key,&s->fieldKey,sizeof(key))) return;
 #ifdef SM3DS_PHASE_DIAG
   g_pica_build_timing.light_field_rebuilt = true;
 #endif
   memcpy(&s->fieldKey,&key,sizeof(key)); s->fieldValid=true;
-  uint16_t field[SCENE_FIELD_H][SCENE_FIELD_W][3]={0};
+  uint16_t field[2][SCENE_FIELD_H][SCENE_FIELD_W][3]={0};
   unsigned cols=(f->width+SCENE_FIELD_CELL-1)>>SCENE_FIELD_SHIFT;
   unsigned rows=(f->height+SCENE_FIELD_CELL-1)>>SCENE_FIELD_SHIFT;
   for (unsigned i=0;i<s->count;i++) {
     const SceneLight *l=&s->lights[i];
     int radius2=l->radius*l->radius;
     uint32_t reciprocal=(1u<<24)/radius2;
-    int left=Clamp((l->x-l->radius)/SCENE_FIELD_CELL,0,cols);
-    int right=Clamp((l->x+l->radius+SCENE_FIELD_CELL-1)/SCENE_FIELD_CELL,0,cols);
+    int left=l->surface?0:Clamp((l->x-l->radius)/SCENE_FIELD_CELL,0,cols);
+    int right=l->surface?(int)cols:Clamp((l->x+l->radius+SCENE_FIELD_CELL-1)/SCENE_FIELD_CELL,0,cols);
     int top=Clamp((l->y-l->radius)/SCENE_FIELD_CELL,
                   f->hudEndY>>SCENE_FIELD_SHIFT,rows);
     int bottom=Clamp((l->y+l->radius+SCENE_FIELD_CELL-1)/SCENE_FIELD_CELL,top,rows);
     for (int y=top;y<bottom;y++) {
       int dy=y*SCENE_FIELD_CELL+SCENE_FIELD_CELL/2-l->y;
       for (int x=left;x<right;x++) {
-        int dx=x*SCENE_FIELD_CELL+SCENE_FIELD_CELL/2-l->x;
+        int dx=l->surface?0:x*SCENE_FIELD_CELL+SCENE_FIELD_CELL/2-l->x;
         int distance2=dx*dx+dy*dy;
         if (distance2>=radius2) continue;
         unsigned weight=((uint32_t)(radius2-distance2)*reciprocal)>>16;
         weight=(weight*weight)>>8;
-        field[y][x][0]+=(l->r*weight)>>8;
-        field[y][x][1]+=(l->g*weight)>>8;
-        field[y][x][2]+=(l->b*weight)>>8;
+        unsigned rgb[3]={(l->r*weight)>>8,(l->g*weight)>>8,(l->b*weight)>>8};
+        for(unsigned c=0;c<3;c++) {
+          field[0][y][x][c]+=rgb[c];
+          /* Suit/charge/projectiles and the ship lamps are close sources.
+           * They cannot illuminate the distant clouds behind the ship. */
+          if(i>=key.environmentStart) field[1][y][x][c]+=rgb[c];
+        }
       }
     }
   }
@@ -563,9 +608,29 @@ void SceneLighting_Prepare(PicaFrame *f) {
       unsigned shade=ContactShade(&key,x,y,layer);
       for (unsigned c=0;c<3;c++)
         s->color[layer][y][x][c]=Clamp(key.base[layer][c]+
-            (layer==1?field[y][x][c]*3/4:field[y][x][c])-
+            (layer==1?field[1][y][x][c]*3/4:field[0][y][x][c])-
             shade,0,255);
     }
+}
+
+/* BG2 can be mountains, clouds or a remote wall. A duplicate silhouette on
+ * it looks like a floating ghost. Only accept projected pieces surrounded
+ * by actual BG1 pixels. Five bounded probes per Samus piece, no raymarch,
+ * texture readback, new render pass or per-background-quad work. */
+static bool ShadowReceiver(const PicaFrame *f, unsigned group, int x, int y) {
+  if(!f->memory || !f->lines) return false;
+  const PicaLine *line=&f->lines[y];
+  if(!(line->screenEnabled[group/2]&1)) return false;
+  const BgLayer *bg=&line->bg[0];
+  unsigned tile=BackgroundTile(f,bg,x,y);
+  unsigned wx=(x-(int)f->originX+bg->hScroll)&7;
+  unsigned wy=(y+bg->vScroll)&7;
+  unsigned bit=(tile&0x4000)?wx:7-wx;
+  unsigned row=(tile&0x8000)?7-wy:wy;
+  unsigned address=bg->tileAdr+(tile&1023)*16+row;
+  unsigned a=f->memory->vram[address&0x7fff];
+  unsigned b=f->memory->vram[(address+8)&0x7fff];
+  return ((a|a>>8|b|b>>8)>>bit)&1;
 }
 
 void SceneLighting_Tile(PicaFrame *f, unsigned group, unsigned slot,
@@ -580,18 +645,20 @@ void SceneLighting_Tile(PicaFrame *f, unsigned group, unsigned slot,
   if (!object && layer == 2) return;
   if (object && s->castShadow && s->shadowCount < SCENE_MAX_SHADOWS) {
     PicaQuad shadow = *q;
-    /* Interior silhouettes also reach low-priority BG1 wall art; BG1-high
-     * foreground still occludes them. Landing Site keeps its original depth. */
+    /* The receiver is BG1-low; BG1-high foreground still occludes it. */
     shadow.x0 += s->shadowX; shadow.x1 += s->shadowX;
     shadow.y0 += s->shadowY; shadow.y1 += s->shadowY;
-    shadow.depth = s->ship ? 0x7200 : 0x8100;
+    shadow.depth = 0x8100;
     shadow.r = shadow.g = shadow.b = 0;
-    shadow.a = s->ship ? 78 : 96;
+    shadow.a = s->ship ? 64 : 60;
     int x0 = Clamp(shadow.x0, f->worldLeft, f->worldRight);
     int x1 = Clamp(shadow.x1, f->worldLeft, f->worldRight);
     int y0 = Clamp(shadow.y0, f->hudEndY, f->height);
     int y1 = Clamp(shadow.y1, f->hudEndY, f->height);
-    if (x0 < x1 && y0 < y1) {
+    if (x0 < x1 && y0 < y1 &&
+        ShadowReceiver(f,group,x0,y0) && ShadowReceiver(f,group,x1-1,y0) &&
+        ShadowReceiver(f,group,x0,y1-1) && ShadowReceiver(f,group,x1-1,y1-1) &&
+        ShadowReceiver(f,group,(x0+x1)/2,(y0+y1)/2)) {
       int du = (shadow.u1 - shadow.u0) / (shadow.x1 - shadow.x0);
       int dv = (shadow.v1 - shadow.v0) / (shadow.y1 - shadow.y0);
       shadow.u0 += (x0 - shadow.x0) * du;

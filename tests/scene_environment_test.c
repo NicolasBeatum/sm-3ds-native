@@ -77,8 +77,8 @@ int main(void) {
   for(unsigned type=2;type<=6;type+=2) {
     Begin(); scene.liquidType=type; scene.liquidY=180;
     SceneLighting_AddRoomSources(&f);
-    assert(scene.count==(type==6?1u:3u)); /* Ordinary water is not emissive. */
-    if(type!=6) assert(scene.lights[1].radius==160 && scene.lights[1].r==154);
+    assert(scene.count==(type==6?1u:2u)); /* Ordinary water is not emissive. */
+    if(type!=6) assert(scene.lights[1].radius==112 && scene.lights[1].r==200 && scene.lights[1].surface && !scene.lights[1].glow);
     if(type==2) assert(scene.lights[1].r>scene.lights[1].g);
     if(type==4) assert(scene.lights[1].r>scene.lights[1].g);
   }
@@ -86,10 +86,10 @@ int main(void) {
   SceneLighting_AddRoomSources(&f); assert(scene.count==1);
   Begin(); scene.liquidType=2; scene.liquidY=180;
   f.width=400; f.worldLeft=72; f.worldRight=328;
-  SceneLighting_AddRoomSources(&f); assert(scene.count==4);
-  for(unsigned i=1;i<4;i++) assert(scene.lights[i].x>=72 && scene.lights[i].x<328);
+  SceneLighting_AddRoomSources(&f); assert(scene.count==2);
+  assert(scene.lights[1].x==200);
   Begin(); scene.liquidType=2; scene.liquidY=-100;
-  SceneLighting_AddRoomSources(&f); assert(scene.lights[1].y>=32);
+  SceneLighting_AddRoomSources(&f); assert(scene.lights[1].y==-88); /* Keep the actual offscreen surface. */
   for(unsigned i=0;i<20;i++) SceneLighting_AddLight(&scene,128,100,48,100,80,40);
   SceneLighting_AddRoomSources(&f); assert(scene.count==SCENE_MAX_LIGHTS);
   static Ppu p;

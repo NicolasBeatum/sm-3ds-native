@@ -69,6 +69,22 @@ static unsigned SampleQuads(const PicaQuad *quads, unsigned count,
                     ((sx&4)<<2)|((sy&4)<<3);
     return pixels[slot*64+morton];
   }
+  /* Strip slots contain oriented copies, not ordinary tile cache keys.
+   * Recover source identity for these synthetic coordinate assertions. */
+  if (slot >= PICA_REPEAT_FIRST &&
+      slot < PICA_REPEAT_FIRST + PICA_REPEAT_SLOTS) {
+    unsigned index=(slot-PICA_REPEAT_FIRST)/64;
+    const PicaRepeat *repeat=&atlas->repeats[index];
+    unsigned bpp=index<PICA_REPEAT_PATTERNS?2:4;
+    unsigned parts=bpp==4?8:4;
+    unsigned tile=repeat->tiles[(slot-PICA_REPEAT_FIRST)&(parts-1)];
+    unsigned sx=u&7,sy=v&7;
+    if(tile&0x4000)sx=7-sx;
+    if(tile&0x8000)sy=7-sy;
+    unsigned key=((repeat->tileBase+(tile&1023)*(bpp==4?16:8))&0x7fff) |
+        (((tile&0x1c00)>>(bpp==4?6:8))<<15) | ((bpp==4)<<23);
+    return 1+(key<<6)+sy*8+sx;
+  }
   return 1 + (atlas->tile[slot].key << 6) + (v % 8) * 8 + u % 8;
 }
 

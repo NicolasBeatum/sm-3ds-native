@@ -1,7 +1,37 @@
 /* Exact pixel/priority checks for repeated liquid BG3 strips. No ROM needed. */
-#define main RasterMain
-#include "../tools/lighting_raster_preview.c"
-#undef main
+#include "ppu_gpu_model.h"
+#include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static Ppu memory;
+static PicaLine lines[224];
+static PicaAtlas atlas;
+static uint32_t atlasPixels[PICA_ATLAS_W*PICA_ATLAS_H];
+static PicaQuad *quads[PICA_GROUPS];
+static unsigned count[PICA_GROUPS],capacity[PICA_GROUPS];
+static bool Capture(void *context,unsigned group,const PicaQuad *q) {
+  (void)context;
+  if(count[group]==capacity[group]) {
+    capacity[group]=capacity[group]?capacity[group]*2:256;
+    quads[group]=realloc(quads[group],capacity[group]*sizeof(*q));
+    assert(quads[group]);
+  }
+  quads[group][count[group]++]=*q;
+  return true;
+}
+static uint32_t Sample(const PicaQuad *q,int x,int y) {
+  double u=q->u0+(x-q->x0+.5)*(q->u1-q->u0)/(q->x1-q->x0);
+  double v=q->v0+(y-q->y0+.5)*(q->v1-q->v0)/(q->y1-q->y0);
+  unsigned tx=(unsigned)(u/4),ty=(unsigned)((4096-v)/8);
+  unsigned ux=tx&7,uy=ty&7;
+  unsigned morton=(ux&1)|((uy&1)<<1)|((ux&2)<<1)|((uy&2)<<2)|
+      ((ux&4)<<2)|((uy&4)<<3);
+  unsigned slot=(ty/8)*128+tx/8;
+  assert(slot<PICA_SLOTS);
+  return atlasPixels[slot*64+morton];
+}
 
 static uint32_t actual[400*224];
 static uint16_t actualZ[400*224];

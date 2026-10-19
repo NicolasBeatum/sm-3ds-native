@@ -335,11 +335,25 @@ bool GpuPresenter_DrawTop(const uint8_t *pixels) {
   const float hudHeight =
       (float)((hudLines * layout.height + kSnesHeight - 1) / kSnesHeight);
   const u32 black = C2D_Color32(0, 0, 0, 255);
-  if (BottomScreen_HideMainHud() && hudLines) {
-    C2D_DrawRectSolid(layout.x, layout.y, 0.1f, layout.width,
-                      hudHeight, black);
+  enum MainHudMode hudMode = BottomScreen_MainHudMode();
+  if (hudMode != kMainHudFull && hudLines && !PpuGpuHudExpanded()) {
+    /* Unsupported PPU effects use the reference renderer. Preserve selected
+     * native HUD columns without stretching stale scenery into this band. */
+    unsigned origin=wide?kWideExtraX:0,width=wide?kWideWidth:kSnesWidth;
+    for(unsigned x=0;x<width;) {
+      if(MainHudKeepsX(hudMode,(int)x-(int)origin) && x>=origin && x<origin+kSnesWidth) {x++;continue;}
+      unsigned end=x+1;
+      while(end<width && !(end>=origin && end<origin+kSnesWidth &&
+          MainHudKeepsX(hudMode,(int)end-(int)origin))) end++;
+      float left=layout.x+((int)x-layout.source_x)*(float)layout.width/layout.source_width;
+      float right=layout.x+((int)end-layout.source_x)*(float)layout.width/layout.source_width;
+      if(left<layout.x)left=layout.x;
+      if(right>layout.x+layout.width)right=layout.x+layout.width;
+      if(right>left)C2D_DrawRectSolid(left,layout.y,0.1f,right-left,hudHeight,black);
+      x=end;
+    }
     C2D_Flush();
-  } else if (wide && hudLines) {
+  } else if (wide && hudLines && !PpuGpuHudExpanded()) {
     /* The rounded-up mask covers one row beyond the image's HUD boundary.
      * Leave the first widened playfield row visible at both sides. */
     const float sideHudHeight = hudHeight > 0.0f ? hudHeight - 1.0f : 0.0f;

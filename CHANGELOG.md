@@ -1,5 +1,69 @@
 # Changelog
 
+## 0.2.0 - 2026-10-19
+
+A start-to-finish playthrough has been completed on Old 3DS using a development
+CIA. This verifies a route to the ending, not every route or 100% completion.
+Packages contain no game ROM or translation patch.
+
+### Atmospheric lighting
+
+- Add an optional game-wide lighting mode using PICA200 vertex colors, cached
+  ambient fields, colored doors, lava, background lamps and elevator platforms.
+- Add a soft light around Samus, selected luminous enemies and short shadows
+  clipped to nearby receiving surfaces. Limit active lights to eight, including
+  at most two visible enemies, to control the cost on Old 3DS.
+- Refine exterior sky handling, Norfair color, background source detection,
+  directional stability and room-transition continuity. Preserve original
+  textures; this is stylized lighting rather than normal maps or 3D geometry.
+- Document OFF/ON GIFs and lossless comparisons across ten areas, including
+  green, red, pink and blue Brinstar, plus an elevator comparison.
+
+### Maps and interface
+
+- Add independent map QoL pages with explanations and persistent settings:
+  item symbols, colored doors, room colors and station icons.
+- Offer OFF, ZERO/FUSION (pending circle, collected dot) and SUPER METROID
+  (pending native dot, collected circle) item styles. Read native collection
+  bits; keep a cell pending until all its items are collected. Only alter
+  explored native item cells.
+- Apply the selected style to the pause/lower maps and optionally the in-game
+  minimap through its own persisted toggle. Correct native HUD map row offsets.
+- Draw consistent one-screen-pixel door dividers on each directed door face.
+  Use that face's native unlock state and turn it blue after unlocking.
+- Color explored heat, lava, acid and secret rooms using current progress.
+  Adjust Crateria's color to keep cyan doors readable.
+- Mark lower-map energy, ammo and map stations with E, A and M glyphs adapted
+  from the native font. Preserve native pause-map and upper-minimap stations.
+- Show Samus as a rounded four-pixel red dot with a dark rim at every map zoom.
+- Add English/Spanish lower-screen UI under HUD → LANGUAGE; move map QoL into
+  MAP → MAP IMPROVEMENTS.
+- Add five upper HUD modes: full, energy, energy plus minimap, hidden with
+  expanded scenery, and hidden with the classic black band. Reduced HUDs have
+  transparent backgrounds; crop the minimap to its native five-by-three cells.
+  Reveal the 31 scenery rows behind the HUD without stretching or moving the
+  native camera. Reference-rendered special effects retain the classic band.
+
+### Correctness, performance and diagnostics
+
+- Restore native Shaktool movement through compiler aliasing correctness.
+- Reduce repeated BG3 water/quicksand strip work. Batch periodic 4bpp BG2
+  scenery under water HDMA, preserving palette/VRAM updates, transparency,
+  priority, windows and per-tile lighting. Use the existing atlas with separate
+  liquid/scenery cache budgets and a normal-tile fallback.
+- For the two October 19 Maridia reconstructions at 400px with lighting ON,
+  reduce geometry from 4,877 to 3,451 and from 4,701 to 3,211 pieces. Host CPU
+  model/packing time improves about 4% in the stationary cases. These are host
+  reconstruction measurements, not new console FPS results. The original
+  Old 3DS dumps measured approximately 38 and 39 FPS; hardware retesting remains.
+- Preserve original SPC/DSP audio; isolate audio queue/locking work and improve
+  audio/DSP lifecycle handling around HOME, suspension and Wi-Fi transitions.
+- Add separate lighting preparation, geometry and presentation measurements to
+  dumps, keeping game clocks, frame pacing and native gameplay speed intact.
+- Refresh English/Spanish README documentation, gameplay badges and actual
+  emulator captures; remove temporary capture tools and investigation journals
+  from tracked release files.
+
 ## 0.1.5 - 2026-10-02
 
 Configurable HUD and video layouts, widescreen rendering and enemy corrections,

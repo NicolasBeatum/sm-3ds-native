@@ -16,6 +16,7 @@ int main(void) {
   for (unsigned frame = 1; frame <= 120; frame++) {
     FrameDiagnostics_Record(frame, 20000, 5000, 2000, 3000, 7000, 2000,
                             1000, true, frame % 2 == 0, true, true, true);
+    FrameDiagnostics_RecordHud(2,true);
     FrameDiagnostics_RecordPpuDetail(400, 300, 200, 100, 500, 600);
     FrameDiagnostics_RecordScene(8, 0x92fd, 10, 4, 20, 2, false);
   }
@@ -41,6 +42,7 @@ int main(void) {
   FrameDiagnostics_Record(121, 10000, 2000, 700, 1200, 3000, 1000, 1000,
                           false, false, true, true, true);
   FrameDiagnostics_RecordPpuDetail(20, 30, 40, 50, 60, 70);
+  FrameDiagnostics_RecordHud(3,true); // CPU fallback cannot report expansion.
   FrameDiagnostics_RecordScene(8, 0x92fd, 11, 4, 21, 2, true);
   fclose(csv);
   csv = tmpfile();
@@ -48,7 +50,9 @@ int main(void) {
   ReadFile(csv, text, sizeof(text));
   assert(strstr(text, "\n1,20000,") == NULL);
   assert(strstr(text, "\n2,20000,"));
-  assert(strstr(text, "\n121,10000,2000,700,1200,3000,1000,1000,7000,0,0,1,1,20,30,40,50,60,70,1,8,37629,11,4,21,2,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n"));
+  assert(strstr(text, "main_hud_mode,hud_expanded\n"));
+  assert(strstr(text, ",2,1\n"));
+  assert(strstr(text, "\n121,10000,2000,700,1200,3000,1000,1000,7000,0,0,1,1,20,30,40,50,60,70,1,8,37629,11,4,21,2,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0\n"));
   FILE *session = tmpfile();
   assert(session && FrameDiagnostics_WriteSummary(session));
   ReadFile(session, text, sizeof(text));
@@ -124,7 +128,7 @@ int main(void) {
   assert(strstr(text, "lighting_off_background_sources_total=0\n"));
   ReadFile(csv, text, sizeof(text));
   assert(strstr(text, "lighting_requested,lighting_applied,lighting_profile,light_prepare_us"));
-  assert(strstr(text, ",1,1,1,200,30,40,6000,4,10,3,0,2,1,1200,800\n"));
+  assert(strstr(text, ",1,1,1,200,30,40,6000,4,10,3,0,2,1,1200,800,0,0\n"));
   fclose(summary); fclose(csv);
 
   /* No instrumentation is reported as unavailable, rather than timed OFF. */

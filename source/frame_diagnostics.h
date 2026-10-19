@@ -14,6 +14,7 @@ void FrameDiagnostics_Record(uint32_t frame, uint32_t interval_ticks,
                              bool phase_profile, bool gameplay);
 /* Audio queue publication is inside game time, outside native logic/PPU.
  * Lock wait is a subset of queue time, not audio generation CPU time. */
+void FrameDiagnostics_RecordHud(unsigned mode, bool expanded);
 void FrameDiagnostics_RecordRuntime(bool profiled, uint32_t apu_queue_ticks,
                                     uint32_t apu_wait_ticks);
 /* Attach PICA preparation details to the frame most recently recorded. */

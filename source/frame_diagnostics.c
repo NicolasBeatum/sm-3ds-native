@@ -18,7 +18,8 @@ typedef struct FrameSample {
   uint32_t light_prepare_ticks, shadow_submit_ticks, glow_submit_ticks, model_build_ticks;
   unsigned light_sources, shadow_quads, glow_quads, background_sources;
   uint32_t apu_queue_ticks, apu_wait_ticks;
-  bool runtime_profile;
+  bool runtime_profile, hud_expanded;
+  unsigned hud_mode;
 } FrameSample;
 
 static FrameSample g_samples[kRecentFrameCount];
@@ -108,6 +109,12 @@ void FrameDiagnostics_Record(uint32_t frame, uint32_t interval_ticks,
   if (gameplay) RecordSession(&g_session[wide ? 2 : 1], sample);
   g_next = (g_next + 1) % kRecentFrameCount;
   if (g_count < kRecentFrameCount) g_count++;
+}
+
+void FrameDiagnostics_RecordHud(unsigned mode, bool expanded) {
+  if (!g_count) return;
+  FrameSample *s=&g_samples[(g_next+kRecentFrameCount-1)%kRecentFrameCount];
+  s->hud_mode=mode;s->hud_expanded=expanded && s->pica_gpu;
 }
 
 void FrameDiagnostics_RecordRuntime(bool profiled, uint32_t apu_queue_ticks,
@@ -408,7 +415,7 @@ bool FrameDiagnostics_WriteCsv(FILE *out) {
             "scroll_block_y,map_sector_changed,scroll_block_changed,bottom_redrawn,"
             "lighting_requested,lighting_applied,lighting_profile,light_prepare_us,"
             "shadow_submit_us,glow_submit_us,model_build_us,light_sources,shadow_quads,"
-            "glow_quads,light_field_rebuilt,background_sources,runtime_profile,apu_queue_us,apu_lock_wait_us\n",
+            "glow_quads,light_field_rebuilt,background_sources,runtime_profile,apu_queue_us,apu_lock_wait_us,main_hud_mode,hud_expanded\n",
             out) < 0) return false;
   for (unsigned i = 0; i < g_count; i++) {
     const FrameSample *s = SampleAt(i);
@@ -430,13 +437,13 @@ bool FrameDiagnostics_WriteCsv(FILE *out) {
                 s->scroll_changed, s->bottom_redrawn) < 0)
       return false;
     if (fprintf(out, ",%u,%u,%u,%" PRIu64 ",%" PRIu64 ",%" PRIu64
-                     ",%" PRIu64 ",%u,%u,%u,%u,%u,%u,%" PRIu64 ",%" PRIu64 "\n",
+                     ",%" PRIu64 ",%u,%u,%u,%u,%u,%u,%" PRIu64 ",%" PRIu64 ",%u,%u\n",
                 s->lighting_requested, s->lighting_applied, s->lighting_profile,
                 AsUs(s->light_prepare_ticks), AsUs(s->shadow_submit_ticks),
                 AsUs(s->glow_submit_ticks), AsUs(s->model_build_ticks),
                 s->light_sources, s->shadow_quads, s->glow_quads,
                 s->light_field_rebuilt, s->background_sources, s->runtime_profile,
-                AsUs(s->apu_queue_ticks),AsUs(s->apu_wait_ticks)) < 0) return false;
+                AsUs(s->apu_queue_ticks),AsUs(s->apu_wait_ticks),s->hud_mode,s->hud_expanded) < 0) return false;
   }
   return !ferror(out);
 }

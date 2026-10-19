@@ -1,5 +1,5 @@
 /* Differential raster check. Link the previous model with its public
- * functions renamed to Reference*; see docs/hud-grapple-performance-trial.md. */
+ * functions renamed to Reference*. */
 #define _POSIX_C_SOURCE 200809L
 #include "ppu_gpu_model.h"
 #include "ppu_gpu_vertices.h"

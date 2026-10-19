@@ -72,8 +72,8 @@ bool RomMenu_Select(char *path, size_t path_size, char *name, size_t name_size) 
   mkdir(SM3DS_SAVE_DIR, 0755);
   mkdir(SM3DS_DUMP_DIR, 0755);
   int count = ScanRoms(), selected = 0;
-  const char *message = count ? "A LOAD  X REFRESH  START EXIT" :
-      "COPY .SMC TO /3DS/SM3DSNATIVE/";
+  const char *message = count ? BottomScreen_Localize("A LOAD  X REFRESH  START EXIT", "A ABRIR  X ACTUALIZAR  START SALIR") :
+      BottomScreen_Localize("COPY .SMC TO /3DS/SM3DSNATIVE/", "COPIA .SMC A /3DS/SM3DSNATIVE/");
   uint32_t last_move = 0;
   bool up_held = false, down_held = false;
   while (aptMainLoop()) {
@@ -91,8 +91,8 @@ bool RomMenu_Select(char *path, size_t path_size, char *name, size_t name_size) 
       if (button == 10) { /* X */
         count = ScanRoms();
         if (selected >= count) selected = count ? count - 1 : 0;
-        message = count ? "A LOAD  X REFRESH  START EXIT" :
-            "COPY .SMC TO /3DS/SM3DSNATIVE/";
+        message = count ? BottomScreen_Localize("A LOAD  X REFRESH  START EXIT", "A ABRIR  X ACTUALIZAR  START SALIR") :
+            BottomScreen_Localize("COPY .SMC TO /3DS/SM3DSNATIVE/", "COPIA .SMC A /3DS/SM3DSNATIVE/");
       } else if (button == 6 && count) {
         selected = selected > 0 ? selected - 1 : count - 1;
       } else if (button == 7 && count) {
@@ -100,12 +100,12 @@ bool RomMenu_Select(char *path, size_t path_size, char *name, size_t name_size) 
       } else if (button == 0 && count) {
         int n = snprintf(path, path_size, "%s/%s", SM3DS_SD_ROOT, g_names[selected]);
         if (n < 0 || (size_t)n >= path_size || strlen(g_names[selected]) >= name_size) {
-          message = "ROM NAME IS TOO LONG";
+          message = BottomScreen_Localize("ROM NAME IS TOO LONG", "NOMBRE DE ROM DEMASIADO LARGO");
           continue;
         }
         struct stat st;
         if (stat(path, &st) != 0 || st.st_size < 0x300000 || st.st_size > 0x800200) {
-          message = "INVALID ROM SIZE";
+          message = BottomScreen_Localize("INVALID ROM SIZE", "TAMAÑO DE ROM NO VÁLIDO");
           continue;
         }
         strcpy(name, g_names[selected]);

@@ -31,6 +31,7 @@
 #include "video_layout.h"
 #include "session_log.h"
 #include "version.h"
+#include "qol_map.h"
 
 enum Button {
   BTN_A = 0,
@@ -382,7 +383,7 @@ static void SaveDebugDump(const char *rom_name, uint32_t frame_number) {
   SessionLog_Record(osGetTime(), "manual_dump_begin", rom_name);
   bool saved = DebugDump_Write(rom_name, frame_number);
   SessionLog_Record(osGetTime(), "manual_dump_end", saved ? "saved=1" : "saved=0");
-  BottomScreen_ShowNotice(saved ? "DEBUG DUMP SAVED" : "DEBUG DUMP FAILED",
+  BottomScreen_ShowNotice(saved ? BottomScreen_Localize("DEBUG DUMP SAVED", "DUMP GUARDADO") : BottomScreen_Localize("DEBUG DUMP FAILED", "ERROR AL GUARDAR DUMP"),
                           osGetTime() + 3000);
 }
 
@@ -507,6 +508,7 @@ int main(int argc, char** argv) {
     SessionLog_Record(osGetTime(), "shutdown_complete", "selector");
     return 0;
   }
+  QolMap_Init(g_rom,snes->cart->romSize);
   if (snprintf(save_path, sizeof(save_path), "%s/%s.srm", SM3DS_SAVE_DIR, rom_name)
           >= (int)sizeof(save_path) || !RtlSetSramPath(save_path))
     Die("ROM filename is too long for save path");
@@ -738,6 +740,7 @@ int main(int argc, char** argv) {
     uint8 is_replay = RtlRunFrame(inputs);
     uint64_t afterGame = SDL_GetPerformanceCounter();
     bool pica_frame = PpuGpuOutputActive();
+    if(!pica_frame) QolMap_ApplyCpu(g_pixels,256*4,g_snes->ppu);
 
     frameCtr++;
     g_session_frame = frameCtr;
@@ -800,6 +803,7 @@ int main(int argc, char** argv) {
         game_state >= kGameState_7_MainGameplayFadeIn &&
           game_state <= kGameState_11_LoadingNextRoom
         );
+    FrameDiagnostics_RecordHud(BottomScreen_MainHudMode(), PpuGpuHudExpanded());
     FrameDiagnostics_RecordScene(game_state, room_ptr,
         room_x_coordinate_on_map + (samus_x_pos >> 8),
         room_y_coordinate_on_map + (samus_y_pos >> 8) + 1,

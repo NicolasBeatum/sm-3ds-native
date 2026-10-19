@@ -1,5 +1,5 @@
 /* Integration check with a user-supplied ROM and an active X-Ray WRAM dump.
- * Neither input is included in the repository. See docs/xray-widescreen-trial.md. */
+ * Neither input is included in the repository. */
 #include "wide_xray.h"
 #include "wide_config.h"
 #include "src/ida_types.h"

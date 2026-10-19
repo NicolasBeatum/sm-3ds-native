@@ -10,6 +10,8 @@
 #include "src/sm_rtl.h"
 #include "redux_suit_data.h"
 #include "version.h"
+#include "qol_map.h"
+#include "native_map_tile.h"
 
 #ifndef SM3DS_BUILD_FLAGS
 #define SM3DS_BUILD_FLAGS ""
@@ -46,7 +48,7 @@ static const UiColor kSamus = {255, 70, 70};
 static const UiColor kSlot = {48, 52, 68};
 
 static const UiColor kAreaColors[6] = {
-  {150, 165, 210}, {110, 210, 110}, {235, 110, 90},
+  {184, 181, 160}, {110, 210, 110}, {235, 110, 90},
   {210, 180, 110}, {255, 100, 100}, {220, 110, 190},
 };
 
@@ -75,7 +77,8 @@ static bool g_world_labels = true;
 static bool g_map_buttons_visible = true;
 static bool g_world_touch_active, g_world_touch_moved;
 static int g_world_last_touch_x, g_world_last_touch_y;
-static bool g_hide_main_hud;
+static enum MainHudMode g_main_hud_mode;
+static bool g_hud_mode_open;
 static bool g_widescreen = true;
 #ifdef SM3DS_LIGHTING_TRIAL
 static bool g_scene_lighting = true;
@@ -92,6 +95,22 @@ static bool g_xray_map_button = true;
 static bool g_map_item_touch;
 static enum BottomScreenVideoMode g_video_mode = kVideoMode_Fit;
 enum SetupGroup { kSetupHud, kSetupMap, kSetupVideo };
+static bool g_hud_language_open;
+static bool g_map_qol_open;
+enum QolPage { kQolOverview, kQolItems, kQolDoors, kQolRooms, kQolStations };
+static enum QolPage g_qol_page;
+static unsigned g_ui_language;
+
+const char *BottomScreen_Localize(const char *english, const char *spanish) {
+  return g_ui_language == 1 ? spanish : english;
+}
+#define Tr(english, spanish) BottomScreen_Localize(english, spanish)
+static const char *OnOff(bool enabled) {
+  return enabled ? Tr("ON", "SÍ") : Tr("OFF", "NO");
+}
+static enum ItemSymbolMode g_item_symbols = kItemSymbolsSuperMetroid;
+static bool g_map_door_colors = true, g_map_room_colors = true;
+static bool g_map_stations = true, g_minimap_items = true;
 static enum SetupGroup g_setup_group;
 static const char *g_console_model = "UNKNOWN";
 static bool g_dump_requested;
@@ -168,6 +187,17 @@ static void FillCircle(uint8_t *fb, int cx, int cy, int radius, UiColor color) {
         PutPixel(fb, cx + x, cy + y, color);
 }
 
+static void DrawSamusMarker(uint8_t *fb,int x,int y,int w,int h) {
+  if(w<=0 || h<=0) return;
+  /* LCD-sized dot: zooming the map never enlarges its four-pixel center.
+   * A dark rim keeps it readable on room fills, doors and station plaques. */
+  int left=x+w/2-2,top=y+h/2-2;
+  FillRect(fb,left-1,top,6,4,kBg);
+  FillRect(fb,left,top-1,4,6,kBg);
+  FillRect(fb,left+1,top,2,4,kSamus);
+  FillRect(fb,left,top+1,4,2,kSamus);
+}
+
 static UiColor Snes15ToColor(uint16_t color) {
   return (UiColor){
     (uint8_t)((color & 31) * 255 / 31),
@@ -178,6 +208,11 @@ static UiColor Snes15ToColor(uint16_t color) {
 
 static UiColor TintColor(UiColor color, unsigned area, bool dim) {
   const UiColor tint = kAreaColors[area < 6 ? area : 0];
+  /* Neutral stone tones keep cyan door dividers distinct in Crateria. */
+  if (area == 0) {
+    unsigned luma = (color.r * 3 + color.g * 6 + color.b) / 10;
+    color = (UiColor){luma, luma, luma};
+  }
   unsigned divisor = dim ? 510 : 255;
   return (UiColor){
     (uint8_t)(color.r * tint.r / divisor),
@@ -217,11 +252,21 @@ static bool TileBit(const uint8_t *bits, int x, int y) {
   return (bits[MapBitIndex(x, y)] & (0x80 >> (x & 7))) != 0;
 }
 
+static const uint8_t *NativeStationBits(unsigned area) {
+  if(area>7) return NULL;
+  const uint8_t *table=RomPtr(0x829717+area*2);
+  return RomPtr(0x820000|GET_WORD(table));
+}
 static const uint8_t *MapStationBits(unsigned area) {
-  if (area > 7 || !map_station_byte_array[area])
-    return NULL;
-  const uint8_t *table = RomPtr(0x829717 + area * 2);
-  return RomPtr(0x820000 | GET_WORD(table));
+  return area<=7 && map_station_byte_array[area]?NativeStationBits(area):NULL;
+}
+static uint16_t MapCellStyle(unsigned area,int x,int y,bool seen) {
+  if(!seen || (!g_map_door_colors && !g_map_room_colors)) return 0;
+  uint16_t style=QolMap_CellStyle(area,x,y);
+  if(!g_map_door_colors) style&=0xf000;
+  if(!g_map_room_colors) style&=0x0fff;
+  else if(!TileBit(NativeStationBits(area),x,y)) style|=kMapRoomSecret;
+  return style;
 }
 
 static const uint16_t *AreaTilemap(unsigned area) {
@@ -232,15 +277,18 @@ static const uint16_t *AreaTilemap(unsigned area) {
 }
 
 static uint32_t AreaMapPixel(const uint8_t *tiles, const uint16_t *palette,
-                            unsigned area, uint16_t entry, int px, int py,
-                            bool dim) {
-  unsigned tile_index = entry & 0x3ff;
+                            unsigned area, uint32_t entry, int px, int py,
+                            bool dim,uint16_t style) {
+  unsigned source_tile = entry & 0x3ff;
+  unsigned variant=entry>>16;
+  unsigned service=variant>NATIVE_MAP_DOT_VARIANTS?variant-NATIVE_MAP_DOT_VARIANTS:0;
+  unsigned tile_index = variant && !service ? 1023+variant : source_tile;
   unsigned palette_row = (entry >> 10) & 7;
   /* Map graphics and palettes are ROM data. Decode a used tile once and
    * precompute its area tints, keeping the original integer rounding. */
   static const uint8_t *last_tiles;
   static const uint16_t *last_palette;
-  static uint8_t indices[1024][64], decoded[1024];
+  static uint8_t indices[1024+NATIVE_MAP_DOT_VARIANTS][64], decoded[1024+NATIVE_MAP_DOT_VARIANTS];
   static uint32_t colors[6][2][128];
   if (last_tiles != tiles) {
     memset(decoded, 0, sizeof(decoded));
@@ -257,20 +305,44 @@ static uint32_t AreaMapPixel(const uint8_t *tiles, const uint16_t *palette,
     last_palette = palette;
   }
   if (!decoded[tile_index]) {
-    const uint8_t *tile = tiles + tile_index * 32;
+    const uint8_t *tile = tiles + source_tile * 32;
     for (unsigned y = 0; y < 8; y++)
       for (unsigned x = 0; x < 8; x++)
-        indices[tile_index][y * 8 + x] = Snes4bppColorIndex(tile, x, y);
+        indices[tile_index][y * 8 + x] = tile_index>=1024 ?
+            NativeMap_CirclePixel(x,y,Snes4bppColorIndex(tile,x,y)) :
+            Snes4bppColorIndex(tile,x,y);
     decoded[tile_index] = true;
   }
+  /* Remove the scaled native border underneath a door. The shared divider
+   * is drawn once at final LCD resolution after all cells have been filled. */
+  if(py>=1 && py<=6) {
+    if(px==0 && (style&7)) px=1;
+    if(px==7 && (style&(7<<3))) px=6;
+  }
+  if(px>=1 && px<=6) {
+    if(py==0 && (style&(7<<6))) py=1;
+    if(py==7 && (style&(7<<9))) py=6;
+  }
+  unsigned iconX=px,iconY=py;
   if (entry & 0x4000) px = 7 - px;
   if (entry & 0x8000) py = 7 - py;
   unsigned ci = indices[tile_index][py * 8 + px];
-  return colors[area < 6 ? area : 0][dim][palette_row * 16 + ci];
+  if(service) ci=NativeMap_ServicePixel(service,iconX,iconY,ci);
+  return MapFeatures_RoomPixel(style,ci==1,
+      colors[area < 6 ? area : 0][dim][palette_row * 16 + ci]);
+}
+
+static void DrawDoorDividers(uint8_t *fb,uint16_t style,int x,int y,int w,int h) {
+  for(unsigned edge=0;edge<4;edge++) {
+    MapDoorStroke q;
+    if(!MapFeatures_Divider(style,edge,x,y,w,h,&q)) continue;
+    UiColor color={(q.color>>16)&255,(q.color>>8)&255,q.color&255};
+    FillRect(fb,q.x,q.y,q.w,q.h,color);
+  }
 }
 
 /* Same hand-drawn 5x7 pixel font used by the reference project. */
-static const uint8_t *Glyph(char c) {
+static const uint8_t *Glyph(unsigned c) {
   static const uint8_t A[7] = {4,10,17,17,31,17,17};
   static const uint8_t B[7] = {30,17,17,30,17,17,30};
   static const uint8_t C[7] = {15,16,16,16,16,16,15};
@@ -315,6 +387,14 @@ static const uint8_t *Glyph(char c) {
   static const uint8_t PLUS[7] = {0,4,4,31,4,4,0};
   static const uint8_t UNDERSCORE[7] = {0,0,0,0,0,0,31};
   static const uint8_t EQUALS[7] = {0,0,31,0,31,0,0};
+  static const uint8_t ACUTE_A[7] = {2,4,14,17,31,17,17};
+  static const uint8_t ACUTE_E[7] = {2,4,31,16,30,16,31};
+  static const uint8_t ACUTE_I[7] = {2,4,14,4,4,4,14};
+  static const uint8_t ACUTE_O[7] = {2,4,14,17,17,17,14};
+  static const uint8_t ACUTE_U[7] = {2,4,17,17,17,17,14};
+  static const uint8_t ENYE[7] = {10,20,17,25,21,19,17};
+  static const uint8_t LESS[7] = {1,2,4,8,4,2,1};
+  static const uint8_t MORE[7] = {16,8,4,2,4,8,16};
   static const uint8_t EMPTY[7] = {0,0,0,0,0,0,0};
   static const uint8_t *letters[26] = {A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z};
   static const uint8_t *numbers[10] = {N0,N1,N2,N3,N4,N5,N6,N7,N8,N9};
@@ -322,6 +402,14 @@ static const uint8_t *Glyph(char c) {
   if (c >= 'A' && c <= 'Z') return letters[c - 'A'];
   if (c >= '0' && c <= '9') return numbers[c - '0'];
   switch (c) {
+    case 0xc1: case 0xe1: return ACUTE_A;
+    case 0xc9: case 0xe9: return ACUTE_E;
+    case 0xcd: case 0xed: return ACUTE_I;
+    case 0xd3: case 0xf3: return ACUTE_O;
+    case 0xda: case 0xfa: return ACUTE_U;
+    case 0xd1: case 0xf1: return ENYE;
+    case '<': return LESS;
+    case '>': return MORE;
     case '.': return DOT;
     case '/': return SLASH;
     case '-': return DASH;
@@ -334,17 +422,34 @@ static const uint8_t *Glyph(char c) {
   }
 }
 
+/* Consume a UTF-8 character so accents occupy one glyph and one advance. */
+static unsigned NextGlyph(const char **text) {
+  const unsigned char *p=(const unsigned char *)*text;
+  unsigned c=*p++,extra=0;
+  if(c>=0xc2 && c<=0xdf) {c&=31;extra=1;}
+  else if(c>=0xe0 && c<=0xef) {c&=15;extra=2;}
+  else if(c>=0xf0 && c<=0xf4) {c&=7;extra=3;}
+  for(unsigned i=0;i<extra;i++) {
+    if((*p&0xc0)!=0x80) {*text=(const char *)p;return '?';}
+    c=(c<<6)|(*p++&63);
+  }
+  *text=(const char *)p;return c;
+}
+
 static int TextWidth(const char *text, int scale) {
-  return text[0] ? ((int)strlen(text) * 6 - 1) * scale : 0;
+  int count=0;
+  while(*text) {NextGlyph(&text);count++;}
+  return count ? (count*6-1)*scale : 0;
 }
 
 static void DrawText(uint8_t *fb, int x, int y, const char *text, int scale, UiColor color) {
-  for (; *text; text++, x += 6 * scale) {
-    const uint8_t *rows = Glyph(*text);
+  while(*text) {
+    const uint8_t *rows=Glyph(NextGlyph(&text));
     for (int row = 0; row < 7; row++)
       for (int col = 0; col < 5; col++)
         if (rows[row] & (1 << (4 - col)))
           FillRect(fb, x + col * scale, y + row * scale, scale, scale, color);
+    x+=6*scale;
   }
 }
 
@@ -371,13 +476,14 @@ static void FillTopRect(uint8_t *fb, int x, int y, int w, int h, UiColor color) 
 static void DrawTopText(uint8_t *fb, int cx, int y, const char *text,
                         int scale, UiColor color) {
   int x = cx - TextWidth(text, scale) / 2;
-  for (; *text; text++, x += 6 * scale) {
-    const uint8_t *rows = Glyph(*text);
+  while (*text) {
+    const uint8_t *rows = Glyph(NextGlyph(&text));
     for (int row = 0; row < 7; row++)
       for (int col = 0; col < 5; col++)
         if (rows[row] & (1 << (4 - col)))
           FillTopRect(fb, x + col * scale, y + row * scale,
                       scale, scale, color);
+    x += 6 * scale;
   }
 }
 
@@ -412,7 +518,7 @@ static const char *AreaName(unsigned area) {
     "CRATERIA", "BRINSTAR", "NORFAIR", "WRECKED SHIP",
     "MARIDIA", "TOURIAN", "CERES", "DEBUG"
   };
-  return area < 8 ? names[area] : "UNKNOWN";
+  return area < 8 ? (area==3?Tr("WRECKED SHIP","NAVE HUNDIDA"):names[area]) : Tr("UNKNOWN","DESCONOCIDO");
 }
 
 static bool IsLiveGameplay(void) {
@@ -618,6 +724,7 @@ static void DrawRoomMap(uint8_t *fb, int top, int bottom) {
   int scale = scale_x < scale_y ? scale_x : scale_y;
   int draw_w = cols * 8 * scale / 256;
   int draw_h = rows * 8 * scale / 256;
+  bool draw_doors=g_map_door_colors && draw_w>=cols*4 && draw_h>=rows*4;
   int ox = 160 - draw_w / 2;
   int oy = top + (bottom - top - draw_h) / 2;
   const uint8_t *explored = ExploredBitsForArea(area_index);
@@ -656,7 +763,14 @@ static void DrawRoomMap(uint8_t *fb, int top, int bottom) {
       int x1 = ox + ((tx + 1) * 256 - g_room_view_x_fp) * draw_w / (cols * 256);
       if (x1 <= clip_x0 || x0 >= clip_x1 || x1 <= x0) continue;
       int index = (tx >> 5) * 1024 + ty * 32 + (tx & 31);
-      uint16_t entry = tilemap[index];
+      uint16_t style=MapCellStyle(area_index,tx,ty,seen);
+      if(!draw_doors) style&=0xf000;
+      uint32_t entry = tilemap[index];
+      unsigned service=QolMap_ServiceAt(area_index,tx,ty,seen);
+      if(service) entry|=(NATIVE_MAP_DOT_VARIANTS+service)<<16;
+      else if(NativeMap_Variant(entry) &&
+          QolMap_UseCircle(area_index,tx,ty,seen))
+        entry|=NativeMap_Variant(entry)<<16;
       for (int y = y0 < clip_y0 ? clip_y0 : y0;
            y < y1 && y < clip_y1; y++) {
         int py = (y - y0) * 8 / (y1 - y0);
@@ -664,9 +778,21 @@ static void DrawRoomMap(uint8_t *fb, int top, int bottom) {
              x < x1 && x < clip_x1; x++) {
           int px = (x - x0) * 8 / (x1 - x0);
           PutMapPixel(fb, x, y, AreaMapPixel(tiles, palette, area_index,
-                                          entry, px, py, station_only));
+                                          entry, px, py, station_only,style));
         }
       }
+    }
+  }
+  if(draw_doors) for(int ty=first_y;ty<=last_y;ty++) {
+    int y0=oy+(ty*256-g_room_view_y_fp)*draw_h/(rows*256);
+    int y1=oy+((ty+1)*256-g_room_view_y_fp)*draw_h/(rows*256);
+    if(y1<=clip_y0 || y0>=clip_y1) continue;
+    for(int tx=first_x;tx<=last_x;tx++) {
+      if(!TileBit(explored,tx,ty)) continue;
+      int x0=ox+(tx*256-g_room_view_x_fp)*draw_w/(cols*256);
+      int x1=ox+((tx+1)*256-g_room_view_x_fp)*draw_w/(cols*256);
+      if(x1<=clip_x0 || x0>=clip_x1) continue;
+      DrawDoorDividers(fb,MapCellStyle(area_index,tx,ty,true),x0,y0,x1-x0,y1-y0);
     }
   }
   for (int i = 0; i < g_marker_count; i++) {
@@ -676,10 +802,11 @@ static void DrawRoomMap(uint8_t *fb, int top, int bottom) {
     int my = oy + (m->y * 256 + 128 - g_room_view_y_fp) * draw_h / (rows * 256);
     StrokeRect(fb, mx - 3, my - 3, 7, 7, 2, kAccent);
   }
-  int dot_x = ox + (samus_tx * 256 + 128 - g_room_view_x_fp) * draw_w / (cols * 256);
-  int dot_y = oy + (samus_ty * 256 + 128 - g_room_view_y_fp) * draw_h / (rows * 256);
-  if (dot_x >= ox && dot_x < ox + draw_w && dot_y >= oy && dot_y < oy + draw_h)
-    FillCircle(fb, dot_x, dot_y, 4, kSamus);
+  int sx0=ox+(samus_tx*256-g_room_view_x_fp)*draw_w/(cols*256);
+  int sy0=oy+(samus_ty*256-g_room_view_y_fp)*draw_h/(rows*256);
+  int sx1=ox+((samus_tx+1)*256-g_room_view_x_fp)*draw_w/(cols*256);
+  int sy1=oy+((samus_ty+1)*256-g_room_view_y_fp)*draw_h/(rows*256);
+  DrawSamusMarker(fb,sx0,sy0,sx1-sx0,sy1-sy0);
   SetClip(0, 0, 320, 240);
   if (g_map_buttons_visible) {
     FillRect(fb, 280, top + 6, 25, 20, kPanel);
@@ -885,17 +1012,37 @@ static void DrawWorldMap(uint8_t *fb, int top, int bottom) {
             dy0 >= bottom - 2 || dy0 + tile_scale <= top + 2)
           continue;
         int index = (tx >> 5) * 1024 + ty * 32 + (tx & 31);
-        uint16_t entry = tilemap[index];
+        uint16_t style=MapCellStyle(area,tx,ty,seen);
+        if(tile_scale<4) style&=0xf000;
+        uint32_t entry = tilemap[index];
+        unsigned service=QolMap_ServiceAt(area,tx,ty,seen);
+        if(service) entry|=(NATIVE_MAP_DOT_VARIANTS+service)<<16;
+        else if(NativeMap_Variant(entry) &&
+            QolMap_UseCircle(area,tx,ty,seen))
+          entry|=NativeMap_Variant(entry)<<16;
         for (int py = 0; py < tile_scale; py++)
-          for (int px = 0; px < tile_scale; px++)
-            PutMapPixel(fb, dx0 + px, dy0 + py,
-                     AreaMapPixel(tiles, palette, area, entry,
-                                  px * 8 / tile_scale,
-                                  py * 8 / tile_scale, station_only));
+          for (int px = 0; px < tile_scale; px++) {
+            uint32_t color=AreaMapPixel(tiles,palette,area,entry,
+                px*8/tile_scale,py*8/tile_scale,station_only,
+                style);
+            PutMapPixel(fb,dx0+px,dy0+py,color);
+          }
       }
     }
   }
 
+  if(g_map_door_colors && tile_scale>=4) for(unsigned area=0;area<6;area++) {
+    const WorldLayout *layout=&kWorldLayout[area];
+    const uint8_t *explored=ExploredBitsForArea(area);
+    for(int ty=layout->min_y;ty<layout->max_y;ty++)
+      for(int tx=layout->min_x;tx<layout->max_x;tx++) {
+        if(!TileBit(explored,tx,ty)) continue;
+        int x=ox+(layout->dest_x+tx-layout->min_x)*tile_scale;
+        int y=oy+(layout->dest_y+ty-layout->min_y)*tile_scale;
+        if(x+tile_scale<=7 || x>=313 || y+tile_scale<=top+2 || y>=bottom-2) continue;
+        DrawDoorDividers(fb,MapCellStyle(area,tx,ty,true),x,y,tile_scale,tile_scale);
+      }
+  }
   for (int i = 0; i < g_marker_count; i++) {
     const MapMarker *m = &g_markers[i];
     if (m->area >= 6) continue;
@@ -922,8 +1069,8 @@ static void DrawWorldMap(uint8_t *fb, int top, int bottom) {
   }
   int world_x, world_y;
   if (WorldPlayerPosition(&world_x, &world_y))
-    FillCircle(fb, ox + world_x * tile_scale + tile_scale / 2,
-               oy + world_y * tile_scale + tile_scale / 2, 3, kSamus);
+    DrawSamusMarker(fb, ox + world_x * tile_scale,
+                    oy + world_y * tile_scale, tile_scale, tile_scale);
   SetClip(0, 0, 320, 240);
   if (g_map_buttons_visible) {
     /* S returns to Samus, N toggles area names. */
@@ -958,6 +1105,7 @@ static void DrawMapControls(uint8_t *fb) {
 }
 
 static void DrawMapTab(uint8_t *fb, int top) {
+  if(g_map_door_colors || g_map_room_colors) QolMap_RefreshColors();
   if (g_world_view) DrawWorldMap(fb, top, 180);
   else DrawRoomMap(fb, top, 180);
   DrawMapControls(fb);
@@ -1022,45 +1170,45 @@ static void DrawItemsTab(uint8_t *fb, int top) {
   int stat_y = top + (top == 44 ? 6 : 25);
   FillRect(fb, 11, stat_y, 107, 24, kSlot);
   StrokeRect(fb, 11, stat_y, 107, 24, 2, kBorder);
-  DrawText(fb, 17, stat_y + 3, "ITEMS", 1, kDim);
+  DrawText(fb, 17, stat_y + 3, Tr("ITEMS", "OBJETOS"), 1, kDim);
   snprintf(text, sizeof(text), "%d.0%%", ItemPercent());
   DrawText(fb, 17, stat_y + 13, text, 1, kWhite);
   FillRect(fb, 202, stat_y, 107, 24, kSlot);
   StrokeRect(fb, 202, stat_y, 107, 24, 2, kBorder);
-  DrawText(fb, 208, stat_y + 3, "TIME", 1, kDim);
+  DrawText(fb, 208, stat_y + 3, Tr("TIME", "TIEMPO"), 1, kDim);
   snprintf(text, sizeof(text), "%02u:%02u:%02u", game_time_hours, game_time_minutes, game_time_seconds);
   DrawText(fb, 208, stat_y + 13, text, 1, kWhite);
 
   int body_y = stat_y + (top == 44 ? 28 : 29);
   FillRect(fb, 11, body_y, 112, 58, kSlot);
   StrokeRect(fb, 11, body_y, 112, 58, 2, kBorder);
-  DrawText(fb, 17, body_y + 4, "SUIT", 1, kAccent);
-  DrawItemLine(fb, 17, body_y + 16, "VARIA SUIT", collected_items & 0x0001, equipped_items & 0x0001);
-  DrawItemLine(fb, 17, body_y + 28, "GRAVITY SUIT", collected_items & 0x0020, equipped_items & 0x0020);
+  DrawText(fb, 17, body_y + 4, Tr("SUIT", "TRAJES"), 1, kAccent);
+  DrawItemLine(fb, 17, body_y + 16, Tr("VARIA SUIT", "TRAJE VARIA"), collected_items & 0x0001, equipped_items & 0x0001);
+  DrawItemLine(fb, 17, body_y + 28, Tr("GRAVITY SUIT", "GRAVITATORIO"), collected_items & 0x0020, equipped_items & 0x0020);
 
   FillRect(fb, 11, body_y + 62, 112, 62, kSlot);
   StrokeRect(fb, 11, body_y + 62, 112, 62, 2, kBorder);
-  DrawText(fb, 17, body_y + 66, "MISC.", 1, kAccent);
-  DrawItemLine(fb, 17, body_y + 78, "MORPHING BALL", collected_items & 0x0004, equipped_items & 0x0004);
-  DrawItemLine(fb, 17, body_y + 89, "BOMB", collected_items & 0x1000, equipped_items & 0x1000);
-  DrawItemLine(fb, 17, body_y + 100, "SPRING BALL", collected_items & 0x0002, equipped_items & 0x0002);
-  DrawItemLine(fb, 17, body_y + 111, "SCREW ATTACK", collected_items & 0x0008, equipped_items & 0x0008);
+  DrawText(fb, 17, body_y + 66, Tr("MISC.", "OTROS"), 1, kAccent);
+  DrawItemLine(fb, 17, body_y + 78, Tr("MORPHING BALL", "MORFOESFERA"), collected_items & 0x0004, equipped_items & 0x0004);
+  DrawItemLine(fb, 17, body_y + 89, Tr("BOMB", "BOMBAS"), collected_items & 0x1000, equipped_items & 0x1000);
+  DrawItemLine(fb, 17, body_y + 100, Tr("SPRING BALL", "BOLA CON SALTO"), collected_items & 0x0002, equipped_items & 0x0002);
+  DrawItemLine(fb, 17, body_y + 111, Tr("SCREW ATTACK", "ATAQUE ESPIRAL"), collected_items & 0x0008, equipped_items & 0x0008);
 
   DrawReduxSuit(fb, 132, body_y, 56, 124);
 
   FillRect(fb, 197, body_y, 112, 58, kSlot);
   StrokeRect(fb, 197, body_y, 112, 58, 2, kBorder);
-  DrawText(fb, 203, body_y + 4, "BOOTS", 1, kAccent);
-  DrawItemLine(fb, 203, body_y + 16, "HI-JUMP BOOTS", collected_items & 0x0100, equipped_items & 0x0100);
-  DrawItemLine(fb, 203, body_y + 28, "SPACE JUMP", collected_items & 0x0200, equipped_items & 0x0200);
-  DrawItemLine(fb, 203, body_y + 40, "SPEED BOOSTER", collected_items & 0x2000, equipped_items & 0x2000);
+  DrawText(fb, 203, body_y + 4, Tr("BOOTS", "BOTAS"), 1, kAccent);
+  DrawItemLine(fb, 203, body_y + 16, Tr("HI-JUMP BOOTS", "SALTO ALTO"), collected_items & 0x0100, equipped_items & 0x0100);
+  DrawItemLine(fb, 203, body_y + 28, Tr("SPACE JUMP", "SALTO ESPACIAL"), collected_items & 0x0200, equipped_items & 0x0200);
+  DrawItemLine(fb, 203, body_y + 40, Tr("SPEED BOOSTER", "ACELERACIÓN"), collected_items & 0x2000, equipped_items & 0x2000);
 
   FillRect(fb, 197, body_y + 62, 112, 62, kSlot);
   StrokeRect(fb, 197, body_y + 62, 112, 62, 2, kBorder);
-  DrawText(fb, 203, body_y + 66, "BEAM", 1, kAccent);
-  DrawItemLine(fb, 203, body_y + 78, "CHARGE", collected_beams & 0x1000, equipped_beams & 0x1000);
-  DrawItemLine(fb, 203, body_y + 87, "ICE", collected_beams & 0x0002, equipped_beams & 0x0002);
-  DrawItemLine(fb, 203, body_y + 96, "WAVE", collected_beams & 0x0001, equipped_beams & 0x0001);
+  DrawText(fb, 203, body_y + 66, Tr("BEAM", "RAYOS"), 1, kAccent);
+  DrawItemLine(fb, 203, body_y + 78, Tr("CHARGE", "RECARGA"), collected_beams & 0x1000, equipped_beams & 0x1000);
+  DrawItemLine(fb, 203, body_y + 87, Tr("ICE", "HIELO"), collected_beams & 0x0002, equipped_beams & 0x0002);
+  DrawItemLine(fb, 203, body_y + 96, Tr("WAVE", "ONDAS"), collected_beams & 0x0001, equipped_beams & 0x0001);
   DrawItemLine(fb, 203, body_y + 105, "SPAZER", collected_beams & 0x0004, equipped_beams & 0x0004);
   DrawItemLine(fb, 203, body_y + 114, "PLASMA", collected_beams & 0x0008, equipped_beams & 0x0008);
 }
@@ -1072,14 +1220,14 @@ static void DrawSetupRow(uint8_t *fb, int y, int height, const char *label,
   int text_y = y + (height - 7) / 2;
   DrawText(fb, 21, text_y, label, 1, kWhite);
   if (value)
-    DrawText(fb, 299 - TextWidth(value, 1), text_y, value, 1,
+    DrawText(fb, 284 - TextWidth(value, 1), text_y, value, 1,
              enabled ? kAccent : kDim);
 }
 
 static void DrawBuildFlags(uint8_t *fb, int y, int max_lines) {
   const char *flags = SM3DS_BUILD_FLAGS;
   if (!*flags) {
-    DrawText(fb, 20, y, "NONE", 1, kDim);
+    DrawText(fb, 20, y, Tr("NONE", "NINGUNO"), 1, kDim);
     return;
   }
 
@@ -1109,25 +1257,205 @@ static void DrawBuildFlags(uint8_t *fb, int y, int max_lines) {
 
 static void DrawBuildSetting(uint8_t *fb, int x, int y, const char *name,
                              bool enabled) {
-  const char *value = enabled ? "ON" : "OFF";
+  const char *value = OnOff(enabled);
   DrawText(fb, x, y, name, 1, kWhite);
   DrawText(fb, x + 135 - TextWidth(value, 1), y, value, 1,
            enabled ? kAccent : kDim);
 }
 
 static int SetupRowStep(bool compact) {
-  return g_setup_group == kSetupHud ? (compact ? 19 : 24) : (compact ? 22 : 29);
+  return g_setup_group == kSetupHud ? (compact ? 16 : 21) : (compact ? 22 : 29);
 }
 
 static int SetupRowHeight(bool compact) {
   return SetupRowStep(compact) - (compact ? 3 : 5);
 }
 
+static const char *ItemModeName(unsigned mode) {
+  return mode==kItemSymbolsOff ? Tr("OFF", "DESACTIVADO") :
+      mode==kItemSymbolsZeroFusion ? "ZERO / FUSION" : "SUPER METROID";
+}
+
+static int QolTop(int top) { return top+(top==44?47:53); }
+
+static void DrawSelectedRow(uint8_t *fb,int y,int h,const char *label,bool selected) {
+  DrawSetupRow(fb,y,h,label,selected?Tr("SELECTED","ACTUAL"):NULL,selected);
+  if(selected) StrokeRect(fb,13,y,294,h,2,kAccent);
+}
+
+static const char *MainHudName(unsigned mode) {
+  switch(mode) {
+    case kMainHudEnergy: return Tr("ENERGY ONLY", "SOLO VIDA");
+    case kMainHudEnergyMap: return Tr("ENERGY + MAP", "VIDA Y MINIMAPA");
+    case kMainHudHidden: return Tr("HIDDEN / EXPANDED", "OCULTO / AMPLIADO");
+    case kMainHudBlackBand: return Tr("BLACK BAND", "FRANJA NEGRA");
+    default: return Tr("FULL HUD", "HUD COMPLETO");
+  }
+}
+
+static void DrawMainHudPage(uint8_t *fb,int top) {
+  bool compact=top==44;
+  int base=QolTop(top),backH=compact?17:20,step=compact?17:22;
+  FillRect(fb,13,base,62,backH,kSlot);
+  StrokeRect(fb,13,base,62,backH,1,kAccent);
+  DrawTextCentered(fb,44,base+(backH-7)/2,Tr("< BACK","< VOLVER"),1,kWhite);
+  DrawText(fb,85,base+(backH-7)/2,Tr("UPPER HUD","HUD SUPERIOR"),1,kWhite);
+  int y=base+(compact?21:25);
+  for(unsigned mode=0;mode<kMainHudModeCount;mode++)
+    DrawSelectedRow(fb,y+mode*step,step-3,MainHudName(mode),g_main_hud_mode==mode);
+  DrawText(fb,21,y+5*step+2,MainHudExpands(g_main_hud_mode)?
+      Tr("Reveals scenery behind the HUD area.","Muestra escenario en el espacio del HUD."):
+      g_main_hud_mode==kMainHudFull?Tr("Keeps the original HUD.","Mantiene el HUD original."):
+      Tr("Hides the HUD; keeps its black band.","Oculta el HUD y conserva la franja negra."),1,kDim);
+}
+
+static void DrawLanguagePage(uint8_t *fb,int top) {
+  bool compact=top==44;
+  int base=QolTop(top),step=compact?25:32,backH=compact?17:20;
+  FillRect(fb,13,base,62,backH,kSlot);
+  StrokeRect(fb,13,base,62,backH,1,kAccent);
+  DrawTextCentered(fb,44,base+(backH-7)/2,Tr("< BACK","< VOLVER"),1,kWhite);
+  DrawText(fb,85,base+(backH-7)/2,Tr("LANGUAGE","IDIOMA"),1,kWhite);
+  int y=base+(compact?21:25);
+  DrawSelectedRow(fb,y,step-4,"ENGLISH",g_ui_language==0);
+  DrawSelectedRow(fb,y+step,step-4,"ESPAÑOL",g_ui_language==1);
+  DrawText(fb,21,y+2*step+9,Tr("Changes the lower-screen interface.",
+      "Cambia la interfaz de la pantalla inferior."),1,kWhite);
+  DrawText(fb,21,y+2*step+22,Tr("Game text follows your ROM language.",
+      "Los textos del juego dependen de la ROM."),1,kDim);
+  DrawText(fb,21,y+2*step+35,Tr("Your choice is saved automatically.",
+      "El idioma se guarda automáticamente."),1,kDim);
+}
+
+static void DrawQolLegend(uint8_t *fb,int y,UiColor color,const char *text) {
+  FillRect(fb,21,y,7,7,color);
+  DrawText(fb,35,y,text,1,kWhite);
+}
+
+static void DrawQolPage(uint8_t *fb,int top) {
+  bool compact=top==44;
+  int y=QolTop(top),step=SetupRowStep(compact),height=SetupRowHeight(compact);
+  int backH=compact?17:20;
+  FillRect(fb,13,y,62,backH,kSlot);
+  StrokeRect(fb,13,y,62,backH,1,kAccent);
+  DrawTextCentered(fb,44,y+(backH-7)/2,Tr("< BACK","< VOLVER"),1,kWhite);
+  const char *title=g_qol_page==kQolOverview?Tr("MAP IMPROVEMENTS","MEJORAS DEL MAPA"):
+      g_qol_page==kQolItems?Tr("ITEM SYMBOLS","OBJETOS EN MAPA"):
+      g_qol_page==kQolDoors?Tr("COLORED DOORS","PUERTAS DE COLORES"):
+      g_qol_page==kQolRooms?Tr("ROOM COLORS","COLORES DE SALAS"):Tr("STATIONS","ESTACIONES");
+  DrawText(fb,85,y+(backH-7)/2,title,1,kWhite);
+  if(g_qol_page==kQolOverview) {
+    int rowsY=y+(compact?21:25);
+    DrawSetupRow(fb,rowsY,height,Tr("ITEM SYMBOLS","OBJETOS EN MAPA"),ItemModeName(g_item_symbols),true);
+    DrawSetupRow(fb,rowsY+step,height,Tr("COLORED DOORS","PUERTAS DE COLORES"),OnOff(g_map_door_colors),true);
+    DrawSetupRow(fb,rowsY+2*step,height,Tr("ROOM COLORS","COLORES DE SALAS"),OnOff(g_map_room_colors),true);
+    DrawSetupRow(fb,rowsY+3*step,height,Tr("STATIONS","ESTACIONES"),OnOff(g_map_stations),true);
+    for(unsigned i=0;i<4;i++) DrawText(fb,291,rowsY+i*step+(height-7)/2,">",1,kAccent);
+    if(!compact) DrawText(fb,21,rowsY+4*step+3,Tr("Open an option for settings and help.",
+        "Abre una opción para ver ajustes y ayuda."),1,kDim);
+    return;
+  }
+  if(g_qol_page==kQolItems) {
+    int optionStep=compact?17:21,optionY=y+(compact?21:25);
+    for(unsigned i=0;i<3;i++)
+      DrawSelectedRow(fb,optionY+i*optionStep,optionStep-3,ItemModeName(i),g_item_symbols==i);
+    int toggleY=optionY+3*optionStep,toggleH=compact?16:18;
+    DrawSetupRow(fb,toggleY,toggleH,Tr("IN-GAME MINIMAP","MINIMAPA DEL JUEGO"),OnOff(g_minimap_items),g_minimap_items);
+    int help=toggleY+toggleH+(compact?2:5),line=compact?8:10;
+    const char *a=g_item_symbols==kItemSymbolsZeroFusion?
+        Tr("Ring: remaining. Dot: collected.","Círculo: pendiente. Punto: recogido."):
+        g_item_symbols==kItemSymbolsSuperMetroid?
+        Tr("Dot: remaining. Ring: collected.","Punto: pendiente. Círculo: recogido."):
+        Tr("Uses the game's original item symbols.","Usa los símbolos originales del juego.");
+    DrawText(fb,21,help,a,1,kWhite);
+    DrawText(fb,21,help+line,Tr("Switch affects the upper minimap only.",
+        "Interruptor: solo el minimapa superior."),1,kDim);
+    DrawText(fb,21,help+2*line,Tr("Explored cells; collect all items in a cell.",
+        "Solo exploradas; recoge todos los objetos."),1,kDim);
+    return;
+  }
+  if(g_qol_page==kQolStations) {
+    int optionY=y+(compact?21:25),legendY=y+(compact?46:58),line=compact?16:21;
+    DrawSetupRow(fb,optionY,compact?18:24,Tr("ENABLED","ACTIVADO"),OnOff(g_map_stations),g_map_stations);
+    const char *labels[]={Tr("ENERGY REFILL","RECARGA DE VIDA"),Tr("AMMO REFILL","RECARGA DE MUNICIÓN"),Tr("AREA MAP","MAPA DEL ÁREA")};
+    for(unsigned kind=1;kind<=3;kind++) {
+      for(unsigned py=1;py<=6;py++) for(unsigned px=1;px<=6;px++)
+        if(NativeMap_ServicePixel(kind,px,py,1)==1) FillRect(fb,22+(px-1)*2,legendY+(kind-1)*line+(py-1)*2,2,2,kAccent);
+      DrawText(fb,44,legendY+(kind-1)*line+2,labels[kind-1],1,kWhite);
+    }
+    DrawText(fb,21,y+(compact?96:132),Tr("Explored cells on the lower maps only.","Solo exploradas, en los mapas inferiores."),1,kDim);
+    DrawText(fb,21,y+(compact?107:144),Tr("Pause keeps the game's station icons.","La pausa conserva los iconos originales."),1,kDim);
+    return;
+  }
+  bool doors=g_qol_page==kQolDoors;
+  bool enabled=doors?g_map_door_colors:g_map_room_colors;
+  int toggleY=y+(compact?21:25),toggleH=compact?18:24;
+  DrawSetupRow(fb,toggleY,toggleH,Tr("ENABLED","ACTIVADO"),OnOff(enabled),enabled);
+  int legendY=y+(compact?43:55),line=compact?10:12;
+  if(doors) {
+    DrawQolLegend(fb,legendY,(UiColor){104,191,255},Tr("Blue: normal / unlocked","Celeste: normal / desbloqueada"));
+    DrawQolLegend(fb,legendY+line,(UiColor){255,104,132},Tr("Red: missiles","Roja: misiles"));
+    DrawQolLegend(fb,legendY+2*line,(UiColor){112,232,144},Tr("Green: super missiles","Verde: supermisiles"));
+    DrawQolLegend(fb,legendY+3*line,(UiColor){255,223,104},Tr("Yellow: power bombs","Amarilla: bombas de energía"));
+    DrawQolLegend(fb,legendY+4*line,(UiColor){184,189,200},Tr("Grey: special lock","Gris: bloqueo especial"));
+    DrawText(fb,21,y+(compact?96:122),Tr("Each face keeps its own lock color.",
+        "Cada cara conserva su propio color."),1,kDim);
+    DrawText(fb,21,y+(compact?106:134),Tr("Opened locks turn blue and stay saved.",
+        "Al abrirla pasa a celeste; se guarda."),1,kDim);
+  } else {
+    DrawQolLegend(fb,legendY,(UiColor){168,90,24},Tr("Amber: environmental heat","Ámbar: calor ambiental"));
+    DrawQolLegend(fb,legendY+line,(UiColor){165,62,44},Tr("Orange-red: lava","Rojo anaranjado: lava"));
+    DrawQolLegend(fb,legendY+2*line,(UiColor){151,76,170},Tr("Purple: acid","Morado: ácido"));
+    DrawQolLegend(fb,legendY+3*line,(UiColor){40,118,90},Tr("Green: hidden from the station map","Verde: sala oculta al mapa de estación"));
+    DrawText(fb,21,y+(compact?87:112),Tr("Hazards color the whole room.",
+        "El peligro colorea toda la sala."),1,kDim);
+    DrawText(fb,21,y+(compact?97:124),Tr("The liquid may occupy only part of it.",
+        "El líquido puede ocupar solo una parte."),1,kDim);
+    DrawText(fb,21,y+(compact?107:136),Tr("Follows your current game progress.",
+        "Según el estado actual de la partida."),1,kDim);
+  }
+}
+
+static void HandleQolTouch(int x,int y,int top) {
+  bool compact=top==44;
+  int start=QolTop(top);
+  if(x<13 || x>=307 || y<start) return;
+  if(g_qol_page==kQolOverview) {
+    if(x<75 && y<start+(compact?17:20)) {g_map_qol_open=false;return;}
+    int rowsY=start+(compact?21:25);
+    if(y<rowsY) return;
+    int step=SetupRowStep(compact),row=(y-rowsY)/step;
+    if(row<4 && y<rowsY+row*step+SetupRowHeight(compact))
+      g_qol_page=kQolItems+row;
+    return;
+  }
+  if(x<75 && y<start+(compact?17:20)) {g_qol_page=kQolOverview;return;}
+  int optionY=start+(compact?21:25);
+  if(y<optionY) return;
+  if(g_qol_page==kQolItems) {
+    int step=compact?17:21,toggleY=optionY+3*step;
+    if(y>=toggleY) {
+      if(y>=toggleY+(compact?16:18)) return;
+      g_minimap_items=!g_minimap_items;
+    } else {
+      int row=(y-optionY)/step;
+      if(y>=optionY+row*step+step-3) return;
+      g_item_symbols=row;
+    }
+  } else {
+    if(y>=optionY+(compact?18:24)) return;
+    if(g_qol_page==kQolDoors) g_map_door_colors=!g_map_door_colors;
+    else if(g_qol_page==kQolRooms) g_map_room_colors=!g_map_room_colors;
+    else g_map_stations=!g_map_stations;
+  }
+  BottomScreen_SaveSettings();
+}
+
 static void DrawSetupTab(uint8_t *fb, int top) {
   bool compact = top == 44;
   Panel(fb, 5, top, 310, 207 - top);
   DrawText(fb, 21, top + (compact ? 7 : 13),
-           g_setup_build_info ? "BUILD INFO" : "SETUP", 1, kWhite);
+           g_setup_build_info ? "INFO" : Tr("SETUP", "AJUSTES"), 1, kWhite);
   int info_y = top + (compact ? 3 : 7);
   int info_height = compact ? 16 : 20;
   FillRect(fb, 281, info_y, 26, info_height, g_setup_build_info ? kBorder : kSlot);
@@ -1138,18 +1466,18 @@ static void DrawSetupTab(uint8_t *fb, int top) {
 
   if (g_setup_build_info) {
     char model[24];
-    snprintf(model, sizeof(model), "MODEL: %s", g_console_model);
-    DrawText(fb, 96, top + (compact ? 7 : 13), model, 1, kAccent);
+    snprintf(model, sizeof(model), Tr("MODEL: %s", "MODELO: %s"), g_console_model);
+    DrawText(fb, 72, top + (compact ? 7 : 13), model, 1, kAccent);
     FillRect(fb, 185, info_y, 88, info_height, kSlot);
     StrokeRect(fb, 185, info_y, 88, info_height, 2, kAccent);
-    DrawText(fb, 202, info_y + (compact ? 4 : 6), "SAVE DUMP", 1, kWhite);
+    DrawTextCentered(fb, 229, info_y + (compact ? 4 : 6), Tr("SAVE DUMP", "GUARDAR DUMP"), 1, kWhite);
     int flags_y = top + (compact ? 25 : 32);
     int flags_height = compact ? 50 : 76;
     FillRect(fb, 13, flags_y, 294, flags_height, kSlot);
     StrokeRect(fb, 13, flags_y, 294, flags_height, 2, kBorder);
     DrawText(fb, 20, flags_y + 6, "BUILD_FLAGS", 1, kAccent);
     DrawBuildFlags(fb, flags_y + 18, compact ? 2 : 4);
-    DrawText(fb, 20, top + (compact ? 80 : 119), "PORT DEFINES", 1, kAccent);
+    DrawText(fb, 20, top + (compact ? 80 : 119), Tr("PORT DEFINES", "OPCIONES DEL PORT"), 1, kAccent);
 #ifdef SM3DS_OLD3DS
     DrawBuildSetting(fb, 18, top + (compact ? 94 : 133), "OLD3DS", true);
 #else
@@ -1175,7 +1503,7 @@ static void DrawSetupTab(uint8_t *fb, int top) {
 #else
     DrawBuildSetting(fb, 18, top + (compact ? 120 : 159), "EMULATED_CPU", false);
 #endif
-    DrawText(fb, 20, top + (compact ? 136 : 174), "BUILD VARIABLES", 1, kAccent);
+    DrawText(fb, 20, top + (compact ? 136 : 174), Tr("BUILD VARIABLES", "COMPILACIÓN"), 1, kAccent);
 #ifdef FULL_NATIVE
     DrawBuildSetting(fb, 18, top + (compact ? 149 : 188), "FULL_NATIVE", true);
 #else
@@ -1185,9 +1513,9 @@ static void DrawSetupTab(uint8_t *fb, int top) {
     return;
   }
 
-  static const char *groups[] = {"HUD", "MAP", "VIDEO"};
+  const char *groups[] = {"HUD", Tr("MAP", "MAPA"), "VIDEO"};
   for (int i = 0; i < 3; i++) {
-    int x = 13 + i * 99, y = top + (compact ? 23 : 29);
+    int x = 13 + i * 98, y = top + (compact ? 23 : 29);
     FillRect(fb, x, y, 96, 18, g_setup_group == i ? kBorder : kSlot);
     StrokeRect(fb, x, y, 96, 18, 1, g_setup_group == i ? kAccent : kBorder);
     DrawTextCentered(fb, x + 48, y + 5, groups[i], 1, kWhite);
@@ -1196,38 +1524,45 @@ static void DrawSetupTab(uint8_t *fb, int top) {
   int step = SetupRowStep(compact);
   int height = SetupRowHeight(compact);
   if (g_setup_group == kSetupHud) {
-    static const char *modes[] = {"ONLY AMMO", "AMMO + HOOK", "ALL ITEMS"};
-    DrawSetupRow(fb, y, height, "HUD ITEMS", modes[g_hud_items_mode], true);
-    DrawSetupRow(fb, y + step, height, "HUD NUMBERS",
+    if(g_hud_language_open) {DrawLanguagePage(fb,top);return;}
+    if(g_hud_mode_open) {DrawMainHudPage(fb,top);return;}
+    const char *modes[] = {Tr("ONLY AMMO", "SOLO MUNICIÓN"), Tr("AMMO + HOOK", "MUNICIÓN + GANCHO"), Tr("ALL ITEMS", "TODOS")};
+    DrawSetupRow(fb, y, height, Tr("HUD ITEMS", "OBJETOS DEL HUD"), modes[g_hud_items_mode], true);
+    DrawSetupRow(fb, y + step, height, Tr("HUD NUMBERS", "NÚMEROS DEL HUD"),
                  g_hud_numbers_horizontal ? "HORIZONTAL" : "VERTICAL", true);
-    DrawSetupRow(fb, y + 2 * step, height, "STATUS BAR MAP",
-                 g_status_bar_visible[0] ? "ON" : "OFF", g_status_bar_visible[0]);
-    DrawSetupRow(fb, y + 3 * step, height, "STATUS BAR ITEMS",
-                 g_status_bar_visible[1] ? "ON" : "OFF", g_status_bar_visible[1]);
-    DrawSetupRow(fb, y + 4 * step, height, "STATUS BAR SETUP",
-                 g_status_bar_visible[2] ? "ON" : "OFF", g_status_bar_visible[2]);
-    DrawSetupRow(fb, y + 5 * step, height, "HIDE MAIN HUD",
-                 g_hide_main_hud ? "ON" : "OFF", g_hide_main_hud);
+    DrawSetupRow(fb, y + 2 * step, height, Tr("STATUS BAR MAP", "BARRA EN MAPA"),
+                 OnOff(g_status_bar_visible[0]), g_status_bar_visible[0]);
+    DrawSetupRow(fb, y + 3 * step, height, Tr("STATUS BAR ITEMS", "BARRA EN OBJETOS"),
+                 OnOff(g_status_bar_visible[1]), g_status_bar_visible[1]);
+    DrawSetupRow(fb, y + 4 * step, height, Tr("STATUS BAR SETUP", "BARRA EN AJUSTES"),
+                 OnOff(g_status_bar_visible[2]), g_status_bar_visible[2]);
+    DrawSetupRow(fb, y + 5 * step, height, Tr("UPPER HUD", "HUD SUPERIOR"),
+                 MainHudName(g_main_hud_mode), true);
+    DrawText(fb,291,y+5*step+(height-7)/2,">",1,kAccent);
+    DrawSetupRow(fb,y+6*step,height,Tr("LANGUAGE","IDIOMA"),g_ui_language?"ESPAÑOL":"ENGLISH",true);
+    DrawText(fb,291,y+6*step+(height-7)/2,">",1,kAccent);
   } else if (g_setup_group == kSetupMap) {
-    DrawSetupRow(fb, y, height, "FLOATING MAP BUTTONS",
-                 g_map_buttons_visible ? "ON" : "OFF", g_map_buttons_visible);
-    DrawSetupRow(fb, y + step, height, "X-RAY MAP BUTTON",
-                 g_xray_map_button ? "ON" : "OFF", g_xray_map_button);
-    DrawSetupRow(fb, y + 2 * step, height, "WORLD AREA NAMES",
-                 g_world_labels ? "ON" : "OFF", g_world_labels);
-    DrawSetupRow(fb, y + 3 * step, height, "CLEAR MAP MARKERS",
-                 g_clear_markers_armed ? "TAP AGAIN" : NULL, g_clear_markers_armed);
+    if(g_map_qol_open) {DrawQolPage(fb,top);return;}
+    DrawSetupRow(fb, y, height, Tr("FLOATING MAP BUTTONS", "BOTONES FLOTANTES"),
+                 OnOff(g_map_buttons_visible), g_map_buttons_visible);
+    DrawSetupRow(fb, y + step, height, Tr("X-RAY MAP BUTTON", "BOTÓN DE RAYOS X"),
+                 OnOff(g_xray_map_button), g_xray_map_button);
+    DrawSetupRow(fb, y + 2 * step, height, Tr("WORLD AREA NAMES", "NOMBRES DE ÁREAS"),
+                 OnOff(g_world_labels), g_world_labels);
+    DrawSetupRow(fb, y + 3 * step, height, Tr("CLEAR MAP MARKERS", "BORRAR MARCADORES"),
+                 g_clear_markers_armed ? Tr("TAP AGAIN", "TOCA OTRA VEZ") : NULL, g_clear_markers_armed);
+    DrawSetupRow(fb,y+4*step,height,Tr("MAP IMPROVEMENTS","MEJORAS DEL MAPA"),"QoL >",true);
   } else {
-    static const char *modes[] = {"FIT", "STRETCHED", "1:1"};
-    DrawSetupRow(fb, y, height, "WIDESCREEN", g_widescreen ? "ON" : "OFF", g_widescreen);
-    DrawSetupRow(fb, y + step, height, "SCREEN SIZE", modes[g_video_mode], true);
-    DrawSetupRow(fb, y + 2 * step, height, "LIGHTING",
-                 g_scene_lighting ? "ON" : "OFF", g_scene_lighting);
+    const char *modes[] = {Tr("FIT", "AJUSTADA"), Tr("STRETCHED", "ESTIRADA"), "1:1"};
+    DrawSetupRow(fb, y, height, Tr("WIDESCREEN", "PANORÁMICO"), OnOff(g_widescreen), g_widescreen);
+    DrawSetupRow(fb, y + step, height, Tr("SCREEN SIZE", "TAMAÑO DE PANTALLA"), modes[g_video_mode], true);
+    DrawSetupRow(fb, y + 2 * step, height, Tr("LIGHTING", "ILUMINACIÓN"),
+                 OnOff(g_scene_lighting), g_scene_lighting);
   }
 }
 
 static void DrawTabs(uint8_t *fb) {
-  static const char *labels[] = {"MAP", "ITEMS", "SETUP"};
+  const char *labels[] = {Tr("MAP", "MAPA"), Tr("ITEMS", "OBJETOS"), Tr("SETUP", "AJUSTES")};
   for (int i = 0; i < 3; i++) {
     const int x = 5 + i * 104;
     UiColor fill = g_bottom_tab == i ? kBorder : kPanel;
@@ -1251,10 +1586,10 @@ void BottomScreen_DrawRomSelector(const char *const *rows, int row_count,
   uint8_t *fb = g_bottom_cache;
   FillRect(fb, 0, 0, 320, 240, kBg);
   DrawTextCentered(fb, 160, 10, "SM 3DS NATIVE", 2, kWhite);
-  DrawTextCentered(fb, 160, 33, "SELECT ROM", 1, kDim);
+  DrawTextCentered(fb, 160, 33, Tr("SELECT ROM", "ELIGE UNA ROM"), 1, kDim);
   Panel(fb, 9, 49, 302, 153);
   if (!total) {
-    DrawTextCentered(fb, 160, 93, "NO ROM FOUND", 2, kAccent);
+    DrawTextCentered(fb, 160, 93, Tr("NO ROM FOUND", "NO HAY ROMS"), 2, kAccent);
   } else {
     for (int i = 0; i < row_count && rows[i]; i++) {
       int y = 55 + i * 18;
@@ -1284,11 +1619,22 @@ void BottomScreen_LoadSettings(const char *path) {
   if (!f) { BottomScreen_SaveSettings(); return; }
   char line[96], key[64];
   int value;
+  bool hasHudMode=false,hasLegacyHud=false,legacyHud=false;
   while (fgets(line, sizeof(line), f)) {
     if (sscanf(line, "%63[^=]=%d", key, &value) != 2) continue;
-    if (strcmp(key, "scene_lighting") == 0) g_scene_lighting = value != 0;
+    if (strcmp(key, "ui_language") == 0 && value>=0 && value<=1) g_ui_language=value;
+    else if (strcmp(key, "scene_lighting") == 0) g_scene_lighting = value != 0;
+    else if (strcmp(key, "qol_item_markers") == 0) g_item_symbols = value ? kItemSymbolsZeroFusion : kItemSymbolsOff;
+    else if (strcmp(key, "qol_item_mode") == 0 && value>=0 && value<=2) g_item_symbols = value;
+    else if (strcmp(key, "qol_door_colors") == 0) g_map_door_colors = value != 0;
+    else if (strcmp(key, "qol_minimap_items") == 0) g_minimap_items=value!=0;
+    else if (strcmp(key, "qol_station_icons") == 0) g_map_stations=value!=0;
+    else if (strcmp(key, "qol_room_colors") == 0) g_map_room_colors = value != 0;
     else if (strcmp(key, "widescreen") == 0) g_widescreen = value != 0;
-    else if (strcmp(key, "hide_main_hud") == 0) g_hide_main_hud = value != 0;
+    else if (strcmp(key, "main_hud_mode") == 0 && value>=0 && value<kMainHudModeCount) {
+      g_main_hud_mode=value;hasHudMode=true;
+    }
+    else if (strcmp(key, "hide_main_hud") == 0) {hasLegacyHud=true;legacyHud=value!=0;}
     else if (strcmp(key, "status_map") == 0) g_status_bar_visible[0] = value != 0;
     else if (strcmp(key, "status_items") == 0) g_status_bar_visible[1] = value != 0;
     else if (strcmp(key, "status_setup") == 0) g_status_bar_visible[2] = value != 0;
@@ -1302,6 +1648,7 @@ void BottomScreen_LoadSettings(const char *path) {
     else if (strcmp(key, "video_mode") == 0 && value >= 0 && value <= 2) g_video_mode = value;
   }
   fclose(f);
+  if(!hasHudMode && hasLegacyHud) g_main_hud_mode=legacyHud?kMainHudBlackBand:kMainHudFull;
   g_bottom_dirty = true;
 }
 
@@ -1353,13 +1700,13 @@ bool BottomScreen_SaveSettings(void) {
   if (!g_settings_path[0]) return false;
   char text[512];
   int written = snprintf(text, sizeof(text),
-      "widescreen=%d\nhide_main_hud=%d\nstatus_map=%d\n"
+      "widescreen=%d\nmain_hud_mode=%d\nstatus_map=%d\n"
       "status_items=%d\nstatus_setup=%d\nroom_zoom=%d\nworld_zoom=%d\n"
-      "world_labels=%d\nmap_buttons=%d\nhud_items=%d\nhud_numbers_horizontal=%d\nxray_map_button=%d\nvideo_mode=%d\nscene_lighting=%d\n",
-      g_widescreen, g_hide_main_hud, g_status_bar_visible[0],
+      "world_labels=%d\nmap_buttons=%d\nhud_items=%d\nhud_numbers_horizontal=%d\nxray_map_button=%d\nvideo_mode=%d\nscene_lighting=%d\nqol_item_mode=%d\nqol_door_colors=%d\nqol_room_colors=%d\nqol_station_icons=%d\nqol_minimap_items=%d\nui_language=%u\n",
+      g_widescreen, g_main_hud_mode, g_status_bar_visible[0],
       g_status_bar_visible[1], g_status_bar_visible[2],
       g_room_zoom, g_world_zoom, g_world_labels, g_map_buttons_visible,
-      g_hud_items_mode, g_hud_numbers_horizontal, g_xray_map_button, g_video_mode, g_scene_lighting);
+      g_hud_items_mode, g_hud_numbers_horizontal, g_xray_map_button, g_video_mode, g_scene_lighting,g_item_symbols,g_map_door_colors,g_map_room_colors,g_map_stations,g_minimap_items,g_ui_language);
   if (written <= 0 || written >= sizeof(text)) return false;
   if (!g_settings_thread) return WriteSettings(g_settings_path, text);
   /* The worker only sees an immutable snapshot. Rapid zoom taps coalesce
@@ -1402,6 +1749,8 @@ static bool BottomStateChanged(void) {
     bool live, notice;
     uint16_t status[10], items[7], map[3], map_item[2];
     uint8_t explored[6][256], station[8];
+    uint8_t collected[64],opened[64],progress[16];
+    uint16_t capacities[3];
   } State;
   static State previous;
   State current;
@@ -1434,6 +1783,16 @@ static bool BottomStateChanged(void) {
       memcpy(current.explored[0], ExploredBitsForArea(area_index), 256);
     }
     memcpy(current.station, map_station_byte_array, sizeof(current.station));
+    if(g_item_symbols) memcpy(current.collected,item_bit_array,sizeof(current.collected));
+    if(g_map_room_colors) {
+      memcpy(current.progress,events_that_happened,sizeof(current.progress));
+      current.capacities[0]=collected_items;
+      current.capacities[1]=samus_max_missiles!=0;
+      current.capacities[2]=samus_max_power_bombs!=0;
+    }
+    if(g_map_door_colors) {
+      memcpy(current.opened,opened_door_bit_array,sizeof(current.opened));
+    }
   }
   bool changed = memcmp(&previous, &current, sizeof(current)) != 0;
   previous = current;
@@ -1636,14 +1995,46 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
     }
     int group_y = top + (compact ? 23 : 29);
     if (x >= 13 && x < 307 && y >= group_y && y < group_y + 18) {
-      g_setup_group = (x - 13) / 99;
+      g_setup_group = (x - 13) / 98;
+      g_hud_language_open=false;
+      g_hud_mode_open=false;
+      g_map_qol_open = false;
+      g_qol_page = kQolOverview;
       g_bottom_dirty = true;
       return;
+    }
+    if(g_setup_group==kSetupMap && g_map_qol_open) {
+      HandleQolTouch(x,y,top);
+      g_bottom_dirty=true;return;
+    }
+    if(g_setup_group==kSetupHud && g_hud_mode_open) {
+      int base=QolTop(top);
+      if(x>=13 && x<75 && y>=base && y<base+(compact?17:20)) {
+        g_hud_mode_open=false;g_bottom_dirty=true;return;
+      }
+      int row_y=base+(compact?21:25),step=compact?17:22;
+      int row=(y-row_y)/step;
+      if(x>=13 && x<307 && y>=row_y && row<kMainHudModeCount && y<row_y+row*step+step-3) {
+        g_main_hud_mode=row;BottomScreen_SaveSettings();
+      }
+      g_bottom_dirty=true;return;
+    }
+    if(g_setup_group==kSetupHud && g_hud_language_open) {
+      int base=QolTop(top);
+      if(x>=13 && x<75 && y>=base && y<base+(compact?17:20)) {
+        g_hud_language_open=false;g_bottom_dirty=true;return;
+      }
+      int row_y=base+(compact?21:25),step=compact?25:32;
+      int row=(y-row_y)/step;
+      if(x>=13 && x<307 && y>=row_y && row<2 && y<row_y+row*step+step-4) {
+        g_ui_language=row;BottomScreen_SaveSettings();
+      }
+      g_bottom_dirty=true;return;
     }
     int row_y = top + (compact ? 47 : 53);
     int step = SetupRowStep(compact);
     int height = SetupRowHeight(compact);
-    int rows = g_setup_group == kSetupHud ? 6 : g_setup_group == kSetupMap ? 4 : 3;
+    int rows = g_setup_group == kSetupHud ? 7 : g_setup_group == kSetupMap ? 5 : 3;
     if (x >= 13 && x < 307 && y >= row_y) {
       int row = (y - row_y) / step;
       if (row < rows && y < row_y + row * step + height) {
@@ -1651,11 +2042,15 @@ void BottomScreen_HandleTouch(float normalized_x, float normalized_y) {
           if (!row) g_hud_items_mode = (g_hud_items_mode + 1) % 3;
           else if (row == 1) g_hud_numbers_horizontal = !g_hud_numbers_horizontal;
           else if (row < 5) g_status_bar_visible[row - 2] = !g_status_bar_visible[row - 2];
-          else g_hide_main_hud = !g_hide_main_hud;
+          else if(row==5) {g_hud_mode_open=true;g_bottom_dirty=true;return;}
+          else {g_hud_language_open=true;g_bottom_dirty=true;return;}
         } else if (g_setup_group == kSetupMap) {
           if (!row) g_map_buttons_visible = !g_map_buttons_visible;
           else if (row == 1) g_xray_map_button = !g_xray_map_button;
           else if (row == 2) g_world_labels = !g_world_labels;
+          else if (row==4) {
+            g_map_qol_open=true;g_qol_page=kQolOverview;g_bottom_dirty=true;return;
+          }
           else if (g_clear_markers_armed) {
             g_marker_count = 0;
             g_clear_markers_armed = false;
@@ -1764,7 +2159,7 @@ void BottomScreen_HandleTouchUp(float normalized_x, float normalized_y) {
 }
 
 bool BottomScreen_HideMainHud(void) {
-  return g_hide_main_hud;
+  return g_main_hud_mode==kMainHudBlackBand;
 }
 
 bool BottomScreen_WidescreenEnabled(void) {
@@ -1774,3 +2169,10 @@ bool BottomScreen_WidescreenEnabled(void) {
 enum BottomScreenVideoMode BottomScreen_VideoMode(void) { return g_video_mode; }
 
 bool BottomScreen_SceneLightingEnabled(void) { return g_scene_lighting; }
+enum ItemSymbolMode BottomScreen_ItemSymbolMode(void) { return g_item_symbols; }
+
+enum MainHudMode BottomScreen_MainHudMode(void) { return g_main_hud_mode; }
+
+bool BottomScreen_MapStationsEnabled(void) { return g_map_stations; }
+
+bool BottomScreen_MinimapItemsEnabled(void) { return g_minimap_items; }

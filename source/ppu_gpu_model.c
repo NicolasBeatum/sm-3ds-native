@@ -1,6 +1,7 @@
 #include "scene_lighting.h"
 #include "ppu_gpu_model.h"
 #include "wide_config.h"
+#include "native_map_tile.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -55,7 +56,7 @@ void PicaAtlasInit(PicaAtlas *a, uint32_t *pixels) {
 void PicaAtlasBegin(PicaAtlas *a) {
   if (++a->frame == 0) {
     a->frame = 1;
-    for (unsigned i = 0; i < PICA_REPEAT_PATTERNS; i++) a->repeats[i].frame = 0;
+    for (unsigned i = 0; i < PICA_REPEAT_PATTERNS+PICA_SCENERY_PATTERNS; i++) a->repeats[i].frame = 0;
     memset(a->bgFrame, 0, sizeof(a->bgFrame));
     for (unsigned i = 1; i < PICA_SLOTS; i++)
       a->tile[i].used = a->tile[i].checked = 0;
@@ -110,10 +111,12 @@ static void Remove(PicaAtlas *a, uint32_t key) {
   }
 }
 
-static int Tile(PicaFrame *f, unsigned address, unsigned palette, unsigned bpp) {
+static int Tile(PicaFrame *f, unsigned address, unsigned palette, unsigned bpp,
+                 unsigned edits) {
   PicaAtlas *a = f->atlas;
   address &= 0x7fff;
-  uint32_t key = address | (palette << 15) | ((bpp == 4) << 23);
+  uint32_t key = address | (palette << 15) | ((bpp == 4) << 23) |
+                 (edits<<24);
   unsigned h = Hash(key), slot;
   while (a->hash[h] && a->tile[a->hash[h]].key != key)
     h = (h + 1) & (PICA_HASH - 1);
@@ -150,6 +153,17 @@ static int Tile(PicaFrame *f, unsigned address, unsigned palette, unsigned bpp) 
   unsigned words = bpp == 4 ? 16 : 8;
   unsigned colors = 1u << bpp;
   const uint16_t *src = f->memory->vram + address;
+  uint16_t edited[16];
+  if(edits&1) {
+    memcpy(edited,src,words*2);
+    for(unsigned y=2;y<=5;y++) for(unsigned x=2;x<=5;x++) {
+      unsigned bit=7-x,index=NativeMap_CirclePixel(x,y,0);
+      uint16_t mask=(1u<<bit)|(1u<<(bit+8));
+      edited[y]=(edited[y]&~mask)|((index&1)<<bit)|((index&2)<<(bit+7));
+      if(bpp==4) edited[y+8]&=~mask;
+    }
+    src=edited;
+  }
   const uint16_t *pal = f->memory->cgram + palette;
   if (t->valid && !memcmp(t->source, src, words * 2) &&
       !memcmp(t->palette, pal, colors * 2)) {
@@ -174,12 +188,13 @@ static int Tile(PicaFrame *f, unsigned address, unsigned palette, unsigned bpp) 
       unsigned i = 7 - x;
       unsigned p = ((bits >> i) & 1) | ((bits >> (i + 7)) & 2) |
                    ((bits >> (i + 14)) & 4) | ((bits >> (i + 21)) & 8);
-      uint32_t rgba = p ? Encode(pal[p], 255) : 0;
+      bool visible = p && !((edits&2) && !(pal[p]&0x7fff));
+      uint32_t rgba = visible ? Encode(pal[p], 255) : 0;
       dest[kMorton[y * 8 + x]] = rgba;
       if (!x) first = rgba;
       else if (rgba != first) uniform = false;
-      present |= p != 0;
-      t->opaque |= p != 0;
+      present |= visible;
+      t->opaque |= visible;
     }
     if (uniform) t->rowFlags |= 1u << y;
     if (present) t->rowFlags |= 1u << (y + 8);
@@ -210,12 +225,32 @@ static inline int BackgroundTile(PicaFrame *f, uint16_t *slots,
     return (int)cached - 3;
   }
   int slot = Tile(f, base + (tile & 1023) * words,
-                  (tile & 0x1c00) >> paletteShift, bpp);
+                  (tile & 0x1c00) >> paletteShift, bpp,false);
   /* Zero means unresolved, one is transparent. Never cache a failure.
    * Tile() pins every resolved slot until PicaAtlasBegin(), so eviction
    * cannot invalidate this shortcut while drawing the remaining layers. */
   if (slots && slot != -1) slots[descriptor] = slot + 3;
   return slot;
+}
+
+static unsigned NativeMapEdit(const PicaFrame *f,unsigned layer,const BgLayer *bg,
+                          unsigned map,unsigned tile,bool hud) {
+  if(!f->nativeMapCircle || layer!=f->nativeMapLayer) return 0;
+  unsigned offset=(map-bg->tilemapAdr)&0x7fff;
+  int x,y;
+  if(layer==2) {
+    unsigned row=offset/32,col=offset&31;
+    /* Native HUD DMA starts at 5820, after the blank BG3 row at 5800. */
+    if(!hud || row<1 || row>3 || col<26 || col>30) return false;
+    x=f->nativeMapX+(int)col-28;y=f->nativeMapY+(int)row-2;
+  } else {
+    if(offset>=2048 || bg->tilemapAdr!=0x3000) return false;
+    x=(offset&31)+(offset/1024)*32;y=(offset%1024)/32;
+  }
+  if((unsigned)x>=64 || (unsigned)y>=32) return false;
+  unsigned byte=((x>>3)&3)+(x>>5)*128+y*4;
+  return f->nativeMapCircle && NativeMap_Variant(tile) &&
+      (f->nativeMapCircle[byte]&(0x80>>(x&7)));
 }
 
 void PicaCaptureLine(PicaLine *out, const Ppu *p) {
@@ -323,6 +358,36 @@ unsigned PicaHudLineCount(const PicaFrame *f) {
   return y;
 }
 
+/* Reuse the first gameplay register state above the HUD IRQ. The native
+ * room blocks supply BG1/BG2 there; VRAM only contains streamed visible rows.
+ * Keep the original HUD states for a tiny, unlit BG3 overlay. */
+bool PicaExpandHud(PicaFrame *f, PicaLine *lines, PicaLine *savedHud,
+                   enum MainHudMode mode) {
+  unsigned n = PicaHudLineCount(f);
+  if (!MainHudExpands(mode) || !n || n >= f->height ||
+      f->xrayActive || f->extendEyeBeam || !f->wideRoom[0].blocks ||
+      !f->wideTileTable || !f->wideRoomWidth || !f->wideRoomHeight ||
+      lines[n].forcedBlank || lines[n].brightness != 15 || lines[n].mode != 1)
+    return false;
+  memcpy(savedHud, lines, n * sizeof(*lines));
+  for (unsigned y = 0; y < n; y++) {
+    lines[y] = lines[n];
+    /* The native IRQ may leave BG3's HUD map enabled on the subscreen.
+     * Its rows below the HUD are blank, but repeating that state above the
+     * IRQ exposes the HUD again through color math. Only suppress this
+     * HUD map; real BG3 weather/liquid maps keep their subscreen state. */
+    if (lines[y].bg[2].tilemapAdr == savedHud[0].bg[2].tilemapAdr) {
+      lines[y].screenEnabled[0] &= ~4u;
+      lines[y].screenEnabled[1] &= ~4u;
+    }
+  }
+  f->nativeHud = savedHud;
+  f->expandedHudLines = n;
+  f->hudMode = mode;
+  f->hudEndY = 0;
+  return true;
+}
+
 static bool Emit(PicaFrame *f, unsigned group, PicaQuad quad) {
   if (quad.x0 >= quad.x1 || quad.y0 >= quad.y1) return true;
   if (!f->emit(f->context, group, &quad)) {
@@ -364,16 +429,20 @@ static bool RowStrip(PicaFrame *f, unsigned group, unsigned slot,
   return Emit(f, group, q);
 }
 
-/* Cache up to eight canonical 32x8 BG3 patterns in reserved atlas strips.
- * Four-tile water patterns retain all native colors/dither and H/V flips.
- * Each strip is pinned for the frame; excess patterns keep normal tiles. */
+/* Separate scenery and liquid pools prevent one effect evicting the other.
+ * Patterns retain native colors, transparency and flips; excess distinct
+ * patterns use the regular tile path. Both pools share the existing atlas. */
 static int RepeatedPattern(PicaFrame *f, uint16_t *slots, unsigned base,
-                           const uint16_t tiles[4]) {
+                           const uint16_t *tiles, unsigned bpp) {
   PicaAtlas *a = f->atlas;
+  unsigned parts=bpp==4?8:4;
+  unsigned bytes=parts*sizeof(uint16_t);
+  unsigned cacheBase=base|((bpp==4)?0x8000:0);
   int selected = -1;
-  for (unsigned i = 0; i < PICA_REPEAT_PATTERNS; i++) {
+  for (unsigned i = bpp==4?PICA_REPEAT_PATTERNS:0;
+       i < PICA_REPEAT_PATTERNS+(bpp==4?PICA_SCENERY_PATTERNS:0); i++) {
     PicaRepeat *r = &a->repeats[i];
-    if (r->valid && r->tileBase == base && !memcmp(r->tiles, tiles, sizeof(r->tiles))) {
+    if (r->valid && r->tileBase == cacheBase && !memcmp(r->tiles, tiles, bytes)) {
       selected = i;
       break;
     }
@@ -381,20 +450,23 @@ static int RepeatedPattern(PicaFrame *f, uint16_t *slots, unsigned base,
   }
   if (selected < 0) return -2;
   PicaRepeat *repeat = &a->repeats[selected];
-  bool match = repeat->valid && repeat->tileBase == base &&
-               !memcmp(repeat->tiles, tiles, sizeof(repeat->tiles));
+  bool match = repeat->valid && repeat->tileBase == cacheBase &&
+               !memcmp(repeat->tiles, tiles, bytes);
   if (match && repeat->frame == a->frame) return selected;
   unsigned first = PICA_REPEAT_FIRST + selected * 64;
   bool changed = false;
-  for (unsigned i = 0; i < 4; i++) {
-    int slot = BackgroundTile(f, slots, tiles[i], base, 8, 8, 2);
+  unsigned presentRows=0;
+  for (unsigned i = 0; i < parts; i++) {
+    int slot = BackgroundTile(f, slots, tiles[i], base,
+                              bpp==4?16:8,bpp==4?6:8,bpp);
     if (slot == -1) return -1;
     uint32_t oriented[64];
     for (unsigned y = 0; y < 8; y++) for (unsigned x = 0; x < 8; x++) {
       unsigned sx = (tiles[i] & 0x4000) ? 7 - x : x;
       unsigned sy = (tiles[i] & 0x8000) ? 7 - y : y;
-      oriented[kMorton[y*8+x]] = slot < 0 ? 0 :
-          f->pixels[slot*64+kMorton[sy*8+sx]];
+      uint32_t pixel=slot<0?0:f->pixels[slot*64+kMorton[sy*8+sx]];
+      oriented[kMorton[y*8+x]]=pixel;
+      if(pixel&255)presentRows|=1u<<y;
     }
     uint32_t *dest = f->pixels + (first + i) * 64;
     if (memcmp(dest, oriented, sizeof(oriented))) {
@@ -403,12 +475,13 @@ static int RepeatedPattern(PicaFrame *f, uint16_t *slots, unsigned base,
     }
   }
   if (changed) {
-    for (unsigned i = 4; i < 64; i++)
-      memcpy(f->pixels + (first+i)*64, f->pixels + (first+(i&3))*64, 64*sizeof(uint32_t));
+    for (unsigned i = parts; i < 64; i++)
+      memcpy(f->pixels + (first+i)*64, f->pixels + (first+(i&(parts-1)))*64, 64*sizeof(uint32_t));
     for (unsigned i = first; i < first + 64; i++) a->dirty[i/32] |= 1u << (i&31);
   }
-  repeat->valid = true; repeat->frame = a->frame; repeat->tileBase = base;
-  memcpy(repeat->tiles, tiles, sizeof(repeat->tiles));
+  a->tile[first].rowFlags=presentRows<<8;
+  repeat->valid = true; repeat->frame = a->frame; repeat->tileBase = cacheBase;
+  memcpy(repeat->tiles, tiles, bytes);
   return selected;
 }
 
@@ -423,6 +496,101 @@ static bool RepeatedStrip(PicaFrame *f, unsigned group, unsigned pattern,
   return Emit(f, group, q);
 }
 
+
+/* Analyze each frozen VRAM row once, not again for every HDMA slice. */
+typedef struct PatternRow {
+  unsigned mapRow,mask,base;
+  uint16_t tiles[64];
+  uint8_t length[64],phase[64];
+  int8_t slot[64];
+} PatternRow;
+static void PreparePatternRow(const PicaFrame *f,PatternRow *row,
+                              unsigned mapRow,bool wider,unsigned base) {
+  unsigned mask=wider?63:31;
+  if(row->mapRow==mapRow && row->mask==mask && row->base==base)return;
+  row->mapRow=mapRow;row->mask=mask;row->base=base;
+  memset(row->slot,-3,sizeof(row->slot));
+  for(unsigned x=0;x<=mask;x++)
+    row->tiles[x]=f->memory->vram[(mapRow+(x&31)+(x>=32?0x400:0))&0x7fff];
+  bool periodic=true;
+  for(unsigned x=0;x<=mask;x++)if(row->tiles[x]!=row->tiles[(x+8)&mask]){periodic=false;break;}
+  if(periodic){memset(row->length,64,sizeof(row->length));return;}
+  unsigned run=0;
+  for(int x=(int)(mask+1)*2-1;x>=0;x--) {
+    if(row->tiles[x&mask]==row->tiles[(x+8)&mask])run++;else run=0;
+    if((unsigned)x<=mask)row->length[x]=8+run;
+  }
+}
+
+/* Water HDMA shifts BG2 every few scanlines. Reuse the existing atlas strips
+ * for repeating 4bpp scenery, preserving every native tile/palette/flip and
+ * priority. Near lights, end a strip whenever the old tile color changes. */
+static int BackgroundPattern(PicaFrame *f,uint16_t *slots,const BgLayer *bg,
+    PatternRow *row,unsigned scrollMask,int scrollX,int x,int end,int y,int h,
+    unsigned sy,unsigned zLow,unsigned zHigh,unsigned alpha,unsigned group) {
+  if(end-x<64) return x;
+  unsigned wx=(x+scrollX)&scrollMask;
+  unsigned col=(wx>>3)&row->mask;
+  int right=IMin(end,x+row->length[col]*8-(wx&7));
+  if(right-x<64)return x;
+  int repeat=row->slot[col];
+  uint16_t first=row->tiles[col];
+  if(repeat==-3) {
+    uint16_t pattern[8];
+    for(unsigned i=0;i<8;i++) {
+      pattern[i]=row->tiles[(col+i)&row->mask];
+      if((pattern[i]^first)&0x2000){row->slot[col]=-2;return x;}
+    }
+    unsigned rotation=0;
+    for(unsigned r=1;r<8;r++) for(unsigned j=0;j<8;j++) {
+      if(pattern[(r+j)&7]==pattern[(rotation+j)&7])continue;
+      if(pattern[(r+j)&7]<pattern[(rotation+j)&7])rotation=r;
+      break;
+    }
+    uint16_t canonical[8];
+    for(unsigned i=0;i<8;i++)canonical[i]=pattern[(rotation+i)&7];
+    repeat=RepeatedPattern(f,slots,bg->tileAdr,canonical,4);
+    if(repeat==-1)return -1;
+    unsigned phase=((8-rotation)&7)*8;
+    unsigned rotations=Min(8,row->length[col]-7);
+    for(unsigned i=0;i<rotations;i++) {
+      unsigned c=(col+i)&row->mask;
+      row->slot[c]=repeat;row->phase[c]=(phase+i*8)&63;
+    }
+  }
+  if(repeat<0)return x;
+  unsigned rows=((1u<<h)-1)<<sy;
+  if(!((f->atlas->tile[PICA_REPEAT_FIRST+repeat*64].rowFlags>>8)&rows))return right;
+  unsigned phase=row->phase[col]+(wx&7);
+  unsigned z=(first&0x2000)?zHigh:zLow;
+  const SceneLighting *light=f->lighting;
+  if(!light || !light->enabled) {
+    if(!RepeatedStrip(f,group,repeat,x,y,right-x,h,phase,sy,z,alpha))return -1;
+    return right;
+  }
+  int start=x,next=x+IMin(8-(wx&7),right-x);
+  PicaQuad sample={.x0=x,.x1=next,.y0=y,.y1=y+h};
+  const uint8_t *color=SceneLighting_Color(light,1,&sample);
+  int lastStart=((right-1+scrollX)&~7)-scrollX;
+  while(next<right) {
+    int stop=IMin(next+8,right);
+    sample.x0=next;sample.x1=stop;
+    const uint8_t *other=SceneLighting_Color(light,1,&sample);
+    if(memcmp(color,other,3)) {
+      if(!RepeatedStrip(f,group,repeat,start,y,next-start,h,
+          (phase+start-x)&63,sy,z,alpha))return -1;
+      start=next;color=other;
+    }
+    /* All complete tiles sampled in one 16px field cell share its color.
+     * Keep the final clipped fragment separate: its midpoint may differ. */
+    int nextField=(((next+4)>>SCENE_FIELD_SHIFT)+1)<<SCENE_FIELD_SHIFT;
+    int boundary=((nextField+scrollX+3)&~7)-scrollX;
+    next=next<lastStart?IMin(boundary,lastStart):right;
+  }
+  if(!RepeatedStrip(f,group,repeat,start,y,right-start,h,
+      (phase+start-x)&63,sy,z,alpha))return -1;
+  return right;
+}
 
 static bool HasLayer(const PicaFrame *f, unsigned sub, unsigned mask) {
   for (unsigned y = 0; y < f->height; y++)
@@ -546,6 +714,7 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
       }
     }
     uint16_t *slots = stableBase ? BackgroundSlots(f->atlas, layer, base) : NULL;
+    PatternRow patternRow;patternRow.mapRow=~0u;
     for (unsigned y = 0; y < f->height;) {
       const PicaLine *p = &f->lines[y];
       /* Disabled lines cannot emit tiles. Skip the whole inactive stretch
@@ -573,6 +742,7 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
         maxRun = Min(maxRun,
                      8 - roomRow.pixelY);
       unsigned h = Min(maxRun, f->height - y);
+      if (y < f->expandedHudLines) h = Min(h, f->expandedHudLines - y);
       bool windowed = (p->screenWindowed[sub] & layerBit) != 0;
       bool beamWindowTiles = f->extendEyeBeam && sub == 1 && layer == 2 && windowed;
       /* Compare scroll first: a distorted background usually changes it on
@@ -629,10 +799,12 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
                               f->beamLeft[y], f->beamRight[y], &win);
       else
         Windows(f, p, layer, windowed, spanLeft, spanRight, &win);
-      bool roomSides = f->width == kWideWidth && layer < 2 && !hudLine &&
+      bool expandedRow = y < f->expandedHudLines;
+      bool roomSides = (f->width == kWideWidth || expandedRow) && layer < 2 && !hudLine &&
                        f->wideRoom[layer].blocks;
       unsigned mapRow = bg->tilemapAdr + ((wy >> 3) & 31) * 32 +
                         (wy >= 256 ? (bg->tilemapWider ? 0x800 : 0x400) : 0);
+      if(layer==1 && h<8)PreparePatternRow(f,&patternRow,mapRow,bg->tilemapWider,bg->tileAdr);
       unsigned bpp = layer == 2 ? 2 : 4;
       unsigned tileWords = bpp == 4 ? 16 : 8;
       unsigned paletteShift = bpp == 4 ? 6 : 8;
@@ -712,16 +884,25 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
         /* In the original 256-pixel viewport every tile comes from VRAM.
          * Keep the side-band room lookup and boundary splits out of this
          * common path, which runs for thousands of background tiles. */
-        if (f->width == kSnesWidth || !roomSides) {
+        if (!roomSides) {
           while (x < end) {
+            if(layer==1 && h<8) {
+              int right=BackgroundPattern(f,slots,bg,&patternRow,scrollMask,scrollX,
+                  x,end,y,h,wy&7,zLow,zHigh,tileAlpha,group);
+              if(right<0)return false;
+              if(right>x){x=right;continue;}
+            }
             unsigned wx = (x + scrollX) & scrollMask;
             unsigned pixelX = wx & 7;
             unsigned w = Min(8 - pixelX, end - x);
             unsigned map = (mapRow + ((wx >> 3) & 31) +
                             (wx >= 256 ? 0x400 : 0)) & 0x7fff;
             uint16_t tile = f->memory->vram[map];
-            int slot = BackgroundTile(f, slots, tile, tileBase, tileWords,
-                                      paletteShift, bpp);
+            unsigned edit=NativeMapEdit(f,layer,bg,map,tile,hudLine);
+            int slot = edit ?
+                Tile(f,tileBase+(tile&1023)*tileWords,
+                     (tile&0x1c00)>>paletteShift,bpp,edit) :
+                BackgroundTile(f,slots,tile,tileBase,tileWords,paletteShift,bpp);
             if (slot == -1) return false;
             if (layer == 2 && slot >= 0) {
               unsigned sy = wy & 7;
@@ -738,6 +919,8 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
                 unsigned mask = uniform ? 0xbfff : 0xffff;
                 /* Only uniform rows can ignore horizontal flips. */
                 if ((f->memory->vram[nextMap] & mask) != (tile & mask)) break;
+                if(f->nativeMapCircle &&
+                    NativeMapEdit(f,layer,bg,nextMap,f->memory->vram[nextMap],hudLine)!=edit) break;
                 right += Min(8 - (nextX & 7), end - right);
               }
               if (uniform) {
@@ -776,7 +959,7 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
                   }
                   uint16_t canonical[4];
                   for (unsigned j=0;j<4;j++) canonical[j]=pattern[(rotation+j)&3];
-                  int repeat = RepeatedPattern(f,slots,tileBase,canonical);
+                  int repeat = RepeatedPattern(f,slots,tileBase,canonical,2);
                   if (repeat == -1) return false;
                   if (repeat >= 0) {
                     if (!RepeatedStrip(f, group, repeat, x, y, right-x, h,
@@ -798,9 +981,15 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
           continue;
         }
         while (x < end) {
-          if (x >= (int)f->originX && x < (int)f->originX + kSnesWidth) {
+          if (!expandedRow && x >= (int)f->originX && x < (int)f->originX + kSnesWidth) {
             int centerEnd = IMin(end, f->originX + kSnesWidth);
             do {
+              if(layer==1 && h<8) {
+                int right=BackgroundPattern(f,slots,bg,&patternRow,scrollMask,scrollX,
+                    x,centerEnd,y,h,wy&7,zLow,zHigh,tileAlpha,group);
+                if(right<0)return false;
+                if(right>x){x=right;continue;}
+              }
               unsigned wx = (x + scrollX) & scrollMask;
               unsigned pixelX = wx & 7;
               unsigned w = Min(8 - pixelX, centerEnd - x);
@@ -820,7 +1009,7 @@ static bool Backgrounds(PicaFrame *f, unsigned sub) {
             continue;
           }
           bool side = roomSides &&
-              (x < (int)f->originX || x >= (int)f->originX + kSnesWidth);
+              (expandedRow || x < (int)f->originX || x >= (int)f->originX + kSnesWidth);
           unsigned wx = (x - (int)f->originX + bg->hScroll) &
                         (bg->tilemapWider ? 511 : 255);
           uint16_t tile;
@@ -1026,7 +1215,7 @@ static bool Objects(PicaFrame *f, unsigned sub) {
         unsigned usedcol = (attr & 0x4000) ? size - 1 - col : col;
         unsigned usedtile = ((((attr & 255) >> 4) + (row >> 3)) << 4) |
                             (((attr & 15) + (usedcol >> 3)) & 15);
-        int slot = Tile(f, (base + usedtile * 16) & 0x7fff, palette, 4);
+        int slot = Tile(f, (base + usedtile * 16) & 0x7fff, palette, 4,false);
         if (slot == -1) return false;
         if (slot == -2) continue;
         for (unsigned i = 0; i < win.nr; i++) {
@@ -1197,6 +1386,40 @@ static bool EmitTimedShadows(PicaFrame *f, unsigned sub) {
 }
 #endif
 
+/* Draw only the selected native HUD tiles, once, after color composition.
+ * This shares the atlas and frame targets and adds no render target/pass. */
+static bool HudOverlay(PicaFrame *f) {
+  if (!f->nativeHud || f->hudMode == kMainHudHidden) return true;
+  for (unsigned y = 0; y < f->expandedHudLines;) {
+    const BgLayer *bg = &f->nativeHud[y].bg[2];
+    unsigned wy = (y + 1 + bg->vScroll) & (bg->tilemapHigher ? 511 : 255);
+    unsigned h = Min(8 - (wy & 7), f->expandedHudLines - y);
+    for (unsigned dy = 1; dy < h; dy++)
+      if (memcmp(&f->nativeHud[y + dy].bg[2], bg, sizeof(*bg))) { h = dy; break; }
+    for (unsigned x = 0; x < kSnesWidth;) {
+      unsigned wx = (x + bg->hScroll) & (bg->tilemapWider ? 511 : 255);
+      unsigned w = Min(8 - (wx & 7), kSnesWidth - x);
+      /* Selection boundaries are aligned with the native HUD's 8px cells. */
+      if (!MainHudKeepsPixel(f->hudMode, x, y)) { x += w; continue; }
+      unsigned tileH = x >= 208 ? Min(h, 31 - y) : h;
+      unsigned map = bg->tilemapAdr + ((wy >> 3) & 31) * 32 + ((wx >> 3) & 31) +
+          (wx >= 256 ? 0x400 : 0) + (wy >= 256 ? (bg->tilemapWider ? 0x800 : 0x400) : 0);
+      uint16_t tile = f->memory->vram[map & 0x7fff];
+      unsigned edit = NativeMapEdit(f, 2, bg, map & 0x7fff, tile, true);
+      /* A separate atlas variant removes only palette black. It preserves
+       * the original glyphs/map art without editing VRAM, CGRAM or other UI. */
+      int slot = Tile(f, bg->tileAdr + (tile & 1023) * 8,
+                      (tile & 0x1c00) >> 8, 2, edit|2u);
+      if (slot == -1) return false;
+      if (slot >= 0 && !TileQuad(f, 23, slot, x + f->originX, y, w, tileH,
+          wx & 7, wy & 7, tile & 0x4000, tile & 0x8000, 0xffff, 255)) return false;
+      x += w;
+    }
+    y += h;
+  }
+  return true;
+}
+
 static bool BuildFrame(PicaFrame *f) {
 #ifdef SM3DS_PHASE_DIAG
   memset(&g_pica_build_timing, 0, sizeof(g_pica_build_timing));
@@ -1297,6 +1520,15 @@ bool PicaBuildFrame(PicaFrame *f) {
   if (lit) { f->emit = EmitLit; f->context = &e; }
   else f->lighting = NULL;
   bool ok = BuildFrame(f);
+  if (ok && f->nativeHud && f->hudMode != kMainHudHidden) {
+#ifdef SM3DS_PHASE_DIAG
+    uint64_t before = SDL_GetPerformanceCounter();
+#endif
+    ok = HudOverlay(f);
+#ifdef SM3DS_PHASE_DIAG
+    g_pica_build_timing.compose += SDL_GetPerformanceCounter() - before;
+#endif
+  }
   f->emit = e.emit;
   f->context = e.context;
   f->lighting = scene;

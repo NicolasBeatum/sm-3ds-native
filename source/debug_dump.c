@@ -88,7 +88,7 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
       "dump_id=%s\nrom=%s\nframe=%lu\n"
       "app_version=%s\nbuild_flags=%s\nfull_native=%u\n"
       "session_log_path=%s\n"
-      "build_lto=%u\nppu_bg_lookup=bg3-repeat-strips-v4\n"
+      "build_lto=%u\nppu_bg_lookup=bg2-hdma-pattern-strips-v5\n"
       "lighting_submit=direct-cached-color-v1\naudio_queue=split-publisher-v1\n"
       "ppu_geometry=indexed-quads-v1\n"
       "xray_render=translated-native-window-v1\n"
@@ -102,9 +102,9 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
       "top_stride=%lu\nbottom_stride=%lu\n"
       "game_state=%u\narea_index=%u\nroom_ptr=%04x\n"
       "samus_x=%u\nsamus_y=%u\nsamus_health=%u\n"
-      "widescreen=%u\nhide_main_hud=%u\nvideo_mode=%u\n"
+      "widescreen=%u\nhide_main_hud=%u\nmain_hud_mode=%u\nhud_expanded=%u\nvideo_mode=%u\n"
       "top_sampling=nearest-biased-v1\n"
-      "lighting_model=cached-color-grid-16px-spread-emitters-v4\n"
+      "lighting_model=cached-color-grid-16px-elevator-light-v10\n"
       "wram_file=memory.wram\nsram_file=save.sram\n",
       dump_id, rom_name ? rom_name : "unknown", (unsigned long)frame_number,
       APP_VERSION, SM3DS_BUILD_FLAGS,
@@ -126,6 +126,7 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
       game_state, area_index, room_ptr,
       samus_x_pos, samus_y_pos, samus_health,
       BottomScreen_WidescreenEnabled(), BottomScreen_HideMainHud(),
+      (unsigned)BottomScreen_MainHudMode(), PpuGpuHudExpanded(),
       (unsigned)BottomScreen_VideoMode());
   bool okay = result > 0 && AppLifecycle_WriteDiagnostics(f) && AudioDiagnostics_Write(f) &&
       FrameDiagnostics_WriteSummary(f) && fflush(f) == 0;
