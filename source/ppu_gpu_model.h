@@ -2,6 +2,8 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
+#include "hud_mode.h"
 
 #include "src/snes/ppu.h"
 
@@ -9,15 +11,20 @@ enum {
   PICA_ATLAS_W = 1024,
   PICA_ATLAS_H = 512,
   PICA_SLOTS = 8192,
+  PICA_REPEAT_FIRST = 128, PICA_REPEAT_SLOTS = 1024,
+  PICA_REPEAT_PATTERNS = 8, PICA_SCENERY_PATTERNS = 8, /* Separate liquid/scenery strips in the existing atlas. */
   PICA_HASH = 16384,
   PICA_MAX_LINES = 240,
   PICA_MAX_VERTICES = 174760, /* Same 43,690 quads, four shared vertices each. */
-  PICA_GROUPS = 21,
+  PICA_GROUPS = 24, /* Shadows and optional native HUD overlay. */
 };
 
 #ifdef SM3DS_PHASE_DIAG
 typedef struct PicaBuildTiming {
   uint64_t bg_main, obj_main, bg_sub, obj_sub, compose;
+  uint64_t light_prepare, shadow_submit;
+  unsigned light_sources, shadow_quads, background_sources;
+  bool lighting_applied, light_field_rebuilt;
 } PicaBuildTiming;
 extern PicaBuildTiming g_pica_build_timing;
 #endif
@@ -46,12 +53,23 @@ typedef struct PicaTile {
   uint32_t key, checked, used;
   uint16_t source[16], palette[16];
   bool valid, opaque;
+  /* Low bits: uniform RGBA rows; high bits: rows with any opaque pixel.
+   * Reuses the atlas padding; unrelated to light-source recognition. */
+  uint16_t rowFlags;
 } PicaTile;
+
+typedef struct PicaRepeat {
+  uint16_t tileBase, tiles[8];
+  uint32_t frame;
+  bool valid;
+} PicaRepeat;
 
 typedef struct PicaAtlas {
   PicaTile tile[PICA_SLOTS];
   uint16_t hash[PICA_HASH];
   uint32_t frame, cursor, hits, decodes, live;
+  uint32_t contentRevision;
+  PicaRepeat repeats[PICA_REPEAT_PATTERNS+PICA_SCENERY_PATTERNS];
   uint32_t dirty[PICA_SLOTS / 32];
   uint8_t objectColumns[128][PICA_MAX_LINES];
   /* Resolve each BG tile/palette descriptor once per frame. Priority and
@@ -69,6 +87,11 @@ typedef struct PicaQuad {
 } PicaQuad;
 
 typedef bool PicaEmit(void *context, unsigned group, const PicaQuad *quad);
+#define PICA_COLORED_EMIT 1
+/* Optional consumer: pack an existing quad with its cached modulation color,
+ * without copying and editing the whole quad on the native tile hot path. */
+typedef bool PicaEmitColored(void *context, unsigned group, const PicaQuad *quad,
+                             const uint8_t color[3]);
 
 /* Room blocks provide side tiles without writing into the SNES's adjacent
  * 256-pixel BG tilemaps. The center keeps using the original VRAM image. */
@@ -86,6 +109,9 @@ typedef struct PicaFrame {
   uint32_t *pixels;
   unsigned width, height;
   unsigned originX, hudEndY;
+  const PicaLine *nativeHud;
+  unsigned expandedHudLines;
+  enum MainHudMode hudMode;
   int worldLeft, worldRight;
   int bg2Left, bg2Right;
   bool boundBg2;
@@ -101,15 +127,30 @@ typedef struct PicaFrame {
   const uint16_t *wideTileTable;
   unsigned wideRoomWidth, wideRoomHeight;
   PicaEmit *emit;
+  PicaEmitColored *emitColored;
   void *context;
   const char *failure;
   uint32_t quads[PICA_GROUPS];
   uint16_t bandEnd[PICA_MAX_LINES];
+  struct SceneLighting *lighting;
+  /* Native item cells that use the hollow circle, in the game's 64x32 map bit layout. */
+  const uint8_t *nativeMapCircle;
+  int nativeMapX,nativeMapY;
+  unsigned nativeMapLayer;
+  uint16_t objectActive[128], objectFirst[128], objectLast[128];
+  unsigned objectCount;
+  bool objectsSelected;
 } PicaFrame;
 
 void PicaAtlasInit(PicaAtlas *atlas, uint32_t *pixels);
 void PicaAtlasBegin(PicaAtlas *atlas);
+typedef bool PicaClean(void *context, const void *data, size_t bytes);
+bool PicaAtlasFlush(PicaAtlas *atlas, const uint32_t *pixels,
+                    PicaClean *clean, void *context);
 void PicaCaptureLine(PicaLine *out, const Ppu *ppu);
 unsigned PicaHudLineCount(const PicaFrame *frame);
+/* Scratch buffers belong to the caller. No PPU/game state is changed. */
+bool PicaExpandHud(PicaFrame *frame, PicaLine *lines, PicaLine *savedHud,
+                   enum MainHudMode mode);
 bool PicaBuildFrame(PicaFrame *frame);
 int PicaScrollOffset(unsigned scroll, unsigned base, bool wider);

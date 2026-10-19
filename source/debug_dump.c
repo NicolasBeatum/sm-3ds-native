@@ -12,10 +12,12 @@
 #include "src/variables.h"
 #include "bottom_screen.h"
 #include "frame_diagnostics.h"
+#include "audio_diagnostics.h"
 #include "ppu_gpu.h"
 #include "screen_capture.h"
 #include "storage_paths.h"
 #include "app_lifecycle.h"
+#include "session_log.h"
 #include "version.h"
 
 #ifndef SM3DS_BUILD_FLAGS
@@ -75,6 +77,8 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
   FILE *f = fopen(path, "w");
   if (!f) { rmdir(directory); return false; }
   ScreenCaptureStatus screens = ScreenCapture_Save(directory);
+  /* Optional PCM evidence: keep timing/WRAM even if the audio capture fails. */
+  AudioDiagnostics_Save(directory);
   bool new3ds = false;
   bool model_known = R_SUCCEEDED(APT_CheckNew3DS(&new3ds));
   u32 cpu_limit = 0;
@@ -83,7 +87,9 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
       "sm3dsnative debug dump v4\n"
       "dump_id=%s\nrom=%s\nframe=%lu\n"
       "app_version=%s\nbuild_flags=%s\nfull_native=%u\n"
-      "build_lto=%u\nppu_bg_lookup=inline-band-v3\n"
+      "session_log_path=%s\n"
+      "build_lto=%u\nppu_bg_lookup=bg2-hdma-pattern-strips-v5\n"
+      "lighting_submit=direct-cached-color-v1\naudio_queue=split-publisher-v1\n"
       "ppu_geometry=indexed-quads-v1\n"
       "xray_render=translated-native-window-v1\n"
       "enemy_viewport=visible-spritemap-v1\npipe_movement=native-through-blocks\n"
@@ -96,8 +102,9 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
       "top_stride=%lu\nbottom_stride=%lu\n"
       "game_state=%u\narea_index=%u\nroom_ptr=%04x\n"
       "samus_x=%u\nsamus_y=%u\nsamus_health=%u\n"
-      "widescreen=%u\nhide_main_hud=%u\nvideo_mode=%u\n"
+      "widescreen=%u\nhide_main_hud=%u\nmain_hud_mode=%u\nhud_expanded=%u\nvideo_mode=%u\n"
       "top_sampling=nearest-biased-v1\n"
+      "lighting_model=cached-color-grid-16px-elevator-light-v10\n"
       "wram_file=memory.wram\nsram_file=save.sram\n",
       dump_id, rom_name ? rom_name : "unknown", (unsigned long)frame_number,
       APP_VERSION, SM3DS_BUILD_FLAGS,
@@ -106,6 +113,7 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
 #else
       0u,
 #endif
+      SessionLog_Path() ? SessionLog_Path() : "disabled",
       (unsigned)SM3DS_BUILD_LTO,
       !model_known ? "unknown" : new3ds ? "new3ds" : "old3ds",
       (unsigned long)cpu_limit,
@@ -118,8 +126,9 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
       game_state, area_index, room_ptr,
       samus_x_pos, samus_y_pos, samus_health,
       BottomScreen_WidescreenEnabled(), BottomScreen_HideMainHud(),
+      (unsigned)BottomScreen_MainHudMode(), PpuGpuHudExpanded(),
       (unsigned)BottomScreen_VideoMode());
-  bool okay = result > 0 && AppLifecycle_WriteDiagnostics(f) &&
+  bool okay = result > 0 && AppLifecycle_WriteDiagnostics(f) && AudioDiagnostics_Write(f) &&
       FrameDiagnostics_WriteSummary(f) && fflush(f) == 0;
   if (fclose(f) != 0) okay = false;
   if (okay) okay = WriteFrameTimes(directory);
@@ -134,6 +143,7 @@ bool DebugDump_Write(const char *rom_name, uint32_t frame_number) {
     if (DumpPath(path, sizeof(path), directory, "bottom.bmp")) remove(path);
     if (DumpPath(path, sizeof(path), directory, "top.raw")) remove(path);
     if (DumpPath(path, sizeof(path), directory, "bottom.raw")) remove(path);
+    if (DumpPath(path, sizeof(path), directory, "audio-output.wav")) remove(path);
     rmdir(directory);
   }
   return okay;

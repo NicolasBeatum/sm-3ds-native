@@ -17,13 +17,18 @@ static inline unsigned PicaDrawChunkVertices(unsigned remaining) {
 
 /* The same two triangles as the previous six-vertex stream: a,b,c; c,b,d.
  * Keep their diagonal, winding and interpolation while sharing corners. */
-static inline void PicaQuadVertices(PicaVertex *v, const PicaQuad *q) {
+static inline void PicaQuadVerticesColor(PicaVertex *v, const PicaQuad *q,
+                                         uint8_t r, uint8_t g, uint8_t b) {
   int16_t depth = q->depth >> 1;
   if (!depth) depth = 1;
-  PicaVertex a = {q->x0,q->y0,depth,1,q->u0,q->v0,q->r,q->g,q->b,q->a};
+  PicaVertex a = {q->x0,q->y0,depth,1,q->u0,q->v0,r,g,b,q->a};
   v[0] = v[1] = v[2] = v[3] = a;
   v[1].x = v[3].x = q->x1; v[1].u = v[3].u = q->u1;
   v[2].y = v[3].y = q->y1; v[2].v = v[3].v = q->v1;
+}
+
+static inline void PicaQuadVertices(PicaVertex *v, const PicaQuad *q) {
+  PicaQuadVerticesColor(v,q,q->r,q->g,q->b);
 }
 
 static inline void PicaQuadIndices(uint16_t *indices) {

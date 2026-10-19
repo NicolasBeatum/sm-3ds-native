@@ -1,5 +1,7 @@
 # sm-3ds-native
 
+![Old 3DS: game completed](docs/assets/playthrough.svg) ![Atmospheric lighting: experimental](docs/assets/lighting.svg)
+
 [Español](README.es.md) · [Downloads](https://github.com/NicolasBeatum/sm-3ds-native/releases/latest) · [Changelog](CHANGELOG.md)
 
 > [!IMPORTANT]
@@ -9,50 +11,75 @@ A Nintendo 3DS port of Super Metroid, based on [CharlesAverill/sm-3ds](https://g
 
 ## Current status
 
-**Playable, but still under development.** NicolasBeatum has not yet completed a full playthrough or 100% completion with this port. We cannot confirm that the game can be finished from beginning to end; later areas, bosses or the ending may still have issues. Performance varies with the console, room, effects and widescreen setting; 60 FPS is a target, not a guarantee.
+**Playable, with a start-to-finish playthrough completed on Old 3DS using the development CIA.** This confirms a route to the ending, not 100% item completion or every route. Supports Old and New 3DS; performance varies by room and settings.
 
-The same packages run on Old and New 3DS. New 3DS automatically enables its faster CPU clock and L2 cache. The game image, palette, stereo audio and gameplay are preserved by the optimization work.
-
-## Screenshots
-
-Captured in **Azahar**; these screenshots do not establish performance on real hardware. They include both vertically stacked and side-by-side LCD layouts.
-
-| Intro | Landing Site |
-| --- | --- |
-| ![Intro in Azahar](screenshots/azahar/intro.png) | ![Landing Site and area map in Azahar](screenshots/azahar/landing-site.png) |
-| Caves and map | Equipment screen |
-| ![Caves and area map in Azahar](screenshots/azahar/caves-map.png) | ![Equipment companion screen in Azahar](screenshots/azahar/items.png) |
-
-![Crateria gameplay and lower-screen map in Azahar](screenshots/azahar/crateria-map.png)
+**0.2.0** adds atmospheric lighting, map improvements, new HUD modes and an English/Spanish interface.
 
 ## Features
 
-- Native game logic and stereo 32 kHz audio.
-- PICA200 rendering for supported Mode 1 frames, with an exact CPU fallback for unsupported state or mid-frame changes.
-- Optional widescreen with extended scenery, sprites, HDMA lighting and camera shake.
-- Configurable lower-screen HUD: ONLY AMMO, AMMO + HOOK or ALL ITEMS, with vertical/horizontal counts, reserved unowned slots and an optional X-Ray map shortcut. Equipment, Redux suit illustration, item percentage and play time remain available.
-- Area and world maps with touch dragging, zoom, Samus centering/following, area-name toggling and map markers. SETUP can hide the floating buttons.
-- Grouped HUD/MAP/VIDEO setup, separate status-bar switches per tab, and FIT/STRETCHED/1:1 upper-screen sizing. Preferences persist on the microSD card.
-- Startup ROM selector, per-ROM saves and compatibility checks for the Klint/Pacochan Spanish 1.0 translation. The launcher does not apply IPS patches yet.
-- **SETUP → i** shows the detected Old/New 3DS hardware family and build information, and provides **SAVE DUMP**. Dumps also work with **L + R + A** and are grouped in timestamped folders.
-- Diagnostics include full-session and recent frame timings, separate standard/widescreen gameplay statistics, WRAM/SRAM and LCD captures when available.
-- Animated Samus/ship HOME Menu banner and a three-second opening music excerpt for the CIA; the small HOME icon is retained.
+- Native gameplay, original stereo audio and optional widescreen.
+- Optional atmospheric lighting: ambient color, doors, lava, Samus and selected luminous enemies, with short shadows. **SETUP → VIDEO → LIGHTING**.
+- Five upper HUD modes: full, energy only, energy and minimap, hidden with expanded scenery, or the classic black band. Reduced HUD modes have transparent backgrounds.
+- Area and world maps with zoom, touch dragging and Samus tracking. QoL for pending/collected items (**OFF, ZERO/FUSION or SUPER METROID**), colored doors, hazardous rooms and secrets.
+- Lower-map station letters: **E** (energy), **A** (ammo) and **M** (map). **SETUP → MAP → MAP IMPROVEMENTS**.
+- English/Spanish lower-screen UI, configurable HUD, equipment and settings saved on the microSD. **SETUP → HUD → LANGUAGE**.
+- ROM selector, per-ROM saves and diagnostic dumps with **L + R + A**.
 
-## Building / download
+See the [changelog](CHANGELOG.md) for all changes and fixes.
 
-**To play, download the ready-to-install builds from [Releases](https://github.com/NicolasBeatum/sm-3ds-native/releases/latest).** Version [0.1.5](https://github.com/NicolasBeatum/sm-3ds-native/releases/tag/v0.1.5) includes:
+## In pictures
 
-- `.3dsx` and `.smdh` for Homebrew Launcher.
-- `.cia` for installation with FBI.
-- A QR code for **FBI → Remote Install → Scan QR Code**.
+Actual **Azahar** captures show appearance, not real-console performance.
 
-![FBI QR code for the v0.1.5 CIA](docs/assets/fbi-v0.1.5.png)
+**Updated map:** **E** = energy refill · **A** = ammo refill · **M** = map station. These letters appear on the lower map; **S** still marks save stations.
 
-Supply your own compatible `.smc` or `.sfc` ROM in `sdmc:/3ds/sm3dsnative/` and select it at startup. The directory is created automatically; saves go in `saves/`, settings in `settings.cfg`, and diagnostic captures in `dump/<timestamp-id>/` under that same directory. Neither build contains a game ROM or translation patch. Previously saved games and settings remain usable when updating.
+![Lower map with energy, ammo and map station letters](screenshots/qol/stations.png)
 
-For compilation instructions, translation setup and diagnostic details, see [Building and diagnostics](docs/BUILDING.md). For the architecture and verification history, see [Porting notes](docs/PORTING_NOTES.md).
+**Full HUD and transparent reduced HUD.**
 
-## Provenance and AI disclosure
+![HUD comparison](screenshots/qol/hud-transparent.gif)
+
+**Lighting: OFF on the left, ON on the right.**
+
+![Crateria — Landing Site](screenshots/lighting/ship-animated.gif)
+
+![Norfair — lava](screenshots/lighting/lava-animated.gif)
+
+<details>
+<summary>View GIFs from the other areas</summary>
+
+![Exterior](screenshots/lighting/exterior-animated.gif)
+
+![Green Brinstar](screenshots/lighting/green-brinstar-animated.gif)
+
+![Red Brinstar](screenshots/lighting/red-brinstar-animated.gif)
+
+![Pink Brinstar](screenshots/lighting/pink-brinstar-animated.gif)
+
+![Blue Brinstar](screenshots/lighting/blue-brinstar-animated.gif)
+
+![Wrecked Ship](screenshots/lighting/wrecked-ship-animated.gif)
+
+![Maridia](screenshots/lighting/maridia-animated.gif)
+
+![Tourian](screenshots/lighting/tourian-animated.gif)
+
+</details>
+
+## Download and installation
+
+Download **[version 0.2.0](https://github.com/NicolasBeatum/sm-3ds-native/releases/tag/v0.2.0)**: **[CIA](https://github.com/NicolasBeatum/sm-3ds-native/releases/download/v0.2.0/SuperMetroid3DSPort.cia)** for FBI, or **[3DSX](https://github.com/NicolasBeatum/sm-3ds-native/releases/download/v0.2.0/SuperMetroid3DSPort.3dsx) + [SMDH](https://github.com/NicolasBeatum/sm-3ds-native/releases/download/v0.2.0/SuperMetroid3DSPort.smdh)** for Homebrew Launcher.
+
+Install the CIA using **FBI → Remote Install → Scan QR Code**:
+
+![FBI QR code for the v0.2.0 CIA](docs/assets/fbi-v0.2.0.png)
+
+Supply your own compatible `.smc` or `.sfc` ROM in `sdmc:/3ds/sm3dsnative/` and select it at startup. Packages contain no ROM or patches. Updates preserve games in `saves/` and preferences in `settings.cfg`.
+
+[Building and diagnostics](docs/BUILDING.md) · [Porting notes](docs/PORTING_NOTES.md)
+
+<details>
+<summary>Credits, licenses and AI assistance</summary>
 
 This repository is a custom integration of several independent projects; it is
 not presented as wholly original work:
@@ -88,3 +115,5 @@ remain with the repository owner. AI assistance does not change the licenses,
 copyright or required attribution of any upstream project.
 
 If you prefer not to play a port developed with AI assistance, that choice is completely understandable and respected. The disclosure is here so you can make an informed decision.
+
+</details>

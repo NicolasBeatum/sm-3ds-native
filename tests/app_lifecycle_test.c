@@ -8,6 +8,9 @@ static void *callback_param;
 static u32 cpu_limit = 80;
 static int audio_paused, pause_calls, cpu_writes;
 static bool fail_get_cpu;
+static uint64_t fake_time;
+
+uint64_t osGetTime(void) { return ++fake_time; }
 
 void aptHook(aptHookCookie *cookie, aptHookFn hook, void *param) {
   assert(!callback);
@@ -87,6 +90,21 @@ int main(void) {
   assert(cpu_limit == 20);
 
   AppLifecycle_RecordExternalGap();
+  Event(APTHOOK_ONEXIT);
+  AppLifecycleEvent event;
+  uint64_t previous_time = 0;
+  bool saw_sleep = false, saw_exit = false;
+  while (AppLifecycle_ReadEvent(&event)) {
+    assert(event.time_ms > previous_time);
+    previous_time = event.time_ms;
+    if (!strcmp(event.name, "apt_sleep")) {
+      assert(event.background & 2);
+      saw_sleep = true;
+    }
+    if (!strcmp(event.name, "apt_exit_request")) saw_exit = true;
+  }
+  assert(saw_sleep && saw_exit);
+  assert(!AppLifecycle_ReadEvent(&event));
   FILE *f = tmpfile();
   assert(f && AppLifecycle_WriteDiagnostics(f));
   rewind(f);
@@ -95,9 +113,26 @@ int main(void) {
   assert(strstr(text, "apt_suspend_count=4\n"));
   assert(strstr(text, "apt_sleep_count=3\n"));
   assert(strstr(text, "external_pause_gap_count=1\n"));
+  assert(strstr(text, "apt_exit_request_count=1\n"));
+  assert(strstr(text, "apt_log_events_dropped=0\n"));
   fclose(f);
   AppLifecycle_Fini();
   AppLifecycle_Fini();
   assert(!callback); /* No callbacks may touch a closed audio device. */
+  /* A long launcher session keeps the most recent transitions in a bounded
+   * queue rather than allocating or writing files from APT callbacks. */
+  AppLifecycle_Init();
+  for (int i = 0; i < 40; ++i) Event(APTHOOK_ONRESTORE);
+  unsigned events = 0;
+  while (AppLifecycle_ReadEvent(&event)) ++events;
+  assert(events == 32);
+  f = tmpfile();
+  assert(f && AppLifecycle_WriteDiagnostics(f));
+  rewind(f);
+  memset(text, 0, sizeof(text));
+  assert(fread(text, 1, sizeof(text) - 1, f));
+  assert(strstr(text, "apt_log_events_dropped=8\n"));
+  fclose(f);
+  AppLifecycle_Fini();
   return 0;
 }

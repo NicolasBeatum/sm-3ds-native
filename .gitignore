@@ -6,6 +6,19 @@ build/
 build-*/
 output/
 output-*/
+# Local capture/analysis helpers and development journals.
+/tools/*preview*
+/tools/build_lighting_*.py
+/tools/lighting_*.c
+/tools/*azahar*
+/tools/export_lighting*.py
+/tools/__pycache__/
+/docs/*-trial.md
+/docs/dumps-*.md
+/docs/old3ds-background-cache.md
+/docs/lighting-gallery.md
+/docs/azahar-recording.md
+/screenshots/lighting/*.json
 release/
 SDL/build/
 buildtools/extracted/

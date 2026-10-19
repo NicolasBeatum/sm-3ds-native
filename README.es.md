@@ -1,5 +1,7 @@
 # sm-3ds-native
 
+![Old 3DS: game completed](docs/assets/playthrough.svg) ![Atmospheric lighting: experimental](docs/assets/lighting.svg)
+
 [English](README.md) · [Descargas](https://github.com/NicolasBeatum/sm-3ds-native/releases/latest) · [Registro de cambios](CHANGELOG.md)
 
 > [!IMPORTANT]
@@ -9,50 +11,75 @@ Port de Super Metroid para Nintendo 3DS, basado en [CharlesAverill/sm-3ds](https
 
 ## Estado actual
 
-**Es jugable, pero sigue en desarrollo.** NicolasBeatum todavía no ha terminado una partida completa ni completado el juego al 100% con este port. No podemos confirmar que se pueda terminar de principio a fin: podrían quedar problemas en zonas avanzadas, jefes o el final. El rendimiento depende de la consola, la sala, los efectos y el modo panorámico; alcanzar 60 FPS es un objetivo, no una garantía.
+**Jugable y terminado de principio a fin en Old 3DS con el CIA de desarrollo.** Esto confirma una ruta al final, no el 100 % de objetos ni todas las rutas. Funciona en Old y New 3DS; el rendimiento varía según la sala y los ajustes.
 
-Los mismos paquetes funcionan en Old y New 3DS. En New 3DS se activan automáticamente la mayor frecuencia de CPU y la caché L2. Las optimizaciones conservan la imagen, la paleta, el sonido estéreo y la jugabilidad del juego.
-
-## Capturas
-
-Tomadas en **Azahar**; estas imágenes no demuestran el rendimiento en una consola real. Incluyen distribuciones de las dos pantallas en vertical y una junto a la otra.
-
-| Introducción | Zona de aterrizaje |
-| --- | --- |
-| ![Introducción en Azahar](screenshots/azahar/intro.png) | ![Zona de aterrizaje y mapa de área en Azahar](screenshots/azahar/landing-site.png) |
-| Cuevas y mapa | Pantalla de equipamiento |
-| ![Cuevas y mapa de área en Azahar](screenshots/azahar/caves-map.png) | ![Equipamiento en la pantalla inferior de Azahar](screenshots/azahar/items.png) |
-
-![Crateria y mapa en la pantalla inferior de Azahar](screenshots/azahar/crateria-map.png)
+La **0.2.0** incorpora iluminación atmosférica, mejoras del mapa, nuevos modos de HUD e interfaz en español e inglés.
 
 ## Funciones
 
-- Lógica nativa del juego y sonido estéreo a 32 kHz.
-- Renderizado mediante PICA200 en los cuadros compatibles con Mode 1, con una ruta exacta por CPU cuando el estado gráfico no es compatible o cambia dentro del cuadro.
-- Modo panorámico opcional con escenario ampliado, sprites, iluminación HDMA y temblores de cámara.
-- HUD inferior configurable: ONLY AMMO, AMMO + HOOK o ALL ITEMS, números verticales/horizontales, espacios reservados para objetos no adquiridos y botón de X-Ray opcional en el mapa. También muestra equipamiento, ilustración Redux, porcentaje de objetos y tiempo de partida.
-- Mapas de área y del mundo con arrastre táctil, zoom, centrado y seguimiento de Samus, nombres de áreas y marcadores. Los botones flotantes se pueden ocultar desde SETUP.
-- SETUP agrupado en HUD/MAP/VIDEO, interruptores de barra de estado por pestaña y modos FIT/STRETCHED/1:1 para la pantalla superior. Las preferencias se guardan en la microSD.
-- Selector de ROM al iniciar, partidas guardadas independientes por ROM y comprobaciones de compatibilidad con la traducción española 1.0 de Klint/Pacochan. El selector todavía no aplica parches IPS.
-- **SETUP → i** muestra el modelo detectado (Old/New 3DS), información de compilación y el botón **SAVE DUMP**. También se pueden generar dumps con **L + R + A**, organizados en carpetas con fecha e identificador.
-- Dumps con estadísticas de toda la sesión y de los últimos cuadros, mediciones separadas del juego con y sin modo panorámico, WRAM/SRAM y capturas de las pantallas cuando están disponibles.
-- Banner animado de Samus y su nave en el menú HOME del CIA, con tres segundos de la música de apertura. Se conserva el icono pequeño del menú HOME.
+- Juego nativo, sonido estéreo original y modo panorámico opcional.
+- Iluminación atmosférica opcional: luces de ambiente, puertas, lava, Samus y algunos enemigos, con sombras cortas. **AJUSTES → VIDEO → LIGHTING**.
+- Cinco modos de HUD superior: completo, solo vida, vida y minimapa, oculto con escenario ampliado o franja negra clásica. Los modos reducidos tienen fondo transparente.
+- Mapas de área y del mundo con zoom, arrastre y seguimiento de Samus. QoL de objetos pendientes/recogidos (**OFF, ZERO/FUSION o SUPER METROID**), puertas de colores y salas con peligros o secretos.
+- Estaciones con letras **E** (vida), **A** (munición) y **M** (mapa) en la pantalla inferior. **AJUSTES → MAPA → MEJORAS DEL MAPA**.
+- Interfaz inferior en español e inglés, HUD configurable, equipamiento y ajustes guardados en la microSD. **AJUSTES → HUD → IDIOMA**.
+- Selector de ROM, partidas independientes por ROM y dumps de diagnóstico con **L + R + A**.
 
-## Building / descarga
+Todos los cambios y correcciones están en el [registro de cambios](CHANGELOG.md).
 
-**Para jugar, descarga las compilaciones listas para instalar desde [Releases](https://github.com/NicolasBeatum/sm-3ds-native/releases/latest).** La versión [0.1.5](https://github.com/NicolasBeatum/sm-3ds-native/releases/tag/v0.1.5) incluye:
+## En imágenes
 
-- `.3dsx` y `.smdh` para Homebrew Launcher.
-- `.cia` para instalar con FBI.
-- Código QR para **FBI → Remote Install → Scan QR Code**.
+Capturas reales de **Azahar**; muestran el aspecto, no el rendimiento de una consola.
 
-![Código QR de FBI para el CIA v0.1.5](docs/assets/fbi-v0.1.5.png)
+**Mapa actualizado:** **E** = recarga de vida · **A** = recarga de munición (ammo) · **M** = estación de mapas. Las letras aparecen en el mapa inferior; **S** sigue indicando guardado.
 
-Coloca tu propia ROM compatible `.smc` o `.sfc` en `sdmc:/3ds/sm3dsnative/` y selecciónala al iniciar. La carpeta se crea automáticamente. Dentro de ella, las partidas se guardan en `saves/`, la configuración en `settings.cfg` y los dumps en `dump/<fecha-id>/`. Ninguna compilación incluye una ROM del juego ni un parche de traducción. Las partidas y los ajustes guardados se mantienen al actualizar.
+![Mapa inferior con letras de vida, munición y mapas](screenshots/qol/stations.png)
 
-Las instrucciones para compilar, preparar la traducción y analizar dumps están en [Building y diagnósticos](docs/BUILDING.md), en inglés. La arquitectura y el historial de verificaciones están en [Notas del port](docs/PORTING_NOTES.md), también en inglés.
+**HUD completo y HUD reducido transparente.**
 
-## Origen del código y declaración sobre IA
+![Comparación del HUD](screenshots/qol/hud-transparent.gif)
+
+**Iluminación: apagada a la izquierda, encendida a la derecha.**
+
+![Crateria — nave](screenshots/lighting/ship-animated.gif)
+
+![Norfair — lava](screenshots/lighting/lava-animated.gif)
+
+<details>
+<summary>Ver los GIF de las demás zonas</summary>
+
+![Exterior](screenshots/lighting/exterior-animated.gif)
+
+![Green Brinstar](screenshots/lighting/green-brinstar-animated.gif)
+
+![Red Brinstar](screenshots/lighting/red-brinstar-animated.gif)
+
+![Pink Brinstar](screenshots/lighting/pink-brinstar-animated.gif)
+
+![Blue Brinstar](screenshots/lighting/blue-brinstar-animated.gif)
+
+![Wrecked Ship](screenshots/lighting/wrecked-ship-animated.gif)
+
+![Maridia](screenshots/lighting/maridia-animated.gif)
+
+![Tourian](screenshots/lighting/tourian-animated.gif)
+
+</details>
+
+## Descarga e instalación
+
+Descarga la **[versión 0.2.0](https://github.com/NicolasBeatum/sm-3ds-native/releases/tag/v0.2.0)**: **[CIA](https://github.com/NicolasBeatum/sm-3ds-native/releases/download/v0.2.0/SuperMetroid3DSPort.cia)** para FBI, o **[3DSX](https://github.com/NicolasBeatum/sm-3ds-native/releases/download/v0.2.0/SuperMetroid3DSPort.3dsx) + [SMDH](https://github.com/NicolasBeatum/sm-3ds-native/releases/download/v0.2.0/SuperMetroid3DSPort.smdh)** para Homebrew Launcher.
+
+También puedes instalar el CIA con **FBI → Remote Install → Scan QR Code**:
+
+![QR para instalar el CIA v0.2.0](docs/assets/fbi-v0.2.0.png)
+
+Coloca tu propia ROM compatible `.smc` o `.sfc` en `sdmc:/3ds/sm3dsnative/` y selecciónala al iniciar. Los paquetes no incluyen ROM ni parches. Al actualizar se conservan las partidas en `saves/` y los ajustes en `settings.cfg`.
+
+[Compilación y diagnósticos](docs/BUILDING.md) · [Notas del port](docs/PORTING_NOTES.md)
+
+<details>
+<summary>Créditos, licencias y uso de IA</summary>
 
 Este repositorio integra varios proyectos independientes; no se presenta como un trabajo enteramente original:
 
@@ -72,3 +99,5 @@ Los submódulos públicos son los forks [NicolasBeatum/sm-3ds-lib-native-fork](h
 NicolasBeatum aporta la dirección del proyecto y las pruebas de aceptación. OpenAI Codex se ha usado ampliamente para borradores de implementación, comparación de código, análisis de rendimiento, integración de PICA200 y la interfaz inferior, diagnóstico de errores, pruebas automatizadas y documentación. Las decisiones de aceptar cambios y publicar corresponden al responsable humano del repositorio. El uso de IA no cambia las licencias, los derechos de autor ni las atribuciones obligatorias de los proyectos originales.
 
 Si prefieres no jugar un port desarrollado con ayuda de IA, esa decisión se entiende y se respeta totalmente. Esta declaración permite decidir con esa información disponible.
+
+</details>

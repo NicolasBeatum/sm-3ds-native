@@ -1,4 +1,6 @@
 #include "ppu_gpu.h"
+#include "scene_lighting.h"
+#include "bottom_screen.h"
 #include "ppu_gpu_model.h"
 #include "ppu_gpu_vertices.h"
 #include "wide_bounds.h"
@@ -7,6 +9,8 @@
 #include "src/ida_types.h"
 #include "src/sm_rtl.h"
 #include "src/variables.h"
+#include "enemy_lighting.h"
+#include "qol_map.h"
 
 #include <3ds.h>
 #include <citro2d.h>
@@ -33,7 +37,7 @@ uint32_t g_profile_pica_wide_cpu_frames;
 static struct {
   bool initialized, ready, prepared, output, program;
   Ppu *saved;
-  PicaLine lines[PICA_MAX_LINES];
+  PicaLine lines[PICA_MAX_LINES], nativeHud[kHudEndLine];
   PicaAtlas *cachePool[2], *cache;
   Vertex *vertexPool[2], *vertices;
   uint16_t *indices;
@@ -46,9 +50,14 @@ static struct {
   int scaleLocation;
   Range ranges[PICA_GROUPS];
   unsigned slot, lastSubmittedSlot, count, width, height, captured, hudLines;
+  bool hudExpanded;
   float invWidth, invHeight;
   const char *reason;
 } g;
+
+static SceneLighting g_lighting;
+
+const SceneLighting *PpuGpuLighting(void) { return &g_lighting; }
 
 static WideConfig g_wide_config = {
     .output_width = kSnesWidth,
@@ -65,6 +74,11 @@ static bool Clean(const void *p, size_t bytes) {
   return R_SUCCEEDED(GSPGPU_FlushDataCache(p, bytes));
 }
 
+static bool CleanAtlas(void *context, const void *p, size_t bytes) {
+  (void)context;
+  return Clean(p, bytes);
+}
+
 static uint32_t Rgba(unsigned r, unsigned green, unsigned b, unsigned a) {
   return r | (green << 8) | (b << 16) | (a << 24);
 }
@@ -78,15 +92,31 @@ static void ResetRanges(unsigned width, unsigned height) {
   g.invHeight = 2.0f / height;
 }
 
-static bool Emit(void *context, unsigned group, const PicaQuad *q) {
-  (void)context;
-  if (g.count + 4 > PICA_MAX_VERTICES) return false;
+static Vertex *AppendQuad(unsigned group) {
+  if (g.count + 4 > PICA_MAX_VERTICES) return NULL;
   Range *range = &g.ranges[group];
   if (!range->count) range->first = g.count;
-  if (range->first + range->count != g.count) return false;
-  PicaQuadVertices(&g.vertices[g.count], q);
+  if (range->first + range->count != g.count) return NULL;
+  Vertex *vertices=&g.vertices[g.count];
   g.count += 4;
   range->count += 4;
+  return vertices;
+}
+
+static bool Emit(void *context, unsigned group, const PicaQuad *q) {
+  (void)context;
+  Vertex *vertices=AppendQuad(group);
+  if (!vertices) return false;
+  PicaQuadVertices(vertices,q);
+  return true;
+}
+
+static bool EmitColored(void *context, unsigned group, const PicaQuad *q,
+                         const uint8_t color[3]) {
+  (void)context;
+  Vertex *vertices=AppendQuad(group);
+  if (!vertices) return false;
+  PicaQuadVerticesColor(vertices,q,color[0],color[1],color[2]);
   return true;
 }
 
@@ -159,6 +189,15 @@ static bool DrawLayers(C3D_RenderTarget *target, unsigned sub) {
   C3D_AlphaTest(true, GPU_GREATER, 0);
   C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_ALL);
   DrawRange(sub * 2);
+  if (g.ranges[21 + sub].count) {
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA,
+                    GPU_ONE_MINUS_SRC_ALPHA, GPU_ZERO, GPU_ONE);
+    C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_COLOR);
+    DrawRange(21 + sub);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO,
+                    GPU_ONE, GPU_ZERO);
+    C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_ALL);
+  }
   C3D_StencilTest(true, GPU_NOTEQUAL, 1, 1, 1);
   C3D_StencilOp(GPU_STENCIL_KEEP, GPU_STENCIL_REPLACE, GPU_STENCIL_REPLACE);
   DrawRange(sub * 2 + 1);
@@ -241,6 +280,17 @@ static bool DrawComposition(void) {
                   GPU_PRIMARY_COLOR);
     C3D_TexEnvFunc(e, C3D_Both, GPU_REPLACE);
     DrawRange(20);
+  }
+  if (g.ranges[23].count) {
+    ResetTev();
+    C3D_TexBind(0, &g.atlas);
+    C3D_TexEnv *e = C3D_GetTexEnv(0);
+    C3D_TexEnvSrc(e, C3D_Both, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_PREVIOUS);
+    C3D_TexEnvFunc(e, C3D_Both, GPU_MODULATE);
+    C3D_TexEnvScale(e, C3D_Alpha, GPU_TEVSCALE_2);
+    C3D_AlphaTest(true, GPU_GREATER, 0);
+    DrawRange(23);
+    C3D_AlphaTest(false, GPU_ALWAYS, 0);
   }
   return true;
 }
@@ -354,6 +404,7 @@ void PpuGpuSetWideConfig(WideConfig config) {
 bool PpuGpuBegin(Ppu *p, unsigned height) {
   g.prepared = g.output = false;
   g.hudLines = 0;
+  g.hudExpanded = false;
   if (!g.ready || height > PICA_MAX_LINES) return false;
   if (!SelectBuffers(g.lastSubmittedSlot ^ 1u)) {
     g.reason = "vertex-buffer";
@@ -408,7 +459,19 @@ bool PpuGpuFinish(Ppu *p) {
                      .wideTileTable=(const uint16_t *)(g_ram + 0xA000),
                      .wideRoomWidth=room_width_in_blocks,
                      .wideRoomHeight=room_height_in_blocks,
-                     .emit=Emit};
+                     .emit=Emit,.emitColored=EmitColored};
+  QolMap_PrepareNative(&frame);
+  SceneLighting_Begin(&g_lighting,
+      BottomScreen_SceneLightingEnabled() && !time_is_frozen_flag,
+      room_ptr, game_state, (int16_t)layer1_x_pos, (int16_t)layer1_y_pos,
+      samus_x_pos, samus_y_pos, frame.originX, flare_counter);
+  SceneLighting_SetTileset(&g_lighting,tileset_tile_table_pointer.bank,
+                           tileset_tile_table_pointer.addr);
+  if (g_lighting.enabled && (int16_t)lava_acid_y_pos >= 0) {
+    g_lighting.liquidType=fx_type;
+    g_lighting.liquidY=(int16_t)(lava_acid_y_pos-layer1_y_pos);
+  }
+  frame.lighting = g_lighting.enabled ? &g_lighting : NULL;
   bool ok = !p->gpuInvalidWrite && g.captured == g.height;
   uint32_t roomBlocks =
       (uint32_t)room_width_in_blocks * room_height_in_blocks;
@@ -441,6 +504,18 @@ bool PpuGpuFinish(Ppu *p) {
     frame.boundBg2 = room_width_in_blocks != 0;
   }
   if (ok) WideXray_Prepare(&frame);
+  if (ok && game_state >= kGameState_8_MainGameplay &&
+      game_state <= kGameState_11_LoadingNextRoom && !time_is_frozen_flag)
+    PicaExpandHud(&frame, g.lines, g.nativeHud, BottomScreen_MainHudMode());
+  if (ok) {
+    SceneLighting_AddEnemies(&frame,enemy_data,32,
+                            (int16_t)layer1_x_pos,(int16_t)layer1_y_pos);
+    for (unsigned i = 0; i < 10; i++)
+      if (projectile_type[i] && g_lighting.count < (g_lighting.ship ? 6u : 4u))
+        SceneLighting_AddLight(&g_lighting,
+            (int16_t)(projectile_x_pos[i] - layer1_x_pos) + frame.originX,
+            (int16_t)(projectile_y_pos[i] - layer1_y_pos), 48, 88, 62, 28);
+  }
   if (ok) ok = PicaBuildFrame(&frame);
   if (!ok) {
     g.reason = p->gpuInvalidWrite ? "live-vram-cgram-oam" :
@@ -455,15 +530,7 @@ bool PpuGpuFinish(Ppu *p) {
 #ifdef SM3DS_PHASE_DIAG
   uint64_t upload_before = SDL_GetPerformanceCounter();
 #endif
-  for (unsigned i = 1; i < PICA_SLOTS;) {
-    if (!(g.cache->dirty[i / 32] & (1u << (i & 31)))) { i++; continue; }
-    unsigned first = i++;
-    while (i < PICA_SLOTS && (g.cache->dirty[i / 32] & (1u << (i & 31)))) i++;
-    unsigned bytes = (i - first) * 64 * 4;
-    if (!Clean((uint8_t *)g.atlas.data + first * 64 * 4, bytes)) ok = false;
-    else for (unsigned j = first; j < i; j++)
-      g.cache->dirty[j / 32] &= ~(1u << (j & 31));
-  }
+  if (!PicaAtlasFlush(g.cache, g.atlas.data, CleanAtlas, NULL)) ok = false;
   if (!Clean(g.vertices, g.count * sizeof(Vertex))) ok = false;
 #ifdef SM3DS_PHASE_DIAG
   g_diag_upload_ticks = SDL_GetPerformanceCounter() - upload_before;
@@ -473,6 +540,7 @@ bool PpuGpuFinish(Ppu *p) {
     memcpy(p, g.saved, sizeof(Ppu));
     return false;
   }
+  g.hudExpanded = frame.expandedHudLines != 0;
   g.prepared = g.output = true;
   g.reason = "PICA200";
 #ifdef SM3DS_PROFILE
@@ -485,6 +553,7 @@ bool PpuGpuFinish(Ppu *p) {
 
 void PpuGpuCpuFrame(void) {
   g.prepared = g.output = false;
+  g_lighting.enabled = false;
 #ifdef SM3DS_PROFILE
   g_profile_pica_cpu_frames++;
   if (g_wide_config.enabled) g_profile_pica_wide_cpu_frames++;
@@ -495,6 +564,7 @@ bool PpuGpuPrepared(void) { return g.prepared; }
 bool PpuGpuOutputActive(void) { return g.output; }
 C3D_Tex *PpuGpuOutput(void) { return g.output ? &g.result : NULL; }
 unsigned PpuGpuOutputWidth(void) { return g.output ? g.width : kSnesWidth; }
+bool PpuGpuHudExpanded(void) { return g.output && g.hudExpanded; }
 unsigned PpuGpuHudLines(void) { return g.output ? g.hudLines : 0; }
 const char *PpuGpuReason(void) { return g.reason ? g.reason : "uninitialized"; }
 #ifdef SM3DS_PHASE_DIAG
@@ -504,7 +574,14 @@ PpuGpuTiming PpuGpuGetTiming(void) {
                         g_pica_build_timing.bg_sub,
                         g_pica_build_timing.obj_sub,
                         g_pica_build_timing.compose,
-                        g_diag_upload_ticks};
+                        g_diag_upload_ticks,
+                        g_pica_build_timing.light_prepare,
+                        g_pica_build_timing.shadow_submit,
+                        g_pica_build_timing.light_sources,
+                        g_pica_build_timing.shadow_quads,
+                        g_pica_build_timing.background_sources,
+                        g_pica_build_timing.lighting_applied,
+                        g_pica_build_timing.light_field_rebuilt};
 }
 #endif
 

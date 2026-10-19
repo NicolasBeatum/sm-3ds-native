@@ -14,6 +14,12 @@ typedef struct FrameSample {
   bool wide, pica_gpu, presenter, phase_profile, ppu_detail, gameplay;
   uint16_t game_state, room, map_x, map_y, scroll_x, scroll_y;
   bool sector_changed, scroll_changed, bottom_redrawn;
+  bool lighting_requested, lighting_applied, lighting_profile, light_field_rebuilt;
+  uint32_t light_prepare_ticks, shadow_submit_ticks, glow_submit_ticks, model_build_ticks;
+  unsigned light_sources, shadow_quads, glow_quads, background_sources;
+  uint32_t apu_queue_ticks, apu_wait_ticks;
+  bool runtime_profile, hud_expanded;
+  unsigned hud_mode;
 } FrameSample;
 
 static FrameSample g_samples[kRecentFrameCount];
@@ -28,9 +34,14 @@ typedef struct SessionTiming {
   uint64_t phase_frames, detail_frames, detail_ticks[6];
   uint64_t over_budget, gpu_frames;
   uint32_t max_interval, max_work;
+  uint64_t lighting_frames, lighting_active_frames, light_field_rebuilds;
+  uint64_t light_prepare_ticks, shadow_submit_ticks, glow_submit_ticks, model_build_ticks;
+  uint64_t light_sources, shadow_quads, glow_quads, background_sources;
+  uint32_t max_light_prepare, max_model_build;
 } SessionTiming;
 static SessionTiming g_session[3]; /* all, gameplay standard, gameplay wide */
 static SessionTiming g_sector_changes, g_scroll_changes, g_bottom_redraws;
+static SessionTiming g_lighting_modes[2]; /* GPU gameplay: off, on. */
 static bool g_scene_valid;
 static uint16_t g_scene[5];
 
@@ -41,6 +52,7 @@ void FrameDiagnostics_Init(uint64_t ticks_per_second) {
   memset(&g_sector_changes, 0, sizeof(g_sector_changes));
   memset(&g_scroll_changes, 0, sizeof(g_scroll_changes));
   memset(&g_bottom_redraws, 0, sizeof(g_bottom_redraws));
+  memset(g_lighting_modes, 0, sizeof(g_lighting_modes));
   g_scene_valid = false;
 }
 
@@ -99,6 +111,21 @@ void FrameDiagnostics_Record(uint32_t frame, uint32_t interval_ticks,
   if (g_count < kRecentFrameCount) g_count++;
 }
 
+void FrameDiagnostics_RecordHud(unsigned mode, bool expanded) {
+  if (!g_count) return;
+  FrameSample *s=&g_samples[(g_next+kRecentFrameCount-1)%kRecentFrameCount];
+  s->hud_mode=mode;s->hud_expanded=expanded && s->pica_gpu;
+}
+
+void FrameDiagnostics_RecordRuntime(bool profiled, uint32_t apu_queue_ticks,
+                                    uint32_t apu_wait_ticks) {
+  if (!g_count) return;
+  FrameSample *s=&g_samples[(g_next+kRecentFrameCount-1)%kRecentFrameCount];
+  s->runtime_profile=profiled;
+  s->apu_queue_ticks=profiled?apu_queue_ticks:0;
+  s->apu_wait_ticks=profiled?apu_wait_ticks:0;
+}
+
 void FrameDiagnostics_RecordPpuDetail(uint32_t bg_main_ticks,
                                       uint32_t obj_main_ticks,
                                       uint32_t bg_sub_ticks,
@@ -146,6 +173,81 @@ void FrameDiagnostics_RecordScene(uint16_t state_value, uint16_t room,
   g_scene_valid = s->gameplay;
 }
 
+static void RecordLightingTotals(SessionTiming *t, const FrameSample *s) {
+  if (!s->lighting_profile) return;
+  t->lighting_frames++;
+  t->lighting_active_frames += s->lighting_applied;
+  t->light_field_rebuilds += s->light_field_rebuilt;
+  t->light_prepare_ticks += s->light_prepare_ticks;
+  t->shadow_submit_ticks += s->shadow_submit_ticks;
+  t->glow_submit_ticks += s->glow_submit_ticks;
+  t->model_build_ticks += s->model_build_ticks;
+  t->light_sources += s->light_sources;
+  t->background_sources += s->background_sources;
+  t->shadow_quads += s->shadow_quads;
+  t->glow_quads += s->glow_quads;
+  if (s->light_prepare_ticks > t->max_light_prepare) t->max_light_prepare = s->light_prepare_ticks;
+  if (s->model_build_ticks > t->max_model_build) t->max_model_build = s->model_build_ticks;
+}
+
+void FrameDiagnostics_RecordLighting(bool requested, bool applied, bool profiled,
+                                     uint32_t prepare_ticks,
+                                     uint32_t shadow_submit_ticks,
+                                     uint32_t glow_submit_ticks,
+                                     uint32_t model_build_ticks,
+                                     unsigned sources, unsigned shadow_quads,
+                                     unsigned glow_quads, unsigned background_sources,
+                                     bool field_rebuilt) {
+  if (!g_count) return;
+  FrameSample *s = &g_samples[(g_next + kRecentFrameCount - 1) % kRecentFrameCount];
+  s->lighting_requested = requested;
+  s->lighting_profile = profiled && s->pica_gpu;
+  s->lighting_applied = s->lighting_profile && applied;
+  if (s->lighting_profile) {
+    s->model_build_ticks = model_build_ticks;
+    if (s->lighting_applied) {
+      s->light_prepare_ticks = prepare_ticks;
+      s->shadow_submit_ticks = shadow_submit_ticks;
+      s->glow_submit_ticks = glow_submit_ticks;
+      s->light_sources = sources;
+      s->background_sources = background_sources;
+      s->shadow_quads = shadow_quads;
+      s->glow_quads = glow_quads;
+      s->light_field_rebuilt = field_rebuilt;
+    }
+  }
+  RecordLightingTotals(&g_session[0], s);
+  if (s->gameplay) {
+    RecordLightingTotals(&g_session[s->wide ? 2 : 1], s);
+    /* Unsupported/special frames with ON requested are not an OFF baseline. */
+    if (s->lighting_profile && (s->lighting_applied || !requested)) {
+      SessionTiming *mode = &g_lighting_modes[s->lighting_applied ? 1 : 0];
+      RecordSession(mode, s);
+      RecordLightingTotals(mode, s);
+    }
+  }
+}
+
+static bool WriteLighting(FILE *out, const char *prefix, const SessionTiming *t) {
+  uint64_t active = t->lighting_active_frames ? t->lighting_active_frames : 1;
+  uint64_t profiled = t->lighting_frames ? t->lighting_frames : 1;
+  return fprintf(out,
+      "%s_lighting_profile_frames=%" PRIu64 "\n%s_lighting_active_frames=%" PRIu64 "\n"
+      "%s_light_field_rebuilds=%" PRIu64 "\n"
+      "%s_avg_light_prepare_us=%" PRIu64 "\n%s_max_light_prepare_us=%" PRIu64 "\n"
+      "%s_avg_shadow_submit_us=%" PRIu64 "\n%s_avg_glow_submit_us=%" PRIu64 "\n"
+      "%s_avg_model_build_us=%" PRIu64 "\n%s_max_model_build_us=%" PRIu64 "\n"
+      "%s_light_sources_total=%" PRIu64 "\n%s_shadow_quads_total=%" PRIu64 "\n"
+      "%s_glow_quads_total=%" PRIu64 "\n%s_background_sources_total=%" PRIu64 "\n",
+      prefix, t->lighting_frames, prefix, t->lighting_active_frames,
+      prefix, t->light_field_rebuilds,
+      prefix, AsUs(t->light_prepare_ticks) / active, prefix, AsUs(t->max_light_prepare),
+      prefix, AsUs(t->shadow_submit_ticks) / active, prefix, AsUs(t->glow_submit_ticks) / active,
+      prefix, AsUs(t->model_build_ticks) / profiled, prefix, AsUs(t->max_model_build),
+      prefix, t->light_sources, prefix, t->shadow_quads, prefix, t->glow_quads,
+      prefix, t->background_sources) > 0 && !ferror(out);
+}
+
 static bool WriteEvent(FILE *out, const char *name, const SessionTiming *t) {
   uint64_t count = t->frames ? t->frames : 1;
   return fprintf(out, "%s_frames=%" PRIu64 "\n%s_avg_work_us=%" PRIu64
@@ -184,7 +286,7 @@ static bool WriteSession(FILE *out, const char *prefix, const SessionTiming *t) 
   for (unsigned i = 0; i < 6 && result >= 0; i++)
     result = fprintf(out, "%s_avg_%s_us=%" PRIu64 "\n", prefix, names[i],
         t->detail_frames ? AsUs(t->detail_ticks[i]) / t->detail_frames : 0);
-  return result > 0 && !ferror(out);
+  return result > 0 && !ferror(out) && WriteLighting(out, prefix, t);
 }
 
 static const FrameSample *SampleAt(unsigned index) {
@@ -202,8 +304,15 @@ bool FrameDiagnostics_WriteSummary(FILE *out) {
   unsigned intervals = 0, interval_over = 0, work_over = 0;
   unsigned wide = 0, gpu = 0, presenter = 0, profiled = 0, detailed = 0;
   uint32_t max_interval = 0, max_work = 0;
+  uint64_t apu_queue_sum=0, apu_wait_sum=0;
+  unsigned runtime_frames=0;
+  SessionTiming recent_lighting = {0};
   for (unsigned i = 0; i < g_count; i++) {
     const FrameSample *s = SampleAt(i);
+    RecordLightingTotals(&recent_lighting, s);
+    if(s->runtime_profile) {
+      runtime_frames++;apu_queue_sum+=s->apu_queue_ticks;apu_wait_sum+=s->apu_wait_ticks;
+    }
     if (s->interval_ticks) {
       interval_sum += s->interval_ticks;
       intervals++;
@@ -239,7 +348,7 @@ bool FrameDiagnostics_WriteSummary(FILE *out) {
   uint64_t interval_us = AsUs(interval_sum);
   uint64_t fps_x100 = interval_us ? (uint64_t)intervals * 100000000 / interval_us : 0;
   int result = fprintf(out,
-      "timing_schema=4\n"
+      "timing_schema=7\n"
       "recent_timing_scope=last_120_rendered_frames\n"
       "recent_frames=%u\nvalid_intervals=%u\n"
       "measured_fps=%" PRIu64 ".%02" PRIu64 "\n"
@@ -258,6 +367,9 @@ bool FrameDiagnostics_WriteSummary(FILE *out) {
       "recent_widescreen_frames=%u\nrecent_pica_gpu_frames=%u\n"
       "recent_presenter_frames=%u\n"
       "timing_note=phase durations are CPU wall spans; GPU work can finish asynchronously\n"
+      "lighting_timing_note=prepare and shadow submission overlap PPU phases; glow submission overlaps top; model build includes shading and shadow creation; no isolated GPU time\n"
+      "lighting_average_scope=light timings over active frames; model build over profiled GPU frames\n"
+      "lighting_comparison_scope=GPU gameplay ON/OFF cohorts mix rooms and viewport modes; use matched room/position/viewport CSV captures for overhead\n"
       "frame_times_file=frame-times.csv\n",
       g_count, intervals, fps_x100 / 100, fps_x100 % 100,
       intervals ? interval_us / intervals : 0, AsUs(max_interval), interval_over,
@@ -275,11 +387,20 @@ bool FrameDiagnostics_WriteSummary(FILE *out) {
       AsUs(present_sum) / count, AsUs(work_sum) / count, AsUs(max_work), work_over,
       wide, gpu, presenter);
   return result > 0 && !ferror(out) &&
+      fprintf(out,"recent_runtime_profile_frames=%u\n"
+                  "recent_avg_apu_queue_us=%" PRIu64 "\n"
+                  "recent_avg_apu_lock_wait_us=%" PRIu64 "\n"
+                  "runtime_timing_note=queue publication is nested in game, outside logic/PPU; lock wait is nested in queue; neither measures audio generation CPU time\n",
+                  runtime_frames,runtime_frames?AsUs(apu_queue_sum)/runtime_frames:0,
+                  runtime_frames?AsUs(apu_wait_sum)/runtime_frames:0)>0 &&
+      WriteLighting(out, "recent", &recent_lighting) &&
       fputs("session_timing_scope=since_launch; intervals exclude dump, suspend and pause gaps\n"
             "gameplay_timing_scope=game_states_7_to_11; grouped by widescreen mode\n", out) >= 0 &&
       WriteSession(out, "session", &g_session[0]) &&
       WriteSession(out, "gameplay_standard", &g_session[1]) &&
       WriteSession(out, "gameplay_widescreen", &g_session[2]) &&
+      WriteSession(out, "lighting_off", &g_lighting_modes[0]) &&
+      WriteSession(out, "lighting_on", &g_lighting_modes[1]) &&
       WriteEvent(out, "sector_change", &g_sector_changes) &&
       WriteEvent(out, "scroll_block_change", &g_scroll_changes) &&
       WriteEvent(out, "bottom_redraw", &g_bottom_redraws) && !ferror(out);
@@ -291,7 +412,10 @@ bool FrameDiagnostics_WriteCsv(FILE *out) {
             "present_us,work_us,widescreen,pica_gpu,presenter,phase_profile,"
             "bg_main_us,obj_main_us,bg_sub_us,obj_sub_us,compose_us,upload_us,"
             "ppu_detail,game_state,room_ptr,map_x,map_y,scroll_block_x,"
-            "scroll_block_y,map_sector_changed,scroll_block_changed,bottom_redrawn\n",
+            "scroll_block_y,map_sector_changed,scroll_block_changed,bottom_redrawn,"
+            "lighting_requested,lighting_applied,lighting_profile,light_prepare_us,"
+            "shadow_submit_us,glow_submit_us,model_build_us,light_sources,shadow_quads,"
+            "glow_quads,light_field_rebuilt,background_sources,runtime_profile,apu_queue_us,apu_lock_wait_us,main_hud_mode,hud_expanded\n",
             out) < 0) return false;
   for (unsigned i = 0; i < g_count; i++) {
     const FrameSample *s = SampleAt(i);
@@ -299,7 +423,7 @@ bool FrameDiagnostics_WriteCsv(FILE *out) {
                      ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64
                      ",%" PRIu64 ",%u,%u,%u,%u,%" PRIu64 ",%" PRIu64
                      ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64
-                     ",%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
+                     ",%u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
                 s->frame, AsUs(s->interval_ticks), AsUs(s->game_ticks),
                 AsUs(s->logic_ticks), AsUs(s->ppu_ticks),
                 AsUs(s->top_ticks), AsUs(s->bottom_ticks),
@@ -312,6 +436,14 @@ bool FrameDiagnostics_WriteCsv(FILE *out) {
                 s->scroll_x, s->scroll_y, s->sector_changed,
                 s->scroll_changed, s->bottom_redrawn) < 0)
       return false;
+    if (fprintf(out, ",%u,%u,%u,%" PRIu64 ",%" PRIu64 ",%" PRIu64
+                     ",%" PRIu64 ",%u,%u,%u,%u,%u,%u,%" PRIu64 ",%" PRIu64 ",%u,%u\n",
+                s->lighting_requested, s->lighting_applied, s->lighting_profile,
+                AsUs(s->light_prepare_ticks), AsUs(s->shadow_submit_ticks),
+                AsUs(s->glow_submit_ticks), AsUs(s->model_build_ticks),
+                s->light_sources, s->shadow_quads, s->glow_quads,
+                s->light_field_rebuilt, s->background_sources, s->runtime_profile,
+                AsUs(s->apu_queue_ticks),AsUs(s->apu_wait_ticks),s->hud_mode,s->hud_expanded) < 0) return false;
   }
   return !ferror(out);
 }
